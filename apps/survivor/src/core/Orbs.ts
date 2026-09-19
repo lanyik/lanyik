@@ -3,7 +3,7 @@ import type { DeterministicRandom } from "./DeterministicRandom";
 import type { ItemDefinition } from "./ItemDefinition";
 
 export const ORB_UNLOCK_LEVELS = [1, 1, 50, 100, 150, 200] as const;
-const ORB_TYPES = ["fortune", "bounty", "constellation", "harmony"] as const;
+export const ORB_TYPES = ["fortune", "bounty", "constellation", "harmony"] as const;
 type OrbType = typeof ORB_TYPES[number];
 const ORB_NAMES: Readonly<Record<OrbType, string>> = Object.freeze({
     fortune: "流光宝珠", bounty: "丰饶宝珠", constellation: "星辉宝珠", harmony: "万象宝珠"

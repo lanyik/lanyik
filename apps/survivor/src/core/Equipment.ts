@@ -72,6 +72,8 @@ export interface EquipmentAffix {
 }
 export interface Equipment extends ItemDefinition<"equipment", EquipmentSlot, 1> {
     readonly locked: boolean;
+    /** Only the automatic loadout may retire this lock. Manual locking/equipping/crafting clears it. */
+    readonly autoEquipped: boolean;
     readonly revision: number;
     readonly itemLevel: number;
     readonly stars: 1 | 2 | 3;
@@ -89,7 +91,7 @@ const BASES: Readonly<Record<EquipmentSlot, readonly [BonusId, number, number][]
     hands: [["damage", 0.5, 0.35]], ring: [["damage", 0.5, 0.3]],
     necklace: [["maxHealth", 5, 1.8]], bracelet: [["block", 1, 0.4]], charm: [["healthRegen", 0.1, 0.025]]
 };
-const QUALITY_POWER = [1, 1.3, 1.7, 2.2, 2.9, 3.8] as const;
+export const QUALITY_POWER = [1, 1.3, 1.7, 2.2, 2.9, 3.8] as const;
 const PREFIXES = ["狼印", "余烬", "风暴", "冷月", "猩红", "幽影"] as const;
 const ITEM_NAMES: Readonly<Record<EquipmentSlot, readonly string[]>> = Object.freeze({
     weapon: ["猎手短弩", "符文长弓", "月刃", "巡林战杖"], head: ["游侠兜帽", "骨纹战盔", "星铁面甲", "灵纹冠冕"],
@@ -117,7 +119,7 @@ function assemble(id: number, slot: EquipmentSlot, rarity: Rarity, stars: 1 | 2 
     const baseBonuses = equipmentBase(slot, itemLevel);
     const bonuses = { ...baseBonuses };
     for (const affix of affixes) bonuses[affix.stat] = round(bonuses[affix.stat] + affix.value);
-    return Object.freeze({ type: "equipment", value: slot, size: 1, id, rarity, stars, itemLevel, name, baseBonuses, locked: id === 1, revision: 0,
+    return Object.freeze({ type: "equipment", value: slot, size: 1, id, rarity, stars, itemLevel, name, baseBonuses, locked: id === 1, autoEquipped: false, revision: 0,
         affixes: Object.freeze(affixes), bonuses: Object.freeze(bonuses), score: equipmentScore(bonuses) });
 }
 
@@ -125,7 +127,7 @@ function assemble(id: number, slot: EquipmentSlot, rarity: Rarity, stars: 1 | 2 
 export function withEquipmentAffixes(item: Equipment, affixes: readonly EquipmentAffix[]): Equipment {
     const bonuses = { ...item.baseBonuses };
     for (const affix of affixes) bonuses[affix.stat] = round(bonuses[affix.stat] + affix.value);
-    return Object.freeze({ ...item, locked: true, revision: item.revision + 1,
+    return Object.freeze({ ...item, locked: true, autoEquipped: false, revision: item.revision + 1,
         affixes: Object.freeze(affixes.map(affix => Object.freeze({ ...affix }))),
         bonuses: Object.freeze(bonuses), score: equipmentScore(bonuses) });
 }

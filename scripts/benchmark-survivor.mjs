@@ -14,7 +14,12 @@ const bundle = await build({ stdin: { contents: `
     export { PlayerAutoCombat } from './apps/survivor/src/core/PlayerAutoCombat';
     export { EnemyKind } from './apps/survivor/src/core/EnemyDefinitions';
     export { deriveStats } from './apps/survivor/src/core/CombatStats';
-    export { sumEquipment } from './apps/survivor/src/core/Equipment';
+    export { sumEquipment, createStarterEquipment, generateEquipment } from './apps/survivor/src/core/Equipment';
+    export { createOrb, ORB_TYPES } from './apps/survivor/src/core/Orbs';
+    export { RARITIES, BASE_LOOT_PROFILE } from './apps/survivor/src/core/Loot';
+    export { EMPTY_RECYCLING } from './apps/survivor/src/core/Recycling';
+    export { DeterministicRandom } from './apps/survivor/src/core/DeterministicRandom';
+    export { planAutomaticLoadout } from './apps/survivor/src/core/AutomaticLoadout';
     export { EnemyBehavior } from './apps/survivor/src/core/EnemyBehavior';
     export { RegionalWorld } from './apps/survivor/src/core/RegionalWorld';
     export { advanceProjectiles, moveEnemies, advanceEnemyActions } from './apps/survivor/src/core/CombatSystems';
@@ -79,11 +84,11 @@ function terrainCombat(automatic = false) {
     const initializing = performance.now();
     const simulation = new current.CombatSimulation("rift-ember-1", { x: 0, z: 0 }, undefined, terrain);
     const coldStartMs = performance.now() - initializing;
-    simulation.health = 100_000;
     if (automatic) simulation.toggleAutoCombat();
     const ticks = 600, started = performance.now();
     const input = automatic ? { x: 0, z: 0, active: false } : { x: 1, z: .4, active: true };
-    for (let tick = 0; tick < ticks; tick++) simulation.step(input);
+    // Automatic equipment changes recompute maximum health; keep this CPU workload alive across upgrades.
+    for (let tick = 0; tick < ticks; tick++) { simulation.health = simulation.stats.maxHealth; simulation.step(input); }
     const elapsed = performance.now() - started;
     assert.equal(simulation.tick, ticks);
     const player = simulation.getSnapshot().player;
@@ -126,14 +131,34 @@ function autoAvoidance() {
         p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
 }
 
+function autoLoadout() {
+    const random = new current.DeterministicRandom("loadout-budget");
+    const inventory = Array.from({ length: 80 }, (_, index) => current.generateEquipment(random, index + 2, 50 + index, current.BASE_LOOT_PROFILE));
+    for (let index = 0; index < 48; index++) inventory.push(current.createOrb(index + 100, current.RARITIES[Math.floor(index / 4) % 6], current.ORB_TYPES[index % 4]));
+    const input = { inventory, equipment: { weapon: current.createStarterEquipment() },
+        orbs: Array.from({ length: 6 }, (_, index) => current.createOrb(index + 200, "common", current.ORB_TYPES[index % 4])),
+        level: 200, attributes: { might: 5, vitality: 5, agility: 5, spirit: 5 }, recycling: { ...current.EMPTY_RECYCLING, orb: "magic" } };
+    const incoming = [current.generateEquipment(random, 300, 200, current.BASE_LOOT_PROFILE, "rainbow"), current.createOrb(301, "rainbow", "harmony")];
+    const timings = [], started = performance.now();
+    for (let index = 0; index < 120; index++) {
+        const before = performance.now(), plan = current.planAutomaticLoadout(input, incoming);
+        timings.push(performance.now() - before);
+        assert.ok(plan.ok && plan.equipmentChanges > 0 && plan.orbChanges > 0, "Loadout workload must actually replace equipment and orbs");
+    }
+    const elapsed = performance.now() - started; timings.sort((a, b) => a - b);
+    return { msPerDecision: elapsed / 120, decisions: 120, equipment: 80, orbs: 48, unlockedSockets: 6,
+        p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
+}
+
 const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), terrain: measure(terrainCombat, 3),
-    autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision") };
+    autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision"), autoLoadout: measure(autoLoadout, 3, "Decision") };
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
     simulationHz: current.GAME_CONFIG.timing.simulationHz, activeAiHz: current.GAME_CONFIG.timing.activeAiHz,
-    gc: Boolean(globalThis.gc), timing: "one warmup, five samples, simulation only; travel restores health between ticks while retaining hit settlement; no browser/GPU claim" }, results }, null, 2));
+    gc: Boolean(globalThis.gc), timing: "one warmup, five samples, simulation only; travel/terrain restore health between ticks while retaining hit settlement; no browser/GPU claim" }, results }, null, 2));
 if (args.includes("--check")) {
     assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");
     for (const result of [results.travel, results.crowded, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
     assert.ok(results.autoAvoidance.medianMsPerDecision <= results.autoAvoidance.budgetMsPerDecision, "Automatic avoidance exceeded its decision CPU budget");
+    assert.ok(results.autoLoadout.medianMsPerDecision <= results.autoLoadout.budgetMsPerDecision, "Automatic loadout exceeded its decision CPU budget");
 }

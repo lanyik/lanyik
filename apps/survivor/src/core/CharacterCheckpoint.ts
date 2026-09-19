@@ -12,7 +12,7 @@ import { CHALLENGE_IDS, CHALLENGE_ARENA, ChallengeTerrain, challengeSpawns, isCh
 import { ENEMY_DEFINITIONS, enemyStats } from "./EnemyDefinitions";
 
 export interface CharacterCheckpoint {
-    readonly version: 4;
+    readonly version: 5;
     readonly characterId: string;
     readonly challengeRevision: number;
     readonly challenges: ChallengeProgressMap;
@@ -41,7 +41,8 @@ function assertItem(item: InventoryItem): void {
         || item.size > GAME_CONFIG.inventory[item.type].stackSize) throw new Error("存档物品无效");
     if (item.type === "equipment") {
         if (!EQUIPMENT_SLOTS.includes(item.value) || !integer(item.itemLevel, 1) || !integer(item.stars) || item.stars > 4 || !integer(item.revision)
-            || typeof item.locked !== "boolean" || !finite(item.score) || !item.baseBonuses || !item.bonuses
+            || typeof item.locked !== "boolean" || typeof item.autoEquipped !== "boolean" || item.autoEquipped && !item.locked
+            || !finite(item.score) || !item.baseBonuses || !item.bonuses
             || BONUS_IDS.some(id => !finite(item.baseBonuses[id]) || !finite(item.bonuses[id]))
             || !Array.isArray(item.affixes) || !item.affixes.length || item.affixes.length > 5
             || new Set(item.affixes.map(affix => affix.stat)).size !== item.affixes.length
@@ -58,7 +59,7 @@ function assertItem(item: InventoryItem): void {
 
 /** Reject invalid/currently unsupported saves before changing a running character. No migration. */
 export function validateCharacterCheckpoint(value: CharacterCheckpoint): CharacterCheckpoint {
-    if (!value || value.version !== 4) throw new Error("角色存档版本与当前游戏不一致");
+    if (!value || value.version !== 5) throw new Error("角色存档版本与当前游戏不一致");
     if (typeof value.characterId !== "string" || !value.characterId.length || value.characterId.length > 128 || !integer(value.challengeRevision)
         || !integer(value.teleportReadyAt) || value.teleportReadyAt > value.tick + GAME_CONFIG.timing.simulationHz * 5) throw new Error("角色传送进度无效");
     if ((!isChallenge(value.location) && !["wilds", "homestead"].includes(value.location)) || !value.wildsPosition

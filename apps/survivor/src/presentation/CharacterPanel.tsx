@@ -45,7 +45,8 @@ export function CharacterPanel({ player, disabled, dispatch, onClose }: {
                 <OrbSockets player={player} disabled={disabled} onInspect={setInspectedId} onRemove={socket => dispatch({ type: "remove-orb", socket })} />
                 <p className="orb-resonance-summary">共鸣：{player.orbResonance.pairs.length} 类配对 · {player.orbResonance.diversity} 种类型<br />金币 +{player.orbResonance.goldBonus * 100}% · 打造消耗 −{player.orbResonance.craftDiscount * 100}%</p>
                 <div className="equipment-inspector">{inspected ? <><ItemDetails item={inspected} />
-                    {inspected.type === "equipment" && <button disabled={disabled} onClick={() => { dispatch({ type: "unequip", slot: inspected.value }); setInspectedId(undefined); }}>卸下装备</button>}
+                    {inspected.type === "equipment" && <>{inspected.autoEquipped && <button disabled={disabled} onClick={() => dispatch({ type: "set-equipment-lock", itemId: inspected.id, locked: true })}>锁定保留</button>}
+                        <button disabled={disabled} onClick={() => { dispatch({ type: "unequip", slot: inspected.value }); setInspectedId(undefined); }}>卸下装备</button></>}
                     {inspected.type === "orb" && <button disabled={disabled} onClick={() => { dispatch({ type: "remove-orb", socket: player.orbs.findIndex(orb => orb?.id === inspected.id) }); setInspectedId(undefined); }}>取下宝珠</button>}
                 </> : <div className="empty-inspector"><UiIcon name="shield" /><strong>查看装备详情</strong><span>选择装备或宝珠，查看属性与词条</span></div>}</div>
             </div>

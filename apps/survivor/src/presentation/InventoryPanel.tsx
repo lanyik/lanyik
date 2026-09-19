@@ -43,12 +43,12 @@ export function InventoryPanel({ player, selectedId, onSelect, onClose, onUse, o
         </div>
         {filter === "equipment" && <div className="bag-bulk"><label>分解低于 <input aria-label="批量分解等级" type="number" min="2" step="1" value={belowLevelText} onChange={event => setBelowLevel(event.target.value)} /> 级</label>
             <button disabled={disabled || !Number.isSafeInteger(belowLevel) || belowLevel < 2 || !items.some(item => item.type === "equipment" && !item.locked && item.itemLevel < belowLevel)} onClick={() => onBulkRecycle(belowLevel)}>一键分解</button>
-            <button aria-pressed={lockMode} onClick={() => setLockMode(!lockMode)}>锁定模式</button><small>Shift＋点击格子快速切换锁定；批量分解保留锁定装备。</small></div>}
+            <button aria-pressed={lockMode} onClick={() => setLockMode(!lockMode)}>锁定模式</button><small>Shift＋点击切换锁定；自动锁定先转为手动保护，再次点击解锁。</small></div>}
         <div className="bag-cleanup">
             <label>自动{recyclingName(filter)}<select aria-label={`自动${recyclingName(filter)}${rules.name}品质`} value={player.autoRecycle[filter] ?? "off"} onChange={event => onAutoRecycle(filter, event.target.value === "off" ? null : event.target.value as Rarity)} disabled={disabled}>
                 <option value="off">关闭</option>
                 {(filter === "consumable" ? POTION_RARITIES : RARITIES).map(rarity => <option key={rarity} value={rarity}>{RARITY_NAMES[rarity]}及以下（含{RARITY_NAMES[rarity]}）</option>)}
-            </select></label><small>{filter === "equipment" ? "保留提升、持平、空部位及锁定装备。穿戴后自动上锁。" : filter === "orb" ? "背包及新拾取宝珠自动分解为粉尘；已嵌宝珠保留。" : "当前分类按整格自动售出换金币，设置后立即处理。"}</small><span>已{recyclingName(filter)} <b>{player.recycled[filter]}</b> 件</span>
+            </select></label><small>{filter === "equipment" ? "Z 挂机自动穿戴战力提升装备；明显落后的自动锁定白蓝紫装可出售，手动锁定及金色以上保留。品质清理保留提升、持平和空部位装备。" : filter === "orb" ? "Z 挂机先按整套寻宝收益自动嵌珠，再按品质分解剩余宝珠；已嵌宝珠保留。" : "当前分类按整格自动售出换金币，设置后立即处理。"}</small><span>已{recyclingName(filter)} <b>{player.recycled[filter]}</b> 件</span>
         </div>
         {filter === "orb" && <div className="bag-orb-slots"><OrbSockets player={player} disabled={disabled} onRemove={onRemoveOrb} /><small>拖到槽位嵌入 / 交换 · 双击槽位取下 · 聚焦图标按空格，再按 1–6</small></div>}
         <VirtualItemGrid key={filter} className="bag-cards" label="背包物品" items={items} minWidth={174} rowHeight={142} renderItem={item => {
@@ -58,12 +58,12 @@ export function InventoryPanel({ player, selectedId, onSelect, onClose, onUse, o
                 className={`inventory-card rarity-${item.rarity}${item.id === selectedId ? " selected" : ""}${item.type === "equipment" && item.locked ? " item-locked" : ""}`}
                 aria-label={`${item.name}${item.type === "equipment" ? `，等级${item.itemLevel}` : ""}`} data-testid="inventory-item" data-item-id={item.id} data-kind={item.type} data-rarity={item.rarity} data-level={item.type === "equipment" ? item.itemLevel : undefined}
                 data-clearable={comparison?.canClear ?? false} data-power-delta={comparison?.delta}
-                onClickCapture={event => { if (item.type === "equipment" && (event.shiftKey || lockMode)) { event.preventDefault(); event.stopPropagation(); dismissTooltip(); if (!disabled) onLock(item.id, !item.locked); } }}
+                onClickCapture={event => { if (item.type === "equipment" && (event.shiftKey || lockMode)) { event.preventDefault(); event.stopPropagation(); dismissTooltip(); if (!disabled) onLock(item.id, !item.locked || item.autoEquipped); } }}
                 onPointerDown={event => { if (item.type === "equipment" && (event.shiftKey || lockMode)) event.preventDefault(); }}
-                onKeyDown={event => { if (item.type === "equipment" && event.shiftKey && event.code === "Space") { event.preventDefault(); event.stopPropagation(); dismissTooltip(); if (!disabled && !event.repeat) onLock(item.id, !item.locked); } }}
+                onKeyDown={event => { if (item.type === "equipment" && event.shiftKey && event.code === "Space") { event.preventDefault(); event.stopPropagation(); dismissTooltip(); if (!disabled && !event.repeat) onLock(item.id, !item.locked || item.autoEquipped); } }}
                 onClick={() => onSelect(item.id)} onFocus={() => onSelect(item.id)}
                 onDoubleClick={event => { if (!event.shiftKey && !lockMode && !useDisabled && event.target instanceof Element && !event.target.closest("button")) onUse(item); }}>
-                {item.type === "equipment" && item.locked && <><UiIcon name="lock" className="cell-lock-watermark" /><span className="cell-lock-badge"><UiIcon name="lock" />已锁定</span></>}
+                {item.type === "equipment" && item.locked && <><UiIcon name="lock" className="cell-lock-watermark" /><span className="cell-lock-badge"><UiIcon name="lock" />{item.autoEquipped ? "自动锁定" : "已锁定"}</span></>}
                 <header className="bag-item-heading"><ItemTooltip item={item} player={player}><button className={`item-icon-trigger${item.type === "orb" ? " orb-drag-trigger" : ""}`} aria-label={`查看${item.name}详情`}
                     onPointerDown={event => { if (item.type === "orb") drag.begin(event, item.id); }} onKeyDown={event => { if (item.type === "orb") drag.keyboard(event, item.id); }}
                     onDoubleClick={event => { if (!event.shiftKey && !lockMode && !useDisabled) onUse(item); }}><ItemIcon item={item} /></button></ItemTooltip><div><strong>{item.name}</strong><small>{item.type === "equipment" ? `${SLOT_NAMES[item.value]} · Lv.${item.itemLevel}${item.locked ? " · 已锁定" : ""}` : item.type === "orb" ? "寻宝宝珠" : item.type === "affix" ? "词条精粹" : item.type === "scroll" ? "领主挑战通行证" : "恢复药剂"}</small></div></header>
