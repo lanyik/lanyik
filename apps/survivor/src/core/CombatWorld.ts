@@ -79,7 +79,7 @@ export class CombatWorld {
         kind: new Uint8Array(ENTITY_CAPACITY), elite: new Uint8Array(ENTITY_CAPACITY), boss: new Uint8Array(ENTITY_CAPACITY),
         level: new Uint32Array(ENTITY_CAPACITY), homeX: new Float64Array(ENTITY_CAPACITY), homeZ: new Float64Array(ENTITY_CAPACITY),
         speed: new Float32Array(ENTITY_CAPACITY), damage: new Float32Array(ENTITY_CAPACITY),
-        homes: new Array<RegionalChunk | undefined>(ENTITY_CAPACITY), regions: new Array<RegionInfo | undefined>(ENTITY_CAPACITY),
+        homes: new Array<Pick<RegionalChunk, "resident"> | undefined>(ENTITY_CAPACITY), regions: new Array<RegionInfo | undefined>(ENTITY_CAPACITY),
         runningNode: new Int16Array(ENTITY_CAPACITY).fill(-1), target: new Float64Array(ENTITY_CAPACITY),
         intent: new Uint8Array(ENTITY_CAPACITY), awake: new Uint8Array(ENTITY_CAPACITY), returning: new Uint8Array(ENTITY_CAPACITY),
         patrolX: new Float64Array(ENTITY_CAPACITY), patrolZ: new Float64Array(ENTITY_CAPACITY),
@@ -120,11 +120,12 @@ export class CombatWorld {
         return next.x !== x || next.z !== z;
     }
 
-    public spawnEnemy(spawn: RegionalSpawn, home: RegionalChunk): number {
+    public spawnEnemy(spawn: RegionalSpawn, home: Pick<RegionalChunk, "resident">, strength?: number): number {
         if (this.enemies.count === MAX_ENEMIES) throw new Error("Regional population exceeds the enemy budget");
         const slot = this.world.create(Component.Position | Component.Vitals | Component.Enemy);
         const definition = ENEMY_DEFINITIONS[spawn.kind];
-        const stats = enemyStats(spawn.kind, spawn.level, REGION_RULES[spawn.region.difficulty].scale, spawn.elite, spawn.boss);
+        const stats = enemyStats(spawn.kind, spawn.level, strength === undefined ? REGION_RULES[spawn.region.difficulty].scale : 1, spawn.elite, spawn.boss);
+        if (strength !== undefined) { stats.health *= strength; stats.damage *= strength; }
         const { enemy: e, action: a, vitals: v } = this;
         e.kind[slot] = spawn.kind; e.elite[slot] = Number(spawn.elite); e.boss[slot] = Number(spawn.boss);
         e.level[slot] = spawn.level; e.homes[slot] = home; e.regions[slot] = spawn.region;

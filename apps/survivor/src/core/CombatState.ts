@@ -14,6 +14,7 @@ import type { ItemType } from "./ItemDefinition";
 import type { SpiritRealm } from "./SpiritRealm";
 import type { OrbResonance } from "./Orbs";
 import type { WorldLocation } from "./Homestead";
+import type { ChallengeId, ChallengeSummary } from "./BossChallenge";
 
 export interface MovementInput {
     readonly x: number;
@@ -52,6 +53,9 @@ export interface PlayerSnapshot {
 }
 
 export interface CombatSnapshot {
+    readonly teleportRemaining: number;
+    readonly wildsPosition: Readonly<{ x: number; z: number }>;
+    readonly challenges: Readonly<Partial<Record<ChallengeId, ChallengeSummary>>>;
     readonly world: Readonly<{ seed: string; origin: Readonly<{ x: number; z: number }>; location: WorldLocation }>;
     readonly revision: number;
     readonly tick: number;

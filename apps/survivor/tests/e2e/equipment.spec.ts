@@ -76,7 +76,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await expect(page.locator(".equipment-tooltip .affix-list")).toHaveAttribute("aria-label", "2条词条");
     await page.keyboard.press("KeyB");
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
-    await expect(bag.locator(".bag-tabs button")).toHaveCount(4);
+    await expect(bag.locator(".bag-tabs button")).toHaveCount(5);
     await bag.locator(".bag-cards").evaluate(node => { node.scrollTop = node.scrollHeight; });
     await expect(bag.locator('[data-item-id="9990"]')).toHaveClass(/item-locked/);
     await expect(bag.locator('[data-item-id="9990"] .cell-lock-watermark')).toHaveCount(1);

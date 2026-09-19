@@ -20,9 +20,9 @@ try {
     await page.evaluate(async () => { const s = window.survivorApplication.session; s.dispatch({ type: "toggle-pause" }); await s.settled; });
     const worker = page.workers().find(worker => /\/Combat\.worker-/.test(worker.url()));
     await worker.evaluate(() => {
-        const s = self.fixtureSimulation, base = s.getSnapshot().player.equipment.weapon;
-        s.inventory = Array.from({ length: 80 }, (_, i) => ({ ...base, id: 100 + i, name: `高品质装备 ${i + 1}`, rarity: "rainbow", locked: false }));
-        s.nextItemId = 1000; s.markChanged();
+        const s = self.fixtureSimulation, checkpoint = s.checkpoint(), base = checkpoint.player.equipment.weapon;
+        const inventory = Array.from({ length: 80 }, (_, i) => ({ ...base, id: 100 + i, name: `高品质装备 ${i + 1}`, rarity: "rainbow", locked: false }));
+        s.restore({ ...checkpoint, nextItemId: 1000, player: { ...checkpoint.player, inventory } });
     });
     await page.evaluate(async () => { const s = window.survivorApplication.session; s.dispatch({ type: "sort-inventory" }); await s.settled; });
     const cdp = await page.context().newCDPSession(page); await cdp.send("Performance.enable");

@@ -1,4 +1,5 @@
 import type { HexMap } from "./HexMap";
+import type { WorldOverviewSource } from "./world/WorldSource";
 import type { Point } from "./interfaces";
 import type { ResourceBudgetAccount, ResourceReservationHandle } from "./runtime/ResourceBudget";
 import type { WorldTaskControl } from "./world/WorldGeneratorPool";
@@ -11,6 +12,10 @@ import {
 
 export interface WorldMinimapOptions {
     map: HexMap;
+    /** Optional separately owned overview source; does not load another 3D world. The caller disposes it. */
+    source?: WorldOverviewSource;
+    /** Focus used by follow/recenter when previewing a world other than the rendered map. */
+    getFocusTile?: () => Readonly<Point> | undefined;
     element: string | HTMLCanvasElement;
     rasterSize?: number;
     infiniteTileSpan?: number;
@@ -186,6 +191,10 @@ function rangesIntersect(firstOrigin: number, firstSpan: number, secondOrigin: n
 // creates a second Three.js scene, renderer, or GPU terrain working set.
 export class WorldMinimap {
     private readonly map: HexMap;
+    private readonly source: WorldOverviewSource | undefined;
+    private readonly getFocusTile: () => Readonly<Point> | undefined;
+    private get worldBounds() { return this.source ? this.source.bounds : this.map.worldBounds; }
+    private get worldDescriptor() { return this.source ? this.source.descriptor : this.map.worldDescriptor; }
     private readonly canvas: HTMLCanvasElement;
     private readonly context: CanvasRenderingContext2D;
     private readonly rasterSize: number;
@@ -250,6 +259,8 @@ export class WorldMinimap {
         const context = canvas.getContext("2d", { alpha: true });
         if (!context) throw new Error("WorldMinimap requires a Canvas 2D context");
         this.map = options.map;
+        this.source = options.source;
+        this.getFocusTile = options.getFocusTile ?? (() => this.map.getCameraTargetTile());
         this.canvas = canvas;
         this.context = context;
         this.rasterSize = asPositiveInteger(
@@ -346,7 +357,7 @@ export class WorldMinimap {
         this.zoomFactor = 1;
         this.targetZoomFactor = 1;
         this.zoomAnchor = undefined;
-        const cameraTarget = this.map.getCameraTargetTile();
+        const cameraTarget = this.getFocusTile();
         this.viewport = cameraTarget ? this.createViewport(cameraTarget) : undefined;
         this.setDestination(this.interactive && expanded && cameraTarget ? cameraTarget : undefined);
         this.canvas.dataset.expanded = String(expanded);
@@ -370,7 +381,7 @@ export class WorldMinimap {
             this.render();
             return Promise.resolve();
         }
-        const cameraTarget = this.map.getCameraTargetTile();
+        const cameraTarget = this.getFocusTile();
         if (!cameraTarget) {
             this.updateCanvasState();
             this.render();
@@ -425,7 +436,7 @@ export class WorldMinimap {
     }
 
     private viewSpans(): { tileSpanX: number; tileSpanY: number } | undefined {
-        const bounds = this.map.worldBounds;
+        const bounds = this.worldBounds;
         if (bounds) {
             this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
             return {
@@ -433,14 +444,14 @@ export class WorldMinimap {
                 tileSpanY: Math.min(bounds.height, Math.max(1, bounds.height * this.zoomFactor))
             };
         }
-        if (this.map.worldDescriptor?.topology !== "infinite") return undefined;
+        if (this.worldDescriptor?.topology !== "infinite") return undefined;
         this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
         const tileSpan = Math.max(1, this.infiniteTileSpan * this.zoomFactor);
         return { tileSpanX: tileSpan, tileSpanY: tileSpan };
     }
 
     private clampZoomFactor(value: number): number {
-        const bounds = this.map.worldBounds;
+        const bounds = this.worldBounds;
         if (bounds) {
             const minimum = Math.min(1, Math.max(
                 Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
@@ -464,7 +475,7 @@ export class WorldMinimap {
     }
 
     private clampViewport(viewport: MinimapViewport): void {
-        const bounds = this.map.worldBounds;
+        const bounds = this.worldBounds;
         if (!bounds) return;
         viewport.centerX = Math.max(
             viewport.tileSpanX / 2,
@@ -514,7 +525,7 @@ export class WorldMinimap {
         let originY = pageY * layout.tileSpan;
         let tileSpanX = layout.tileSpan;
         let tileSpanY = layout.tileSpan;
-        const bounds = this.map.worldBounds;
+        const bounds = this.worldBounds;
         if (bounds) {
             const endX = Math.min(bounds.width, originX + tileSpanX);
             const endY = Math.min(bounds.height, originY + tileSpanY);
@@ -717,7 +728,8 @@ export class WorldMinimap {
         let record: PendingPage | undefined;
         let control: WorldTaskControl | undefined;
         this.pageRequests += 1;
-        const promise = this.map.requestWorldOverview(demand.options, {
+        const request = this.source ? this.source.prepareOverview.bind(this.source) : this.map.requestWorldOverview.bind(this.map);
+        const promise = request(demand.options, {
             signal: abort.signal,
             lane: demand.visible ? "prefetch" : "background",
             priority: demand.distance,
@@ -955,7 +967,7 @@ export class WorldMinimap {
     }
 
     private currentOverlaySignature(): string {
-        const target = this.map.getCameraTargetTile();
+        const target = this.getFocusTile();
         this.map.getCamera().getWorldDirection(this.cameraDirection);
         return [
             target?.x ?? "",
@@ -1098,7 +1110,7 @@ export class WorldMinimap {
     }
 
     private drawCameraOverlay(context: CanvasRenderingContext2D, rect: ContentRect, extent: MinimapExtent): void {
-        const target = this.map.getCameraTargetTile();
+        const target = this.getFocusTile();
         if (!target) return;
         const x = rect.x + (target.x + 0.5 - extent.originX) / extent.tileSpanX * rect.width;
         const y = rect.y + (target.y + 0.5 - extent.originY) / extent.tileSpanY * rect.height;
@@ -1143,7 +1155,7 @@ export class WorldMinimap {
     }
 
     private drawPosition(context: CanvasRenderingContext2D, rect: ContentRect): void {
-        const target = this.expanded && this.destination ? this.destination : this.map.getCameraTargetTile();
+        const target = this.expanded && this.destination ? this.destination : this.getFocusTile();
         if (!target) return;
         const label = `${this.expanded ? "T " : ""}${target.x}, ${target.y}`;
         context.font = "600 10px system-ui, sans-serif";
@@ -1205,7 +1217,7 @@ export class WorldMinimap {
             x: Math.floor(coordinate.worldX),
             y: Math.floor(coordinate.worldY)
         };
-        const bounds = this.map.worldBounds;
+        const bounds = this.worldBounds;
         if (bounds) {
             tile.x = Math.max(0, Math.min(bounds.width - 1, tile.x));
             tile.y = Math.max(0, Math.min(bounds.height - 1, tile.y));
@@ -1227,7 +1239,7 @@ export class WorldMinimap {
     }
 
     public recenter(): void {
-        const cameraTarget = this.map.getCameraTargetTile();
+        const cameraTarget = this.getFocusTile();
         if (this.disposed || !this.expanded || !cameraTarget) return;
         this.endPan();
         this.stopZoomAnimation();
@@ -1336,7 +1348,7 @@ export class WorldMinimap {
     private handleKeyDown = (event: KeyboardEvent): void => {
         if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isEditableTarget(event.target)) return;
         if (event.code === "KeyM") {
-            if (event.repeat || !this.map.getCameraTargetTile()) return;
+            if (event.repeat || !this.getFocusTile()) return;
             event.preventDefault();
             this.toggleExpanded();
         } else if (event.code === "KeyT" && this.expanded) {
@@ -1380,7 +1392,7 @@ export class WorldMinimap {
     private handleFrame = (frame: { dtS?: number }): void => {
         if (this.disposed || this.worldLoading) return;
         const dtS = Number.isFinite(frame?.dtS) ? Math.max(0, frame.dtS as number) : 0;
-        const cameraTarget = this.map.getCameraTargetTile();
+        const cameraTarget = this.getFocusTile();
         const followed = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
         const zoomed = this.updateExpandedZoom(dtS);
         if (followed || zoomed || this.demandPending) {

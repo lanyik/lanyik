@@ -44,6 +44,8 @@ import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "../core/EnemyDefinitions";
 import { ACTOR_FADE_END, actorVisibility } from "./ActorVisibility";
 import { HomesteadModels } from "./HomesteadModels";
 import type { WorldLocation } from "../core/Homestead";
+import { isChallenge } from "../core/BossChallenge";
+import { ChallengeMist } from "./ChallengeMist";
 const RARITY_COLORS = RARITIES.map(rarity => new Color(GAME_CONFIG.quality[rarity].color));
 const CHEST_COLORS = [new Color(0xb87838), new Color(0xd7e0ed), new Color(0xffc34b), new Color(0x70f5ed), new Color(0xff79dc)] as const;
 const WHITE = new Color(0xffffff);
@@ -93,6 +95,7 @@ export class CombatLayer implements WorldRenderLayer {
     private actors: ActorModels | undefined;
     private effects: SkillEffects | undefined;
     private readonly mist = new BoundaryMist();
+    private readonly challengeMist = new ChallengeMist();
     private homestead: HomesteadModels | undefined;
     private location: WorldLocation = "wilds";
     private actorLoading: Promise<void> | undefined;
@@ -146,6 +149,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.buildPlayer();
         this.groundProjection.root.add(this.enemyEffects.warnings, this.telegraphs, this.chargeWarnings, this.groundPlayer, this.lootEffects.halo);
         this.root.add(this.enemyEffects.root, this.projectiles, this.experience, this.lootEffects.beam, this.player, this.mist.mesh);
+        this.root.add(this.challengeMist.root);
         try { resources.acquireRequired("combat-render-pool", {}, true, [
             ...collectObject3DResourceAllocations([this.root, this.groundProjection.root]),
             { identity: this.groundProjection.target.texture, cost: {
@@ -241,6 +245,8 @@ export class CombatLayer implements WorldRenderLayer {
         this.damageNumbers!.update(state.combatText, state.player.animationTime, this.effectHeight, playerX, playerZ);
         this.mist.update(0, this.player.position.y, 0, state.player.animationTime, playerX, playerZ);
         this.mist.mesh.visible = this.location === "wilds";
+        this.challengeMist.root.visible = isChallenge(this.location);
+        if (isChallenge(this.location)) this.challengeMist.update(this.location, playerX, playerZ, state.player.animationTime);
 
         for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
         this.telegraphs.count = this.chargeWarnings.count = 0;
@@ -391,6 +397,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.lootEffects.dispose();
         this.groundProjection.dispose();
         this.mist.dispose();
+        this.challengeMist.dispose();
         this.homestead?.dispose();
         this.actorFill.dispose();
         for (const mesh of [this.projectiles, this.telegraphs, this.chargeWarnings, this.experience]) mesh.dispose();

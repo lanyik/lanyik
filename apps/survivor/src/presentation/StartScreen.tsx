@@ -6,10 +6,11 @@ import type { RuntimeLog } from "../app/RuntimeLog";
 import { RuntimeLogExport } from "./RuntimeLogExport";
 import "./app.css";
 import "./menus.css";
+import { CHALLENGES, isChallenge } from "../core/BossChallenge";
 
 export function SaveSummary({ save }: { save: CharacterSave }) {
     const p = save.checkpoint.player;
-    return <><strong>Lv.{p.level} · 击杀 {save.checkpoint.kills} · {save.checkpoint.location === "homestead" ? "家园" : "荒野"}</strong><span>{save.checkpoint.seed}</span>
+    return <><strong>Lv.{p.level} · 击杀 {save.checkpoint.kills} · {save.checkpoint.location === "homestead" ? "家园" : isChallenge(save.checkpoint.location) ? CHALLENGES[save.checkpoint.location].name : "荒野"}</strong><span>{save.checkpoint.seed}</span>
         <small>金币 {p.gold.toLocaleString("zh-CN")} · 背包 {p.inventory.length} 格</small><time>{new Date(save.savedAt).toLocaleString("zh-CN")}</time></>;
 }
 

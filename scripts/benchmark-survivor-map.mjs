@@ -12,12 +12,12 @@ try {
     await page.getByRole("button", { name: "出战荒野", exact: true }).click();
     await page.locator(".survivor[data-state=ready][data-location=wilds]").waitFor({ timeout: 60_000 });
     await page.keyboard.press("KeyM");
-    await page.waitForFunction(() => [...window.survivorApplication.session.view.regionMaps][0].minimap.view.pendingPages === 0,
+    await page.waitForFunction(() => [...window.survivorApplication.session.view.regionMaps.keys()][0].minimap.view.pendingPages === 0,
         undefined, { timeout: 60_000 });
     const cdp = await page.context().newCDPSession(page);
     await cdp.send("Performance.enable");
     await page.evaluate(() => {
-        const adapter = [...window.survivorApplication.session.view.regionMaps][0], minimap = adapter.minimap;
+        const adapter = [...window.survivorApplication.session.view.regionMaps.keys()][0], minimap = adapter.minimap;
         const stats = {};
         window.mapProfile = { minimap, stats, active: false, frames: [], longTasks: [] };
         for (const [owner, key, bucket] of [[adapter, "drawFog", "fog"], [adapter.fog, "paint", "fogRebuild"],

@@ -20903,7 +20903,7 @@ ${HEADER}
       this.handleKeyDown = (event) => {
         if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isEditableTarget(event.target)) return;
         if (event.code === "KeyM") {
-          if (event.repeat || !this.map.getCameraTargetTile()) return;
+          if (event.repeat || !this.getFocusTile()) return;
           event.preventDefault();
           this.toggleExpanded();
         } else if (event.code === "KeyT" && this.expanded) {
@@ -20942,7 +20942,7 @@ ${HEADER}
       this.handleFrame = (frame) => {
         if (this.disposed || this.worldLoading) return;
         const dtS = Number.isFinite(frame?.dtS) ? Math.max(0, frame.dtS) : 0;
-        const cameraTarget = this.map.getCameraTargetTile();
+        const cameraTarget = this.getFocusTile();
         const followed = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
         const zoomed = this.updateExpandedZoom(dtS);
         if (followed || zoomed || this.demandPending) {
@@ -20961,6 +20961,8 @@ ${HEADER}
       const context = canvas.getContext("2d", { alpha: true });
       if (!context) throw new Error("WorldMinimap requires a Canvas 2D context");
       this.map = options.map;
+      this.source = options.source;
+      this.getFocusTile = options.getFocusTile ?? (() => this.map.getCameraTargetTile());
       this.canvas = canvas;
       this.context = context;
       this.rasterSize = asPositiveInteger(
@@ -21008,6 +21010,12 @@ ${HEADER}
       this.render();
       void this.refresh();
     }
+    get worldBounds() {
+      return this.source ? this.source.bounds : this.map.worldBounds;
+    }
+    get worldDescriptor() {
+      return this.source ? this.source.descriptor : this.map.worldDescriptor;
+    }
     get view() {
       const extent = this.viewportExtent();
       const pixels = extent ? this.viewPixelSize(extent) : void 0;
@@ -21052,7 +21060,7 @@ ${HEADER}
       this.zoomFactor = 1;
       this.targetZoomFactor = 1;
       this.zoomAnchor = void 0;
-      const cameraTarget = this.map.getCameraTargetTile();
+      const cameraTarget = this.getFocusTile();
       this.viewport = cameraTarget ? this.createViewport(cameraTarget) : void 0;
       this.setDestination(this.interactive && expanded && cameraTarget ? cameraTarget : void 0);
       this.canvas.dataset.expanded = String(expanded);
@@ -21075,7 +21083,7 @@ ${HEADER}
         this.render();
         return Promise.resolve();
       }
-      const cameraTarget = this.map.getCameraTargetTile();
+      const cameraTarget = this.getFocusTile();
       if (!cameraTarget) {
         this.updateCanvasState();
         this.render();
@@ -21127,7 +21135,7 @@ ${HEADER}
       this.resources.dispose();
     }
     viewSpans() {
-      const bounds = this.map.worldBounds;
+      const bounds = this.worldBounds;
       if (bounds) {
         this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
         return {
@@ -21135,13 +21143,13 @@ ${HEADER}
           tileSpanY: Math.min(bounds.height, Math.max(1, bounds.height * this.zoomFactor))
         };
       }
-      if (this.map.worldDescriptor?.topology !== "infinite") return void 0;
+      if (this.worldDescriptor?.topology !== "infinite") return void 0;
       this.zoomFactor = this.clampZoomFactor(this.zoomFactor);
       const tileSpan = Math.max(1, this.infiniteTileSpan * this.zoomFactor);
       return { tileSpanX: tileSpan, tileSpanY: tileSpan };
     }
     clampZoomFactor(value) {
-      const bounds = this.map.worldBounds;
+      const bounds = this.worldBounds;
       if (bounds) {
         const minimum = Math.min(1, Math.max(
           Math.min(1, MIN_OVERVIEW_TILE_SPAN / bounds.width),
@@ -21163,7 +21171,7 @@ ${HEADER}
       return viewport;
     }
     clampViewport(viewport) {
-      const bounds = this.map.worldBounds;
+      const bounds = this.worldBounds;
       if (!bounds) return;
       viewport.centerX = Math.max(
         viewport.tileSpanX / 2,
@@ -21207,7 +21215,7 @@ ${HEADER}
       let originY = pageY * layout.tileSpan;
       let tileSpanX = layout.tileSpan;
       let tileSpanY = layout.tileSpan;
-      const bounds = this.map.worldBounds;
+      const bounds = this.worldBounds;
       if (bounds) {
         const endX = Math.min(bounds.width, originX + tileSpanX);
         const endY = Math.min(bounds.height, originY + tileSpanY);
@@ -21381,7 +21389,8 @@ ${HEADER}
       let record;
       let control;
       this.pageRequests += 1;
-      const promise = this.map.requestWorldOverview(demand.options, {
+      const request = this.source ? this.source.prepareOverview.bind(this.source) : this.map.requestWorldOverview.bind(this.map);
+      const promise = request(demand.options, {
         signal: abort.signal,
         lane: demand.visible ? "prefetch" : "background",
         priority: demand.distance,
@@ -21599,7 +21608,7 @@ ${HEADER}
       this.motionY = this.motionY * 0.65 + dy * 0.35;
     }
     currentOverlaySignature() {
-      const target = this.map.getCameraTargetTile();
+      const target = this.getFocusTile();
       this.map.getCamera().getWorldDirection(this.cameraDirection);
       return [
         target?.x ?? "",
@@ -21731,7 +21740,7 @@ ${HEADER}
       return drawn;
     }
     drawCameraOverlay(context, rect, extent) {
-      const target = this.map.getCameraTargetTile();
+      const target = this.getFocusTile();
       if (!target) return;
       const x = rect.x + (target.x + 0.5 - extent.originX) / extent.tileSpanX * rect.width;
       const y = rect.y + (target.y + 0.5 - extent.originY) / extent.tileSpanY * rect.height;
@@ -21772,7 +21781,7 @@ ${HEADER}
       context.restore();
     }
     drawPosition(context, rect) {
-      const target = this.expanded && this.destination ? this.destination : this.map.getCameraTargetTile();
+      const target = this.expanded && this.destination ? this.destination : this.getFocusTile();
       if (!target) return;
       const label = `${this.expanded ? "T " : ""}${target.x}, ${target.y}`;
       context.font = "600 10px system-ui, sans-serif";
@@ -21830,7 +21839,7 @@ ${HEADER}
         x: Math.floor(coordinate.worldX),
         y: Math.floor(coordinate.worldY)
       };
-      const bounds = this.map.worldBounds;
+      const bounds = this.worldBounds;
       if (bounds) {
         tile.x = Math.max(0, Math.min(bounds.width - 1, tile.x));
         tile.y = Math.max(0, Math.min(bounds.height - 1, tile.y));
@@ -21849,7 +21858,7 @@ ${HEADER}
       this.zoomAnchor = void 0;
     }
     recenter() {
-      const cameraTarget = this.map.getCameraTargetTile();
+      const cameraTarget = this.getFocusTile();
       if (this.disposed || !this.expanded || !cameraTarget) return;
       this.endPan();
       this.stopZoomAnimation();

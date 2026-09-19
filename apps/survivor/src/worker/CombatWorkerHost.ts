@@ -9,6 +9,8 @@ import type { SpiritRepository } from "./SpiritRepository";
 import { ProceduralCombatTerrain } from "../adapters/ProceduralCombatTerrain";
 import type { CharacterCheckpoint } from "../core/CharacterCheckpoint";
 import { HomesteadTerrain, type WorldLocation } from "../core/Homestead";
+import { ChallengeTerrain, isChallenge } from "../core/BossChallenge";
+import type { CharacterRepository } from "../app/CharacterRepository";
 const SNAPSHOT_TICKS = ticksPerUpdate(GAME_CONFIG.timing.snapshotHz);
 
 type SimulationFactory = (seed: string, start: { x: number; z: number }, realm: SpiritRealm, location: WorldLocation) => CombatSimulation;
@@ -24,11 +26,13 @@ export class CombatWorkerHost {
     private busy = false;
     private closed = false;
     private savedRevision = 0;
+    private savedChallengeRevision = 0;
 
     constructor(private readonly send: (message: CombatResponse, transfers: Transferable[]) => void,
         private readonly progress: SpiritRepository,
         private readonly createSimulation: SimulationFactory = (seed, start, realm, location) => new CombatSimulation(seed, start, realm,
-            location === "homestead" ? new HomesteadTerrain() : new ProceduralCombatTerrain(seed), location)) {}
+            location === "homestead" ? new HomesteadTerrain() : isChallenge(location) ? new ChallengeTerrain() : new ProceduralCombatTerrain(seed), location, crypto.randomUUID()),
+        private readonly characters?: Pick<CharacterRepository, "save" | "close">) {}
 
     public async receive(request: CombatRequest): Promise<void> {
         if (this.closed) return;
@@ -47,8 +51,10 @@ export class CombatWorkerHost {
                 persistenceMs += performance.now() - loading;
                 if (this.closed) return;
                 this.savedRevision = realm.revision;
+                if (isChallenge(request.location ?? "") && !request.checkpoint) throw new Error("挑战副本必须使用卷轴开启或恢复已保存进度");
                 this.simulation = this.createSimulation(request.seed, request.start, realm, request.checkpoint?.location ?? request.location ?? "wilds");
                 if (request.checkpoint) this.simulation.restore(request.checkpoint);
+                this.savedChallengeRevision = this.simulation.challengeRevision;
                 // One frame remains here while the other is owned by the presentation thread.
                 this.frame = new RenderFrame();
                 forceSnapshot = true;
@@ -70,6 +76,14 @@ export class CombatWorkerHost {
             } else throw new Error("Unknown combat request");
             if (this.closed) return;
             const simulation = this.simulation!, pool = this.pool!;
+            if (this.characters && simulation.challengeRevision !== this.savedChallengeRevision) {
+                const saving = performance.now();
+                // Commit the complete reward transaction before publishing it. A killed enemy can never be resurrected by an older slot.
+                await this.characters.save("auto", simulation.checkpoint(undefined, undefined, undefined, true));
+                persistenceMs += performance.now() - saving;
+                this.savedChallengeRevision = simulation.challengeRevision;
+                if (this.closed) return;
+            }
             if (simulation.spiritProgress.revision !== this.savedRevision) {
                 const saving = performance.now();
                 await this.progress.save(simulation.spiritProgress);
@@ -86,7 +100,13 @@ export class CombatWorkerHost {
             const batchMs = performance.now() - started, queryWaitMs = pool.waitMs - waitBefore;
             let checkpoint: CharacterCheckpoint | undefined, checkpointError: string | undefined;
             if (request.type === "advance" && request.batch.checkpoint) {
-                try { checkpoint = simulation.checkpoint(request.batch.travel); } catch (error) { checkpointError = error instanceof Error ? error.message : String(error); }
+                let terrain;
+                try {
+                    if (request.batch.travelPoint && request.batch.travel) terrain = request.batch.travel === "wilds" ? new ProceduralCombatTerrain(simulation.getSnapshot().world.seed)
+                        : request.batch.travel === "homestead" ? new HomesteadTerrain() : new ChallengeTerrain();
+                    checkpoint = simulation.checkpoint(request.batch.travel, request.batch.travelPoint, terrain);
+                } catch (error) { checkpointError = error instanceof Error ? error.message : String(error); }
+                finally { terrain?.dispose(); }
             }
             const discovery = simulation.explorationSnapshot;
             const exploration = discovery.revision !== this.lastExplorationRevision ? discovery : undefined;
@@ -108,6 +128,7 @@ export class CombatWorkerHost {
     public dispose(): void {
         this.closed = true; this.pool?.dispose(); this.simulation?.dispose();
         this.progress.close();
+        this.characters?.close();
         this.pool = undefined; this.simulation = undefined; this.frame = undefined;
     }
 }

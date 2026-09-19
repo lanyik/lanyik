@@ -13,6 +13,7 @@ export const WORKER_TIMEOUT_MS = GAME_CONFIG.workers.timeoutMs;
 
 export interface CombatAdvance {
     readonly travel?: WorldLocation;
+    readonly travelPoint?: { readonly x: number; readonly z: number };
     readonly checkpoint?: boolean;
     readonly steps: number;
     readonly input: MovementInput;

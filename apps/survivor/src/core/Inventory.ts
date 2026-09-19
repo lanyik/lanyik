@@ -10,6 +10,7 @@ export function inventorySlots(items: readonly InventoryItem[], type: ItemType):
 export function canStack(first: InventoryItem, second: InventoryItem): boolean {
     return first.value === second.value && first.rarity === second.rarity && (
         first.type === "consumable" && second.type === "consumable"
+        || first.type === "scroll" && second.type === "scroll"
         || first.type === "affix" && second.type === "affix" && first.amount === second.amount);
 }
 
@@ -23,12 +24,12 @@ export function insertInventoryItem(items: readonly InventoryItem[], incoming: I
     let remaining = incoming.size;
     for (let index = 0; index < result.length && remaining > 0; index++) {
         const item = result[index];
-        if (!canStack(item, incoming) || item.type !== "consumable" && item.type !== "affix") continue;
+        if (!canStack(item, incoming) || item.type !== "consumable" && item.type !== "affix" && item.type !== "scroll") continue;
         const moved = Math.min(remaining, rules.stackSize - item.size);
         if (moved) result[index] = Object.freeze({ ...item, size: item.size + moved });
         remaining -= moved;
     }
-    if (remaining > 0) result.push(incoming.type === "consumable" || incoming.type === "affix" ? Object.freeze({ ...incoming, size: remaining }) : incoming);
+    if (remaining > 0) result.push(incoming.type === "consumable" || incoming.type === "affix" || incoming.type === "scroll" ? Object.freeze({ ...incoming, size: remaining }) : incoming);
     return result;
 }
 

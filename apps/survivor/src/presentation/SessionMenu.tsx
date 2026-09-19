@@ -13,7 +13,7 @@ function SaveConfirmation({ pending, close, act }: { pending: { load?: Character
     return createPortal(<dialog className="craft-confirm" ref={dialog} aria-label="确认存档操作" onCancel={event => { event.preventDefault(); close(); }} onKeyDown={event => event.stopPropagation()}>
         <h2>{pending.load ? "读取角色存档" : "覆盖手动存档"}</h2>
         {pending.load && <div className="save-card"><SaveSummary save={pending.load} /></div>}
-        <p>{pending.load ? "当前未保存进度会被替换。读档恢复角色与位置，附近怪物、宝箱和地面掉落重新生成；永久灵境成长保留。" : `用当前角色进度覆盖「${SAVE_NAMES[pending.slot]}」，该槽原记录不再保留。`}</p>
+        <p>{pending.load ? "荒野遭遇会重新生成；副本击杀、卷轴消耗与领奖不可回退。若本槽早于已提交的副本进度，将恢复该角色最新提交的完整状态。永久灵境成长保留。" : `用当前角色进度覆盖「${SAVE_NAMES[pending.slot]}」，该槽原记录不再保留。`}</p>
         <footer><button autoFocus onClick={close}>取消</button><button onClick={act}>确认{pending.load ? "读档" : "覆盖"}</button></footer>
     </dialog>, document.body);
 }
@@ -28,7 +28,7 @@ export function SessionMenu({ session, snapshot, close, home, log }: { session: 
     };
     const blocked = busy || snapshot.saveStatus.busy || snapshot.travelling;
     return <aside className="session-menu window" role="dialog" aria-label="游戏与存档"><header><div><span className="eyebrow">JOURNEY / 旅程</span><h2>游戏与存档</h2></div><button aria-label="关闭存档界面" onClick={close} disabled={blocked}><UiIcon name="close" /></button></header>
-        <p className="save-note">已暂停战斗。保存角色、物品、技能、家园/荒野位置与探索迷雾；自动存档每 60 秒更新。</p>
+        <p className="save-note">已暂停战斗。保存角色、物品、技能、世界位置、探索迷雾与各副本进度。常规每 60 秒自动保存；副本击杀和领奖即时提交，旧档不能回退。</p>
         <div className="save-slots">{entries.map(entry => <article key={entry.slot} className="save-card"><header><b>{SAVE_NAMES[entry.slot]}</b></header>
             {entry.save ? <SaveSummary save={entry.save} /> : <p>{entry.error ?? "空存档槽"}</p>}
             {entry.slot !== "auto" && <button disabled={blocked || snapshot.combat?.gameOver} onClick={() => entry.save || entry.error ? setPending({ slot: entry.slot }) : void run(() => session.save(entry.slot))}>保存到{SAVE_NAMES[entry.slot]}</button>}

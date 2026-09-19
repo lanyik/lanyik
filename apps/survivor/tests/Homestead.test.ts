@@ -98,7 +98,7 @@ test("travel commits queued commands before replacing authority and retains paus
 });
 
 test("failed persistence keeps the current home and authority available for retry", async () => {
-    const { session, clients, view } = sessionFixture({ list: async () => [], save: async () => { throw new Error("disk full"); }, close() {} });
+    const { session, clients, view } = sessionFixture({ list: async () => [], resolve: async checkpoint => checkpoint, save: async () => { throw new Error("disk full"); }, close() {} });
     await session.start("save-failure", "homestead"); await session.travel("wilds");
     expect(session.getSnapshot()).toMatchObject({ status: "ready", travelling: false, travelError: "disk full", combat: { world: { location: "homestead" } } });
     expect(view.load).toHaveBeenCalledTimes(1); expect(clients[0].closed).toBe(false);
@@ -108,7 +108,7 @@ test("failed persistence keeps the current home and authority available for retr
 test("a delayed travel save cannot replace a subsequently started world", async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const { session, clients } = sessionFixture({ list: async () => [], save: async (slot, checkpoint) => {
+    const { session, clients } = sessionFixture({ list: async () => [], resolve: async checkpoint => checkpoint, save: async (slot, checkpoint) => {
         await gate; return { slot, savedAt: 1, checkpoint, generator: 1 };
     }, close() {} });
     await session.start("old", "homestead");
@@ -135,7 +135,7 @@ test("failed destination loading retries the same character and destination", as
 test("closing while a travel write is pending cannot start another authority", async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const { session, clients } = sessionFixture({ list: async () => [], save: async (slot, checkpoint) => {
+    const { session, clients } = sessionFixture({ list: async () => [], resolve: async checkpoint => checkpoint, save: async (slot, checkpoint) => {
         await gate; return { slot, savedAt: 1, checkpoint, generator: 1 };
     }, close() {} });
     await session.start("close-travel", "homestead");

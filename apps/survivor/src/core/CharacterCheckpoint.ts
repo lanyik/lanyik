@@ -8,9 +8,15 @@ import type { SkillCheckpoint } from "./SkillSystem";
 import { validateSpiritRealm } from "./SpiritRealm";
 import { validateExploration, type ExplorationSnapshot } from "./Exploration";
 import type { WorldLocation } from "./Homestead";
+import { CHALLENGE_IDS, CHALLENGE_ARENA, ChallengeTerrain, challengeSpawns, isChallenge, type ChallengeProgressMap } from "./BossChallenge";
+import { ENEMY_DEFINITIONS, enemyStats } from "./EnemyDefinitions";
 
 export interface CharacterCheckpoint {
-    readonly version: 3;
+    readonly version: 4;
+    readonly characterId: string;
+    readonly challengeRevision: number;
+    readonly challenges: ChallengeProgressMap;
+    readonly teleportReadyAt: number;
     readonly location: WorldLocation;
     readonly wildsPosition: { readonly x: number; readonly z: number };
     readonly exploration: ExplorationSnapshot;
@@ -44,14 +50,18 @@ function assertItem(item: InventoryItem): void {
         if (!POTION_RARITIES.includes(item.rarity) || !POTION_TYPES.includes(item.value)) throw new Error("存档药剂无效");
     } else if (item.type === "affix") {
         if (!BONUS_IDS.includes(item.value) || !finite(item.amount)) throw new Error("存档词条无效");
+    } else if (item.type === "scroll") {
+        if (!isChallenge(item.value) || item.rarity !== "rainbow") throw new Error("存档副本卷轴无效");
     } else if (!["fortune", "bounty", "constellation", "harmony"].includes(item.value) || !item.ratings
         || !finite(item.ratings.quantity) || !finite(item.ratings.quality) || !finite(item.ratings.stars)) throw new Error("存档宝珠无效");
 }
 
 /** Reject invalid/currently unsupported saves before changing a running character. No migration. */
 export function validateCharacterCheckpoint(value: CharacterCheckpoint): CharacterCheckpoint {
-    if (!value || value.version !== 3) throw new Error("角色存档版本与当前游戏不一致");
-    if (!["wilds", "homestead"].includes(value.location) || !value.wildsPosition
+    if (!value || value.version !== 4) throw new Error("角色存档版本与当前游戏不一致");
+    if (typeof value.characterId !== "string" || !value.characterId.length || value.characterId.length > 128 || !integer(value.challengeRevision)
+        || !integer(value.teleportReadyAt) || value.teleportReadyAt > value.tick + GAME_CONFIG.timing.simulationHz * 5) throw new Error("角色传送进度无效");
+    if ((!isChallenge(value.location) && !["wilds", "homestead"].includes(value.location)) || !value.wildsPosition
         || !Number.isFinite(value.wildsPosition.x) || !Number.isFinite(value.wildsPosition.z)) throw new Error("角色世界位置无效");
     validateExploration(value.exploration);
     const p = value.player, s = value.skills;
@@ -71,7 +81,29 @@ export function validateCharacterCheckpoint(value: CharacterCheckpoint): Charact
         })) throw new Error("角色成长或回收设置无效");
     if (!Array.isArray(p.inventory) || !Array.isArray(p.orbs) || p.orbs.length !== 6 || !p.equipment
         || Object.keys(p.equipment).some(slot => !EQUIPMENT_SLOTS.includes(slot as typeof EQUIPMENT_SLOTS[number]))) throw new Error("角色背包无效");
-    const all = [...p.inventory, ...Object.values(p.equipment).filter(item => !!item), ...p.orbs.filter(item => !!item)];
+    if (!value.challenges || typeof value.challenges !== "object" || Object.keys(value.challenges).some(id => !isChallenge(id))) throw new Error("副本记录无效");
+    const terrain = new ChallengeTerrain();
+    const point = (p: { x: number; z: number }) => p && Number.isFinite(p.x) && Number.isFinite(p.z) && terrain.isClear(p.x, p.z, 0);
+    for (const id of CHALLENGE_IDS) {
+        const run = value.challenges[id];
+        if (!run) continue;
+        if (!integer(run.level, 1) || !integer(run.round, 1) || !point(run.position) || typeof run.claimed !== "boolean"
+            || !Array.isArray(run.enemies) || run.enemies.length !== CHALLENGE_ARENA.population || run.enemies.some(enemy => !point(enemy) || !finite(enemy.health))
+            || run.claimed && run.enemies.some(enemy => enemy.health > 0)
+            || !Array.isArray(run.loot) || run.loot.length > GAME_CONFIG.combat.maxGroundEquipment || run.loot.some(drop => !point(drop))
+            || !Array.isArray(run.experience) || run.experience.length > GAME_CONFIG.combat.maxExperienceOrbs || run.experience.some(orb => !point(orb) || !finite(orb.value))) throw new Error("副本战斗进度无效");
+        if (!terrain.isClear(run.position.x, run.position.z, GAME_CONFIG.combat.playerRadius)) throw new Error("副本返回位置无效");
+        const spawns = challengeSpawns(id, run.level);
+        for (let i = 0; i < spawns.length; i++) {
+            const enemy = run.enemies[i], spawn = spawns[i];
+            const maximum = enemyStats(spawn.kind, run.level, 1, spawn.elite, spawn.boss).health * (spawn.boss ? CHALLENGE_ARENA.bossStrength : CHALLENGE_ARENA.normalStrength);
+            const radius = ENEMY_DEFINITIONS[spawn.kind].radius * (spawn.boss ? 2.5 : spawn.elite ? 1.28 : 1);
+            if (enemy.health > maximum || enemy.health > 0 && !terrain.isClear(enemy.x, enemy.z, radius)) throw new Error("副本怪物状态无效");
+        }
+    }
+    if (isChallenge(value.location) && !value.challenges[value.location]) throw new Error("副本尚未开启");
+    const groundItems = Object.values(value.challenges).flatMap(run => run!.loot.map(drop => drop.item));
+    const all = [...p.inventory, ...Object.values(p.equipment).filter(item => !!item), ...p.orbs.filter(item => !!item), ...groundItems];
     all.forEach(assertItem);
     if (new Set(all.map(item => item.id)).size !== all.length || all.some(item => item.id >= value.nextItemId)
         || Object.entries(p.equipment).some(([slot, item]) => item && (item.type !== "equipment" || item.value !== slot))

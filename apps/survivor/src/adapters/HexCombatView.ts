@@ -9,6 +9,7 @@ import {
     type HexMapFrameStartEvent,
     type HexMapFrameEndEvent,
     type WorldSource,
+    type WorldOverviewSource,
 } from "three-hex-map";
 import workerUrl from "three-hex-map/world-generator.worker?url";
 import type { CombatStart, CombatView } from "../app/CombatView";
@@ -23,6 +24,9 @@ import { COMBAT_ENVIRONMENT, COMBAT_WATER_STYLE } from "./CombatEnvironment";
 import { ProceduralCombatTerrain } from "./ProceduralCombatTerrain";
 import { createHomesteadMap } from "./HomesteadMap";
 import { HOMESTEAD, type WorldLocation } from "../core/Homestead";
+import { CHALLENGE_SPAWN } from "../core/BossChallenge";
+import { createChallengeMap } from "./ChallengeMap";
+import { overviewPoint } from "./MapProjection";
 
 function isArenaGround(type: Land, modifiers: readonly string[] | undefined): boolean {
     return type !== Land.sea
@@ -70,8 +74,10 @@ export class HexCombatView implements CombatView {
     private readonly layerReady: Promise<void>;
     private readonly input: MovementInputController;
     private readonly canvas: HTMLCanvasElement;
-    private readonly regionMaps = new Set<HexRegionMap>();
+    private readonly regionMaps = new Map<HexRegionMap, WorldOverviewSource | undefined>();
     private attempt: { readonly controller: AbortController; source: WorldSource | undefined } | undefined;
+    private location: WorldLocation = "wilds";
+    private seed = "";
 
     constructor(private readonly onError: (error: Error) => void, private readonly terrainWorkers: number) {
         this.map = new HexMap({
@@ -119,9 +125,10 @@ export class HexCombatView implements CombatView {
 
     public async load(seed: string, position?: CombatStart, location: WorldLocation = "wilds"): Promise<CombatStart> {
         this.cancelLoad();
+        this.location = location; this.seed = seed;
         this.input.setEnabled(false);
         const controller = new AbortController();
-        const source = location === "homestead" ? new StaticWorldSource(createHomesteadMap(), { chunkSize: WORLD_VIEW.terrainChunkSize }) : new ProceduralWorldSource({
+        const source = location !== "wilds" ? new StaticWorldSource(location === "homestead" ? createHomesteadMap() : createChallengeMap(), { chunkSize: WORLD_VIEW.terrainChunkSize }) : new ProceduralWorldSource({
             seed,
             workerUrl,
             workerCount: this.terrainWorkers,
@@ -133,7 +140,8 @@ export class HexCombatView implements CombatView {
         this.attempt = attempt;
         try {
             const start = position ? { point: { x: position.x, z: position.z }, tile: { x: Math.round(position.x / 1.5), y: Math.round(position.z / Math.sqrt(3)) } } : findCombatStart(seed);
-            const target = location === "homestead" && !position ? { point: HOMESTEAD.spawn, tile: { x: 32, y: 32 } } : start;
+            const target = location !== "wilds" && !position ? { point: location === "homestead" ? HOMESTEAD.spawn : CHALLENGE_SPAWN,
+                tile: location === "homestead" ? { x: 32, y: 32 } : { x: 20, y: 30 } } : start;
             await this.layerReady;
             controller.signal.throwIfAborted();
             // HexMap takes ownership as soon as loadWorld begins, including failure paths.
@@ -162,13 +170,25 @@ export class HexCombatView implements CombatView {
     public readMovement(): MovementInput { return this.input.read(this.map.getCamera()); }
     public get workerActivity() { return this.map.workerActivity; }
 
-    public attachRegionMap: AttachRegionMap = (canvas, controls) => {
-        const minimap = new HexRegionMap(this.map, canvas, controls, this.onError);
-        this.regionMaps.add(minimap);
+    public attachRegionMap: AttachRegionMap = (canvas, controls, preview) => {
+        let source: WorldOverviewSource | undefined;
+        if (preview && preview.location !== this.location) source = preview.location === "wilds"
+            ? new ProceduralWorldSource({ seed: this.seed, workerUrl, workerCount: 1, chunkSize: WORLD_VIEW.terrainChunkSize,
+                waterStyle: COMBAT_WATER_STYLE, workCoordinator: this.map.workCoordinator })
+            : new StaticWorldSource(preview.location === "homestead" ? createHomesteadMap() : createChallengeMap(), { chunkSize: WORLD_VIEW.terrainChunkSize });
+        let current = preview?.combat;
+        const focus = preview ? () => {
+            const point = overviewPoint(current!.player.x, current!.player.z);
+            return { x: Math.round(point.x - .5), y: Math.round(point.y - .5) };
+        } : undefined;
+        let minimap: HexRegionMap;
+        try { minimap = new HexRegionMap(this.map, canvas, controls, this.onError, source, focus); }
+        catch (error) { source?.dispose(); throw error; }
+        this.regionMaps.set(minimap, source);
         return {
-            update: (combat, exploration) => minimap.update(combat, exploration), setExpanded: expanded => minimap.setExpanded(expanded),
+            update: (combat, exploration) => { current = combat; minimap.update(combat, exploration); }, setExpanded: expanded => minimap.setExpanded(expanded),
             recenter: () => minimap.recenter(), navigate: () => minimap.navigate(),
-            dispose: () => { minimap.dispose(); this.regionMaps.delete(minimap); }
+            dispose: () => { minimap.dispose(); source?.dispose(); this.regionMaps.delete(minimap); }
         };
     };
 
@@ -192,7 +212,7 @@ export class HexCombatView implements CombatView {
     public dispose(): Promise<void> {
         this.cancelLoad();
         this.input.dispose();
-        for (const minimap of this.regionMaps) minimap.dispose();
+        for (const [minimap, source] of this.regionMaps) { minimap.dispose(); source?.dispose(); }
         this.regionMaps.clear();
         return this.map.disposeAsync();
     }

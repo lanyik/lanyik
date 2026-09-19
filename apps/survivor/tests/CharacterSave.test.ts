@@ -50,7 +50,7 @@ test("IndexedDB slots persist across reopen; corrupt slot is isolated; auto does
     expect(entries[0].save?.checkpoint.kills).toBe(42); expect(entries[2].save).toBeUndefined();
     await expect(reopened.save("manual-2", { ...checkpoint, version: 9 } as never)).rejects.toThrow();
     await new Promise<void>((resolve, reject) => {
-        const request = indexedDB.open("survivor-characters", 1);
+        const request = indexedDB.open("survivor-characters", 2);
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
             const db = request.result, tx = db.transaction("characters", "readwrite");
@@ -85,7 +85,7 @@ test("unchanged cloned inventory and evaluations keep their references while cha
 test("storage rejection is reported without stopping combat or acknowledging a save", async () => {
     vi.stubGlobal("document", { hidden: false });
     const session = new CombatSession({ workerActivity: [], load: async () => ({ x: 0, z: 0 }), reset() {}, render() {}, clearMovement() {}, readMovement: () => ({ x: 0, z: 0, active: false }), dispose: async () => {} },
-        () => new LoopbackCombatTransport(), { list: async () => [], save: async () => { throw new Error("Storage quota exceeded"); }, close() {} });
+        () => new LoopbackCombatTransport(), { list: async () => [], resolve: async checkpoint => checkpoint, save: async () => { throw new Error("Storage quota exceeded"); }, close() {} });
     await session.start(); await expect(session.save("auto")).rejects.toThrow("quota");
     expect(session.getSnapshot().status).toBe("ready"); expect(session.getSnapshot().saveStatus).toEqual({ busy: false, error: "Storage quota exceeded" });
     await session.dispose();

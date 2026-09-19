@@ -30,9 +30,9 @@ test("world map reuses terrain pages and restores inspection, target selection a
     const workers = page.workers().length;
     const inspect = () => page.evaluate(() => {
         const view = (window.survivorApplication!.session as unknown as {
-            view: { map: HexMap; regionMaps: Set<{ minimap: WorldMinimap }> }
+            view: { map: HexMap; regionMaps: Map<{ minimap: WorldMinimap }, unknown> }
         }).view;
-        const adapter = [...view.regionMaps][0] as { minimap: WorldMinimap; visibleRegions: { ring: number }[] };
+        const adapter = [...view.regionMaps.keys()][0] as { minimap: WorldMinimap; visibleRegions: { ring: number }[] };
         return { ...adapter.minimap.view, target: view.map.getCameraTarget().toArray(),
             camera: view.map.getCamera().position.toArray(), cameraTile: view.map.getCameraTargetTile(),
             regions: adapter.visibleRegions.map(region => region.ring), combat: window.survivorApplication!.session.getSnapshot().combat! };
@@ -151,8 +151,8 @@ test("world map reuses terrain pages and restores inspection, target selection a
     await page.keyboard.press("Escape");
     const released = await page.evaluate(async () => {
         const app = window.survivorApplication!;
-        const view = (app.session as unknown as { view: { regionMaps: Set<{ minimap: WorldMinimap }> } }).view;
-        const minimap = [...view.regionMaps][0].minimap;
+        const view = (app.session as unknown as { view: { regionMaps: Map<{ minimap: WorldMinimap }, unknown> } }).view;
+        const minimap = [...view.regionMaps.keys()][0].minimap;
         await app.dispose();
         return { maps: view.regionMaps.size, ...minimap.view };
     });

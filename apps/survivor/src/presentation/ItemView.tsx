@@ -7,6 +7,7 @@ import { GAME_CONFIG } from "../core/GameConfig";
 import { CONSUMABLE_COOLDOWN } from "../core/GameConfig";
 import { IconFrame } from "./IconFrame";
 import { orbDust } from "../core/Orbs";
+import { challengeBossName } from "../core/BossChallenge";
 
 export const QUALITY_CSS = Object.entries(GAME_CONFIG.quality).map(([rarity, info]) => `.rarity-${rarity}{--rarity:${info.color}}`).join("");
 
@@ -30,6 +31,7 @@ export function Hint({ label, children }: { readonly label: string; readonly chi
 }
 
 const ICON_PATHS = {
+    scroll: "M12 8H36V32L29 40H10V32H28V15H12M12 8C6 8 6 15 12 15M22 19L27 24L22 29L17 24ZM29 32V40",
     affix: "M13 7H35V35L29 41H10V34H28V14H13ZM13 7C7 7 7 15 13 15M17 20H24M17 26H24M19 7V14M29 35V41",
     weapon: "M10 35L32 8L38 6L37 13L17 39M10 29L23 39M8 38L13 43",
     head: "M11 35V22C11 5 37 5 37 22V35L29 40V26H19V40ZM13 22H35",
@@ -57,9 +59,9 @@ export function ItemIcon({ item, type = "equipment", value = "weapon", className
     const category = item?.type ?? type, subtype = item?.value ?? value;
     return <IconFrame type={category} value={subtype} rarity={item?.rarity} className={className}
         badge={item?.type === "equipment" ? <span aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span>
-            : item?.type === "consumable" || item?.type === "affix" ? <span aria-label={`数量 ${item.size}`}>{item.size}</span> : undefined}>
+            : item?.type === "consumable" || item?.type === "affix" || item?.type === "scroll" ? <span aria-label={`数量 ${item.size}`}>{item.size}</span> : undefined}>
         <svg className={`item-icon icon-${subtype}`} viewBox="0 0 48 48" fill="currentColor" fillOpacity=".16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d={ICON_PATHS[category === "affix" ? "affix" : subtype as keyof typeof ICON_PATHS]} />{category === "consumable" && subtype.endsWith("-percent") && <text x="36" y="16" fill="currentColor" fillOpacity="1" stroke="none" fontSize="13" fontWeight="bold">%</text>}
+            <path d={ICON_PATHS[category === "affix" || category === "scroll" ? category : subtype as keyof typeof ICON_PATHS]} />{category === "consumable" && subtype.endsWith("-percent") && <text x="36" y="16" fill="currentColor" fillOpacity="1" stroke="none" fontSize="13" fontWeight="bold">%</text>}
         </svg>
     </IconFrame>;
 }
@@ -89,5 +91,7 @@ export function ItemDetails({ item }: { readonly item: InventoryItem }) {
         {item.type === "consumable" && <><h4 className="item-section-title">使用效果</h4><div className="property-row">{potionDescription(item)}</div>
             {item.rarity === "legendary" && <div className="property-row">额外恢复{POTIONS[item.value].resource === "health" ? "法力" : "生命"}上限的 15%</div>}
             <p>生命恢复享受回复加成。数量 {item.size} / {GAME_CONFIG.inventory.consumable.stackSize} · 共用 {CONSUMABLE_COOLDOWN} 秒冷却</p></>}
+        {item.type === "scroll" && <><h4 className="item-section-title">领主挑战传送</h4><p>开启 {challengeBossName(item.value)} 的挑战副本，首次进入消耗 1 张。中途离开、倒下或刷新保留击杀与领奖进度。</p>
+            <p>经验 ×3 · 普通怪强度 ×1.3 · Boss ×1.5。清场后中心七彩宝箱必得三星彩装。</p><p>使用打开对应世界地图。数量 {item.size} / 99。</p></>}
     </div>;
 }

@@ -20,7 +20,8 @@ export const GAME_CONFIG = Object.freeze({
         equipment: Object.freeze({ name: "装备", capacity: 80, stackSize: 1 }),
         orb: Object.freeze({ name: "宝珠", capacity: 48, stackSize: 1 }),
         consumable: Object.freeze({ name: "药剂", capacity: 32, stackSize: 99 }),
-        affix: Object.freeze({ name: "词条", capacity: 80, stackSize: 99 })
+        affix: Object.freeze({ name: "词条", capacity: 80, stackSize: 99 }),
+        scroll: Object.freeze({ name: "卷轴", capacity: 20, stackSize: 99 })
     }),
     quality: Object.freeze({
         common: Object.freeze({ name: "白", color: "#c1cbc8" }),

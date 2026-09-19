@@ -733,6 +733,14 @@ terrain requests. A minimap request never calls
 `loadChunk()` and therefore does not alter source, render, CPU, or GPU chunk
 residency.
 
+Hosts can supply a separately owned `source: WorldOverviewSource` and
+`getFocusTile()` to preview another world with the same controls. Bounds,
+descriptor and overview requests then come from that source; focus/follow and
+recenter use the callback. The current HexMap still owns frame scheduling,
+camera rendering and resource accounts. The caller must dispose the overview
+source after disposing its minimap. Previewing a source does not install it as
+the render world or materialize gameplay chunks.
+
 Hosts can supply `drawOverlay(context, frame)` to replace the built-in camera,
 destination and coordinate overlay. `WorldMinimapOverlayFrame` exposes the
 content rectangle in CSS pixels, the exact logical tile extent, and the selected

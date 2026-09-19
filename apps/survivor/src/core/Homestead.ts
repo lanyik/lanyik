@@ -1,8 +1,9 @@
 import type { CombatTerrain } from "./CombatTerrain";
 import { SurfaceMotion, type SurfaceContact } from "./SurfaceMotion";
 import { HOMESTEAD_MODELS } from "./HomesteadModels.generated";
+import type { ChallengeId } from "./BossChallenge";
 
-export type WorldLocation = "wilds" | "homestead";
+export type WorldLocation = "wilds" | "homestead" | ChallengeId;
 export const HOMESTEAD = Object.freeze({ width: 64, height: 64,
     spawn: Object.freeze({ x: 48, z: 32.5 * Math.sqrt(3) }),
     minX: 1.5, maxX: 93, minZ: Math.sqrt(3), maxZ: 62 * Math.sqrt(3),

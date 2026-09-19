@@ -14,8 +14,8 @@ test("dragging into fog stops terrain work and merges a pointer burst into one f
     await enterWilds(page); await pauseCombat(page); await page.keyboard.press("KeyM");
     const canvas = page.getByTestId("terrain-minimap"), bounds = (await canvas.boundingBox())!;
     const inspect = () => page.evaluate(() => {
-        const view = (window.survivorApplication!.session as unknown as { view: { regionMaps: Set<{ minimap: WorldMinimap }> } }).view;
-        return [...view.regionMaps][0].minimap.view;
+        const view = (window.survivorApplication!.session as unknown as { view: { regionMaps: Map<{ minimap: WorldMinimap }, unknown> } }).view;
+        return [...view.regionMaps.keys()][0].minimap.view;
     });
     await expect.poll(async () => (await inspect()).pendingPages).toBe(0);
     for (let i = 0; i < 6; i++) {
@@ -35,8 +35,8 @@ test("dragging into fog stops terrain work and merges a pointer burst into one f
     await page.mouse.move(x, y); await page.mouse.down({ button: "right" });
     const burst = await page.evaluate(async ({ x, y }) => {
         const canvas = document.querySelector('[data-testid="terrain-minimap"]')!;
-        const view = (window.survivorApplication!.session as unknown as { view: { regionMaps: Set<{ minimap: WorldMinimap }> } }).view;
-        const map = [...view.regionMaps][0].minimap, before = map.view;
+        const view = (window.survivorApplication!.session as unknown as { view: { regionMaps: Map<{ minimap: WorldMinimap }, unknown> } }).view;
+        const map = [...view.regionMaps.keys()][0].minimap, before = map.view;
         for (let i = 1; i <= 100; i++) canvas.dispatchEvent(new PointerEvent("pointermove", {
             pointerId: Number(canvas.getAttribute("data-test-pointer")), buttons: 2, clientX: x - i, clientY: y, bubbles: true
         }));
@@ -60,10 +60,10 @@ test("map fog stays opaque outside discovery and reuses its raster while the vie
     await page.goto("/"); await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await enterWilds(page); await pauseCombat(page);
     const result = await page.evaluate(() => {
-        const view = (window.survivorApplication!.session as unknown as { view: { regionMaps: Set<{
+        const view = (window.survivorApplication!.session as unknown as { view: { regionMaps: Map<{
             fog: { draw: MapFog["draw"]; paint: (...args: unknown[]) => void }; exploration: Exploration; regions: RegionalWorld;
-        }> } }).view;
-        const { fog, exploration, regions } = [...view.regionMaps][0];
+        }, unknown> } }).view;
+        const { fog, exploration, regions } = [...view.regionMaps.keys()][0];
         const canvas = document.createElement("canvas"); canvas.width = canvas.height = 256;
         const context = canvas.getContext("2d")!, paint = fog.paint;
         let rebuilds = 0;
@@ -126,10 +126,10 @@ test("home uses downloaded buildings, coastal sea, manual spells and a selectabl
     await page.keyboard.press("KeyH");
     const dialog = page.getByRole("dialog", { name: "世界传送" });
     await expect(dialog).toBeVisible(); await expect(page.locator(".survivor")).toHaveAttribute("data-paused", "true");
-    await page.getByRole("button", { name: "目的地：荒野", exact: true }).hover();
-    await expect(dialog.locator(".travel-details h3")).toHaveText("荒野");
-    await expect(dialog.getByRole("button", { name: "当前所在", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("navigation", { name: "传送区域" }).getByRole("button", { name: /^目的地：/ })).toHaveCount(6);
+    await expect(dialog.getByRole("button", { name: "当前所在 · 可在地图选点", exact: true })).toBeDisabled();
     await page.getByRole("button", { name: "目的地：荒野", exact: true }).click();
+    await expect(dialog.locator(".travel-rules h3")).toHaveText("荒野");
     await expect(dialog.getByRole("button", { name: "出战荒野", exact: true })).toBeEnabled();
     await expect(page.locator(".survivor")).toHaveAttribute("data-location", "homestead");
     await page.screenshot({ path: info.outputPath("world-travel.png") });
@@ -171,8 +171,8 @@ test("safe home, fog authority, strict level unlock and saved wilderness return 
     await enterWilds(page); await pauseCombat(page);
     const inspect = () => page.evaluate(() => {
         const session = window.survivorApplication!.session;
-        const view = (session as unknown as { view: { map: HexMap; regionMaps: Set<{ minimap: WorldMinimap }> } }).view;
-        return { ...[...view.regionMaps][0].minimap.view, combat: session.getSnapshot().combat!, discovery: session.getSnapshot().exploration! };
+        const view = (session as unknown as { view: { map: HexMap; regionMaps: Map<{ minimap: WorldMinimap }, unknown> } }).view;
+        return { ...[...view.regionMaps.keys()][0].minimap.view, combat: session.getSnapshot().combat!, discovery: session.getSnapshot().exploration! };
     });
     await page.keyboard.press("KeyM");
     const canvas = page.getByTestId("terrain-minimap");

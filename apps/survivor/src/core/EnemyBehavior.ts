@@ -31,7 +31,7 @@ const TREES = ENEMY_DEFINITIONS.map((definition, kind) => new BehaviorTree<Conte
 /** Sensing and the shared behavior tree only write intents and action requests. */
 export class EnemyBehavior {
     public tick = 0;
-    constructor(public readonly entities: CombatWorld, private readonly regions: RegionalWorld) {}
+    constructor(public readonly entities: CombatWorld, private readonly regions: Pick<RegionalWorld, "residencyAt">) {}
 
     public update(tick: number): void {
         this.tick = tick;

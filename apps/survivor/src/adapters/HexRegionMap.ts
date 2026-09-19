@@ -1,4 +1,4 @@
-import { WorldMinimap, getHexCenter, type Point, type HexMap, type WorldMinimapOverlayFrame } from "three-hex-map";
+import { WorldMinimap, getHexCenter, type Point, type HexMap, type WorldMinimapOverlayFrame, type WorldOverviewSource } from "three-hex-map";
 import type { RegionMapBinding, RegionMapControls, MapDestination } from "../app/RegionMapBinding";
 import type { CombatSnapshot } from "../core/CombatState";
 import { GAME_CONFIG } from "../core/GameConfig";
@@ -6,8 +6,10 @@ import { REGION_RADIUS, RegionalWorld, type RegionInfo } from "../core/RegionalW
 import { Exploration, type ExplorationSnapshot } from "../core/Exploration";
 import { MapFog } from "./MapFog";
 import { overviewBounds, overviewHeading, overviewPoint } from "./MapProjection";
+import { CHALLENGE_ARENA, ChallengeTerrain, isChallenge } from "../core/BossChallenge";
 
 export class HexRegionMap implements RegionMapBinding {
+    private readonly challengeTerrain = new ChallengeTerrain();
     private readonly minimap: WorldMinimap;
     private combat: CombatSnapshot | undefined;
     private regions: RegionalWorld | undefined;
@@ -18,10 +20,11 @@ export class HexRegionMap implements RegionMapBinding {
     private selectedTile: Readonly<Point> | undefined;
     private readonly fog: MapFog;
 
-    constructor(map: HexMap, canvas: HTMLCanvasElement, private readonly controls: RegionMapControls, onError: (error: Error) => void) {
+    constructor(map: HexMap, canvas: HTMLCanvasElement, private readonly controls: RegionMapControls, onError: (error: Error) => void,
+        source?: WorldOverviewSource, getFocusTile?: () => Readonly<Point> | undefined) {
         const policy = GAME_CONFIG.presentation.minimap;
         this.fog = new MapFog(map.createResourceAccount("survivor-map-fog"));
-        try { this.minimap = new WorldMinimap({ map, element: canvas, keyboard: false,
+        try { this.minimap = new WorldMinimap({ map, source, getFocusTile, element: canvas, keyboard: false,
             infiniteTileSpan: policy.tileSpan, rasterSize: policy.rasterSize, cacheEntries: policy.cacheEntries,
             onExpandedChange: controls.onExpandedChange,
             onDestinationChange: tile => { this.selectedTile = tile; controls.onDestinationChange(tile ? this.destination(tile) : undefined); },
@@ -50,7 +53,9 @@ export class HexRegionMap implements RegionMapBinding {
     public setExpanded(expanded: boolean): void { this.minimap.setExpanded(expanded); }
     public recenter(): void { this.minimap.recenter(); }
     public navigate(): void {
-        if (this.combat && !this.combat.gameOver && this.selectedTile && this.destination(this.selectedTile).accessible) this.minimap.navigateToDestination();
+        if (!this.combat || this.combat.gameOver || !this.selectedTile) return;
+        const destination = this.destination(this.selectedTile);
+        if (destination.accessible && !(this.combat.world.location === "wilds" && destination.region.level > this.combat.player.level && this.combat.teleportRemaining > 0)) this.minimap.navigateToDestination();
     }
     public dispose(): void { this.minimap.dispose(); this.fog.dispose(); this.combat = undefined; }
 
@@ -61,7 +66,7 @@ export class HexRegionMap implements RegionMapBinding {
 
     private shouldRequestPage = (extent: WorldMinimapOverlayFrame["extent"]): boolean => {
         if (!this.combat) return false;
-        if (this.combat.world.location === "homestead") return true;
+        if (this.combat.world.location !== "wilds") return true;
         const { minX, minZ, maxX, maxZ } = overviewBounds(extent);
         return this.knownArea(minX, minZ, maxX, maxZ);
     };
@@ -69,8 +74,9 @@ export class HexRegionMap implements RegionMapBinding {
     private destination(tile: Readonly<Point>): MapDestination {
         const point = getHexCenter(tile.x, tile.y, 1);
         const region = this.regions!.regionAt(point.x, point.y);
-        return { x: point.x, z: point.y, region, accessible: this.combat!.world.location === "homestead"
-            || this.exploration.has(point.x, point.y) || region.level < this.combat!.player.level };
+        const location = this.combat!.world.location;
+        return { x: point.x, z: point.y, region: isChallenge(location) ? this.combat!.region : region, accessible: isChallenge(location) ? this.challengeTerrain.isClear(point.x, point.y, GAME_CONFIG.combat.playerRadius)
+            : location === "homestead" || this.exploration.has(point.x, point.y) || region.level < this.combat!.player.level };
     }
 
     private drawOverlay = (context: CanvasRenderingContext2D, { content, extent, destination }: WorldMinimapOverlayFrame): void => {
@@ -127,6 +133,17 @@ export class HexRegionMap implements RegionMapBinding {
             context.shadowBlur = 0;
         }
         if (combat.world.location === "wilds") this.drawFog(context, { content, extent });
+        if (isChallenge(combat.world.location)) {
+            const center = project(CHALLENGE_ARENA.x, CHALLENGE_ARENA.z);
+            context.fillStyle = "#0e1925"; context.beginPath(); context.rect(content.x, content.y, content.width, content.height);
+            context.ellipse(center.x, center.y, CHALLENGE_ARENA.radius / 1.5 * scaleX, CHALLENGE_ARENA.radius / Math.sqrt(3) * scaleY, 0, 0, Math.PI * 2);
+            context.fill("evenodd");
+            const run = combat.challenges[combat.world.location];
+            if (run && run.remaining === 0 && !run.claimed) {
+                context.fillStyle = "#fca6ff"; context.font = "bold 15px system-ui"; context.textAlign = "center";
+                context.fillText("◆", center.x, center.y);
+            }
+        }
         const player = project(combat.player.x, combat.player.z);
         context.beginPath(); context.arc(player.x, player.y, 9, 0, Math.PI * 2);
         context.fillStyle = "#fff2bf22"; context.fill();

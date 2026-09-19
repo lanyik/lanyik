@@ -42,6 +42,8 @@ import { MAX_PROJECTILES, CONSUMABLE_COOLDOWN } from "./GameConfig";
 import type { CombatRenderState, CombatSnapshot, CombatNotice, PlayerSnapshot, PlayerRenderState, MovementInput, ChestRenderBuffer } from "./CombatState";
 import { Exploration } from "./Exploration";
 import { HOMESTEAD, type WorldLocation } from "./Homestead";
+import { CHALLENGE_ARENA, CHALLENGE_SPAWN, CHALLENGE_IDS, isChallenge, challengeRegion, type ChallengeProgressMap } from "./BossChallenge";
+import { ChallengeEncounter, newChallenge } from "./ChallengeEncounter";
 
 const STEP_SECONDS = COMBAT_STEP_MS / 1000;
 const PICKUP_ARRIVAL = .25;
@@ -86,6 +88,10 @@ export class CombatSimulation {
     private readonly rewards: CombatRewards;
     private readonly world: RegionalWorld;
     private exploration = new Exploration();
+    private challenges: ChallengeProgressMap = {};
+    private challenge: ChallengeEncounter | undefined;
+    private challengeRevisionValue = 0;
+    private teleportReadyAt = 0;
     private wildsPosition: { x: number; z: number };
     private readonly chests = new ChestPool();
     private currentRegion: RegionInfo;
@@ -93,7 +99,7 @@ export class CombatSimulation {
     private inventory: InventoryItem[] = [];
     private autoRecycle: RecyclingRules = EMPTY_RECYCLING;
     private orbDust = 0;
-    private recycled: Record<ItemType, number> = { equipment: 0, orb: 0, consumable: 0, affix: 0 };
+    private recycled: Record<ItemType, number> = { equipment: 0, orb: 0, consumable: 0, affix: 0, scroll: 0 };
     private readonly orbs: (Orb | undefined)[] = new Array(ORB_UNLOCK_LEVELS.length);
     private orbBonuses = orbResonance(this.orbs);
     private lootProfile = BASE_LOOT_PROFILE;
@@ -145,7 +151,7 @@ export class CombatSimulation {
     private readonly renderState: CombatRenderState;
 
     constructor(private readonly seed: string | number, private readonly start = { x: 0, z: 0 }, spiritRealm: SpiritRealm = EMPTY_SPIRIT_REALM,
-        terrain: CombatTerrain = OPEN_TERRAIN, private readonly location: WorldLocation = "wilds") {
+        terrain: CombatTerrain = OPEN_TERRAIN, private readonly location: WorldLocation = "wilds", private characterId = String(seed)) {
         validatePosition(start.x, start.z);
         this.wildsPosition = { ...start };
         const spirit = validateSpiritRealm(spiritRealm);
@@ -154,8 +160,8 @@ export class CombatSimulation {
         this.world = new RegionalWorld(seed, start, terrain);
         this.entities = new CombatWorld(start.x, start.z, terrain);
         this.resolution = new CombatResolution(this.entities);
-        this.rewards = new CombatRewards(this.entities, spirit);
-        this.behavior = new EnemyBehavior(this.entities, this.world);
+        this.rewards = new CombatRewards(this.entities, spirit, seed);
+        this.behavior = new EnemyBehavior(this.entities, isChallenge(location) ? { residencyAt: () => "near" } : this.world);
         this.skills = new SkillSystem(this.entities);
         this.renderState = { combatText: this.entities.combatText.buffer, player: this.playerRenderState, chests: this.chests, effects: this.entities.effects.buffer,
             entities: { ids: this.entities.world.ids, enemies: this.entities.enemies, projectiles: this.entities.projectiles,
@@ -164,7 +170,7 @@ export class CombatSimulation {
                 projectile: this.entities.projectile, status: this.entities.status, experienceValue: this.entities.experienceValue, item: this.entities.item } };
         this.currentRegion = this.world.regionAt(start.x, start.z);
         this.nearbyRegions = location === "wilds" ? this.world.nearbyRegions(this.currentRegion) : [];
-        const position = location === "homestead" ? HOMESTEAD.spawn : start;
+        const position = location === "homestead" ? HOMESTEAD.spawn : isChallenge(location) ? CHALLENGE_SPAWN : start;
         this.playerX = this.previousPlayerX = position.x;
         this.playerZ = this.previousPlayerZ = position.z;
         this.stats = this.calculateStats();
@@ -182,24 +188,47 @@ export class CombatSimulation {
     public get gameOver(): boolean { return this.gameOverValue; }
     public get spiritProgress(): SpiritRealm { return this.rewards.spiritRealm; }
     public get explorationSnapshot() { return this.exploration.snapshot; }
-    public checkpoint(destination: WorldLocation = this.location): CharacterCheckpoint {
-        if (this.gameOverValue || this.closed || this.awaitingQueries) throw new Error("当前角色状态不可保存");
+    public get challengeRevision(): number { return this.challengeRevisionValue; }
+    public checkpoint(destination: WorldLocation = this.location, point?: { x: number; z: number }, targetTerrain?: CombatTerrain, recoverDefeat = false): CharacterCheckpoint {
+        if ((this.gameOverValue && !recoverDefeat) || this.closed || this.awaitingQueries) throw new Error("当前角色状态不可保存");
         const { stats: _stats, skills: _skills, battlePower: _power, equipmentPower: _equipmentPower, lootProfile: _loot, orbResonance: _resonance, experienceToLevel: _nextLevel, ...player } = this.getSnapshot().player;
         const wildsPosition = this.location === "wilds" ? { x: this.playerX, z: this.playerZ } : { ...this.wildsPosition };
         const travelling = destination !== this.location, skills = this.skills.checkpoint();
-        const position = destination === "homestead" ? HOMESTEAD.spawn : wildsPosition;
-        return validateCharacterCheckpoint({ version: 3, seed: String(this.seed), origin: { ...this.start },
+        let challenges = this.captureChallenges(), inventory = player.inventory, challengeRevision = this.challengeRevisionValue;
+        if (travelling && isChallenge(destination) && (!challenges[destination] || challenges[destination]!.claimed)) {
+            const scroll = inventory.find(item => item.type === "scroll" && item.value === destination);
+            if (!scroll || scroll.type !== "scroll") throw new Error("需要一张对应 Boss 的副本传送卷轴");
+            inventory = inventory.flatMap(item => item.id !== scroll.id ? [item] : item.size === 1 ? [] : [Object.freeze({ ...scroll, size: scroll.size - 1 })]);
+            challenges = { ...challenges, [destination]: newChallenge(destination, this.level, (challenges[destination]?.round ?? 0) + 1) };
+            challengeRevision++;
+        }
+        if (travelling && Object.keys(challenges).length) challengeRevision++;
+        let position = destination === "homestead" ? HOMESTEAD.spawn : isChallenge(destination) ? challenges[destination]!.position : wildsPosition;
+        let teleportReadyAt = this.teleportReadyAt;
+        if (point) {
+            validatePosition(point.x, point.z);
+            if (travelling && !targetTerrain) throw new Error("跨世界选点需要目标地形校验");
+            const error = destination === "wilds" ? this.teleportError(point.x, point.z) : undefined;
+            if (error) throw new Error(error);
+            if (!(targetTerrain ?? this.entities.terrain).isClear(point.x, point.z, GAME_CONFIG.combat.playerRadius)) throw new Error("目标位置无法落脚，请选择平坦陆地");
+            position = point;
+            if (destination === "wilds" && this.world.regionAt(point.x, point.z).level > this.level) teleportReadyAt = this.tickValue + GAME_CONFIG.timing.simulationHz * 5;
+        }
+        const recovering = recoverDefeat && this.gameOverValue;
+        if (recovering) { position = CHALLENGE_SPAWN; challengeRevision++; }
+        return validateCharacterCheckpoint({ version: 4, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
             location: destination, wildsPosition, exploration: this.exploration.snapshot,
-            player: travelling ? { ...player, ...position, ...(destination === "homestead" ? { health: this.stats.maxHealth, mana: this.stats.maxMana } : {}) } : player,
+            player: travelling || point || recovering ? { ...player, inventory, ...position, ...(destination === "homestead" || recovering ? { health: this.stats.maxHealth, mana: this.stats.maxMana } : {}) } : player,
             tick: this.tickValue, kills: this.rewards.kills, openedChests: this.openedChests, nextItemId: this.rewards.nextItemId, random: this.random.state,
             attackCooldown: this.attackCooldown, damageImmunity: this.resolution.damageImmunity,
-            skills: travelling ? { ...skills, dashUntil: 0, dashX: 0, dashZ: 0 } : skills });
+            skills: travelling || recovering ? { ...skills, dashUntil: 0, dashX: 0, dashZ: 0 } : skills });
     }
     public restore(checkpoint: CharacterCheckpoint): void {
         const state = validateCharacterCheckpoint(checkpoint), p = state.player;
         if (state.seed !== String(this.seed) || state.location !== this.location || state.origin.x !== this.start.x || state.origin.z !== this.start.z
             || !this.entities.terrain.isClear(p.x, p.z, GAME_CONFIG.combat.playerRadius)) throw new Error("角色存档世界或位置无效");
         this.exploration = new Exploration(state.exploration); this.wildsPosition = { ...state.wildsPosition };
+        this.characterId = state.characterId; this.challenges = state.challenges; this.challengeRevisionValue = state.challengeRevision; this.teleportReadyAt = state.teleportReadyAt;
         this.inventory = [...p.inventory]; this.equipped = { ...p.equipment }; this.orbs.splice(0, this.orbs.length, ...p.orbs);
         this.attributes = { ...p.attributes };
         for (const id of ATTRIBUTE_IDS) this.attributes[id] += this.rewards.spiritRealm.attributes[id] - p.spiritRealm.attributes[id];
@@ -215,12 +244,19 @@ export class CombatSimulation {
         this.playerX = this.previousPlayerX = p.x; this.playerZ = this.previousPlayerZ = p.z; this.heading = p.heading;
         const enemies = Array.from(this.entities.enemies.slots.subarray(0, this.entities.enemies.count));
         for (const slot of enemies) this.entities.remove(slot);
+        for (const query of [this.entities.loot, this.entities.experience]) for (const slot of Array.from(query.slots.subarray(0, query.count))) this.entities.remove(slot);
+        this.rewards.groundItems.clear(); this.challenge = undefined;
         for (const chunk of this.world.chunks.values()) chunk.spawned.fill(0);
         if (this.location === "wilds") {
             this.exploration.discover(p.x, p.z);
             this.currentRegion = this.world.regionAt(p.x, p.z); this.nearbyRegions = this.world.nearbyRegions(this.currentRegion);
             this.world.synchronize(p.x, p.z); this.world.resetAccess(); this.world.updateAccess(p.x, p.z);
             this.spawnEnemies(); this.refreshChests();
+        } else if (isChallenge(this.location)) {
+            const progress = this.challenges[this.location]!;
+            this.currentRegion = challengeRegion(progress.level); this.nearbyRegions = [];
+            this.challenge = new ChallengeEncounter(this.location, progress, this.entities, this.rewards);
+            this.refreshChests();
         }
         this.markChanged();
     }
@@ -230,13 +266,13 @@ export class CombatSimulation {
         validatePosition(x, z);
         if (this.closed || this.awaitingQueries) throw new Error("Simulation is closed or awaiting required queries");
         if (this.gameOverValue) return;
-        if (this.location === "wilds" && !this.exploration.allows(x, z, this.level, this.world)) {
-            this.pushNotice("info", "目标仍被迷雾笼罩，请先步行探索或提升等级"); return;
-        }
+        const error = this.location === "wilds" ? this.teleportError(x, z) : undefined;
+        if (error) { this.pushNotice("info", error); return; }
         if (!this.entities.terrain.isClear(x, z, GAME_CONFIG.combat.playerRadius)) {
             this.pushNotice("info", "目标位置无法落脚，请选择平坦陆地"); return;
         }
         if (this.location === "wilds") this.exploration.discover(x, z);
+        if (this.location === "wilds" && this.world.regionAt(x, z).level > this.level) this.teleportReadyAt = this.tickValue + GAME_CONFIG.timing.simulationHz * 5;
         this.playerX = this.previousPlayerX = x; this.playerZ = this.previousPlayerZ = z;
         this.movementX = this.movementZ = 0;
         this.skills.cancelTravel();
@@ -273,11 +309,13 @@ export class CombatSimulation {
             if (this.tickValue % REGENERATION_TICKS === 0) this.mana = Math.min(this.stats.maxMana, this.mana + this.stats.manaRegen);
             return executor ? Promise.resolve() : undefined;
         }
-        if (this.playerX !== this.previousPlayerX || this.playerZ !== this.previousPlayerZ) this.exploration.discover(this.playerX, this.playerZ);
-        const shifted = this.world.synchronize(this.playerX, this.playerZ);
-        if (shifted) this.reconcileRegions();
-        if (this.world.updateAccess(this.playerX, this.playerZ)) { this.spawnEnemies(); this.refreshChests(); }
-        this.updateCurrentRegion();
+        if (this.location === "wilds") {
+            if (this.playerX !== this.previousPlayerX || this.playerZ !== this.previousPlayerZ) this.exploration.discover(this.playerX, this.playerZ);
+            const shifted = this.world.synchronize(this.playerX, this.playerZ);
+            if (shifted) this.reconcileRegions();
+            if (this.world.updateAccess(this.playerX, this.playerZ)) { this.spawnEnemies(); this.refreshChests(); }
+            this.updateCurrentRegion();
+        }
         this.fireWeapon();
         if (executor) return this.finishAsyncStep(executor);
         advanceProjectiles(this.entities);
@@ -365,6 +403,14 @@ export class CombatSimulation {
             }
         }
         return this.cachedSnapshot = Object.freeze({
+            teleportRemaining: Math.max(0, (this.teleportReadyAt - this.tickValue) / GAME_CONFIG.timing.simulationHz),
+            wildsPosition: Object.freeze(this.location === "wilds" ? { x: this.playerX, z: this.playerZ } : { ...this.wildsPosition }),
+            challenges: Object.freeze(Object.fromEntries(CHALLENGE_IDS.flatMap(id => {
+                const run = this.challenges[id];
+                return run ? [[id, Object.freeze({ level: run.level, round: run.round, remaining: this.challenge?.id === id ? this.entities.enemies.count : run.enemies.filter(enemy => enemy.health > 0).length,
+                    claimed: this.challenge?.id === id ? this.challenge.claimed : run.claimed,
+                    position: Object.freeze(this.challenge?.id === id ? { x: this.playerX, z: this.playerZ } : { ...run.position }) })]] : [];
+            }))),
             world: Object.freeze({ seed: String(this.seed), origin: Object.freeze({ ...this.start }), location: this.location }),
             revision: this.revision,
             tick: this.tickValue,
@@ -645,6 +691,12 @@ export class CombatSimulation {
 
     private refreshChests(): void {
         this.chests.count = 0;
+        if (this.challenge) {
+            if (this.challenge.cleared && !this.challenge.claimed) {
+                this.chests.count = 1; this.chests.x[0] = CHALLENGE_ARENA.x; this.chests.z[0] = CHALLENGE_ARENA.z; this.chests.tiers[0] = CHEST_TIERS.indexOf("rainbow");
+            }
+            return;
+        }
         for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
             if (!chest || chunk.chestOpened || !chunk.navigation.isReached(chest.x, chest.z)) continue;
@@ -656,6 +708,7 @@ export class CombatSimulation {
     }
 
     private openNearbyChest(): void {
+        if (this.challenge) { this.openChallengeChest(); return; }
         chestLoop: for (const chunk of this.world.chunks.values()) {
             const chest = chunk.chest;
             if (!chest || chunk.band !== "near" || chunk.chestOpened) continue;
@@ -760,6 +813,7 @@ export class CombatSimulation {
             const travel = pickupTravel(distance, this.stats.pickupRadius);
             if (distance - travel <= PICKUP_ARRIVAL) {
                 this.gainExperience(e.experienceValue[index]); e.remove(index);
+                if (this.challenge) this.challengeRevisionValue++;
             } else {
                 e.position.x[index] += dx / distance * travel; e.position.z[index] += dz / distance * travel;
                 e.updateSpatial(index, Component.Experience);
@@ -792,6 +846,7 @@ export class CombatSimulation {
             if (!this.storeInventoryItem(item)) { this.notifyInventoryFull(item.type); continue; }
             this.rewards.groundItems.delete(id);
             this.entities.remove(index);
+            if (this.challenge) this.challengeRevisionValue++;
             this.inventoryFullNotified = false;
             if (!clear) this.pushNotice("loot", `拾取 ${item.name}`, item.type === "equipment" ? item.id : undefined);
             this.markChanged();
@@ -801,8 +856,9 @@ export class CombatSimulation {
     private readonly consumeCombatEvent: CombatEventConsumer = (events, i) => {
         combatFeedback(this.entities, events, i);
         if (events.kind[i] === CombatEventKind.Defeat) {
-            if (events.player[i]) { this.gameOverValue = true; this.pushNotice("danger", "你倒在了荒原上"); }
-            else this.rewards.grant(events, i, this.random, 1 + this.stats.goldBonus + this.orbBonuses.goldBonus, this.lootProfile);
+            if (events.player[i]) { this.gameOverValue = true; this.pushNotice("danger", this.challenge ? "挑战暂止，击杀进度已保留" : "你倒在了荒原上"); }
+            else this.rewards.grant(events, i, this.random, 1 + this.stats.goldBonus + this.orbBonuses.goldBonus, this.lootProfile, this.challenge ? CHALLENGE_ARENA.experience : 1);
+            if (this.challenge) { this.challengeRevisionValue++; this.refreshChests(); }
         }
         this.markChanged();
     };
@@ -822,6 +878,29 @@ export class CombatSimulation {
             this.pushNotice("level", `等级提升至 ${this.level} · 获得 ${levels * 2} 点属性`);
         }
         this.markChanged();
+    }
+
+    private teleportError(x: number, z: number): string | undefined {
+        if (!this.exploration.allows(x, z, this.level, this.world)) return "目标仍被迷雾笼罩，请先步行探索或提升等级";
+        if (this.world.regionAt(x, z).level > this.level && this.tickValue < this.teleportReadyAt) return `越级传送冷却中 · ${((this.teleportReadyAt - this.tickValue) / GAME_CONFIG.timing.simulationHz).toFixed(1)} 秒（暂停时冻结）`;
+        return undefined;
+    }
+
+    private captureChallenges(): ChallengeProgressMap {
+        return this.challenge ? { ...this.challenges, [this.challenge.id]: this.challenge.capture(this.playerX, this.playerZ) } : this.challenges;
+    }
+
+    private openChallengeChest(): void {
+        const run = this.challenge!;
+        if (!run.cleared || run.claimed || Math.hypot(this.playerX - CHALLENGE_ARENA.x, this.playerZ - CHALLENGE_ARENA.z) > .95) return;
+        const random = this.random.clone();
+        const item = generateEquipment(random, this.rewards.nextItemId, this.currentRegion.level, { ...this.lootProfile, stars: [0, 0, 1] }, "rainbow");
+        // The guaranteed prize enters the bag even when automatic recycling includes rainbow equipment.
+        const inventory = insertInventoryItem(this.inventory, item);
+        if (!inventory) { this.notifyInventoryFull("equipment"); return; }
+        this.inventory = inventory; this.random = random; this.rewards.nextItemId++;
+        run.claimed = true; this.openedChests++; this.challengeRevisionValue++; this.inventoryFullNotified = false;
+        this.pushNotice("loot", `挑战通关 · 获得三星彩装 ${item.name}`, item.id); this.refreshChests(); this.markChanged();
     }
 
     private calculateStats(): DerivedStats {

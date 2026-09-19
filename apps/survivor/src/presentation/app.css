@@ -393,29 +393,52 @@ canvas { display: block; }
 .interface-menu button > span { text-align: center; }
 .interface-menu button.active { background: #39392d; border-color: #766848; }
 .interface-menu button.active .ui-icon { color: var(--gold); }
-.world-travel { position: absolute; z-index: 24; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(840px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; background: #101d26; border-color: #84754f; box-shadow: 0 24px 100px #000c; }
+/* The node atlas and terrain map have independent pan surfaces. */
+.world-travel { position: absolute; z-index: 24; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(1100px, calc(100% - 32px)); height: min(850px, calc(100dvh - 32px)); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: hidden; background: #101d26; border-color: #84754f; box-shadow: 0 24px 100px #000c; }
 .world-travel .window-heading { background: linear-gradient(120deg, #293c44, #15232f); }
-.travel-intro { color: #b6c6c6; margin: 0; padding: 16px 26px; font-size: 12px; }
-.travel-chart { position: relative; height: clamp(190px, 33dvh, 320px); margin: 0 22px; border: 1px solid #627e803d; background: radial-gradient(ellipse at 45% 50%, #284453, #152c3b); overflow: hidden; }
-.travel-cartography { position: absolute; inset: 0; width: 100%; height: 100%; }
-.chart-contour { fill: #52798322; stroke: #82a4a64a; stroke-width: 1; }
-.chart-island { fill: #58645a; stroke: #b6b78c; stroke-width: 1.5; }
-.wild-island { fill: #485d57; }
-.chart-river { fill: none; stroke: #8eb6bd; stroke-width: 3; opacity: .55; }
-.chart-mountains { fill: none; stroke: #c1c7a4; stroke-width: 2; opacity: .45; }
-.chart-route { fill: none; stroke: #e6c880; stroke-width: 1.5; stroke-dasharray: 5 8; opacity: .6; }
-.chart-compass { fill: #8eaeb2; stroke: #8eaeb2; stroke-width: 1; opacity: .7; font: 11px serif; text-anchor: middle; }
-.travel-node { position: absolute; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; gap: 6px; align-items: center; min-width: 100px; padding: 12px; border: 0; background: transparent; box-shadow: none; color: #e0e7d7; }
-.travel-node.homestead { left: 25%; }.travel-node.wilds { left: 75%; }
-.travel-node:hover, .travel-node:focus-visible { background: #10212b80; }
-.travel-node-emblem { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; border: 1px solid #a8b9a8; background: #17282cf2; box-shadow: 0 0 0 5px #172c3266; }
-.travel-node-emblem .ui-icon { width: 28px; height: 28px; }
-.travel-node.selected .travel-node-emblem { border-color: #efcf80; color: #f6dda3; box-shadow: 0 0 0 5px #dbb86a26, 0 0 24px #efcf8030; }
-.travel-node strong { font-size: 16px; text-shadow: 0 2px 5px #000; }.travel-node small { font-size: 10px; color: #c6d0bf; }
-.travel-details { min-height: 120px; padding: 20px 26px 12px; }.travel-details h3 { font-size: 21px; margin: 7px 0; color: #ead6a6; }.travel-details p { font-size: 12px; line-height: 1.8; color: #b4c1c5; margin: 0; }
-.travel-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 26px; border-top: 1px solid #5d777540; background: #0e1822; }.travel-actions > span { font-size: 12px; color: #9eafb1; }.travel-actions button { padding: 10px 22px; background: #4b442e; border-color: #99845a; color: #ffe1a5; }
+.travel-workspace { display: grid; grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); min-height: 0; flex: 1; overflow: hidden; }
+.travel-atlas { min-height: 0; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid #47616b66; background: radial-gradient(ellipse at center, #233745, #0e1a24 75%); }
+.travel-atlas > header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; font-size: 12px; letter-spacing: 2px; color: #beccb9; }
+.travel-atlas > header button { display: flex; gap: 5px; align-items: center; padding: 5px 8px; font-size: 11px; }
+.travel-atlas > p { margin: 0; padding: 12px; text-align: center; font-size: 11px; color: #91a9b5; }
+.travel-graph { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; user-select: none; cursor: grab; background-image: radial-gradient(#68899b30 1px, transparent 1px); background-size: 24px 24px; }
+.travel-graph.dragging, .travel-graph.dragging * { cursor: grabbing; }
+.travel-graph-content { position: absolute; transform-origin: top left; will-change: transform; }
+.travel-routes { position: absolute; pointer-events: none; fill: none; }
+.travel-routes circle { stroke: #7993a322; stroke-dasharray: 3 12; }
+.travel-routes path { stroke: #7d938477; stroke-width: 2; stroke-dasharray: 5 6; }
+.travel-routes path.selected { stroke: #ebce87; }
+.travel-node { position: absolute; transform: translate(-50%, -50%); width: 154px; padding: 8px 2px; display: flex; align-items: center; flex-direction: column; gap: 7px; background: transparent; border: 1px solid transparent; color: #d5e0dc; }
+.travel-node:hover, .travel-node.selected { background: #15232a99; border-color: #81918855; }
+.travel-node-emblem { position: relative; display: grid; place-items: center; width: 66px; height: 66px; border: 1px solid var(--node-color); border-radius: 50%; background: #182b35; box-shadow: 0 0 0 5px #0f1a23, 0 0 0 6px #69849144; color: var(--node-color); }
+.travel-node-emblem > .ui-icon { width: 32px; height: 32px; }
+.travel-node.selected .travel-node-emblem { background: #31444a; box-shadow: 0 0 0 5px #0f1a23, 0 0 0 7px var(--node-color), 0 0 24px #d6c28a30; }
+.travel-node-emblem i { position: absolute; right: 1px; bottom: 1px; width: 11px; height: 11px; border: 2px solid #18352d; border-radius: 50%; background: #a3e7a5; }
+.travel-node strong { margin-top: 4px; font-size: 17px; letter-spacing: 1px; }
+.travel-node small { font-size: 13px; color: #b3c3c8; white-space: nowrap; }
+.travel-region-detail { min-width: 0; padding: 14px; overflow-y: auto; }
+.region-map-panel.expanded.embedded-map { position: relative; inset: auto; transform: none; width: 100%; max-width: none; max-height: none; margin: 0; box-shadow: none; }
+.embedded-map .region-map-surface { height: clamp(160px, 33dvh, 340px); }
+.embedded-map .region-map { width: 100%; height: 100%; aspect-ratio: auto; }
+.embedded-map .region-meta, .embedded-map > footer { display: none; }
+.travel-rules { padding: 12px 6px 0; color: #b9c9cf; font-size: 12px; line-height: 1.7; }
+.travel-rules h3 { margin: 0 0 6px; color: #ead6a6; font-size: 17px; }
+.travel-rules p { margin: 5px 0; }.travel-rules ul { padding-left: 18px; margin: 6px 0; }
+.travel-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #47616b66; padding: 12px 20px; font-size: 12px; color: #c3cfc8; }
+.travel-actions button { display: flex; align-items: center; gap: 8px; padding: 11px 18px; color: #f7dfa1; border-color: #b79859; }
+.world-travel > header, .travel-actions { flex-shrink: 0; }
 .travel-error { position: absolute; z-index: 25; top: 25%; left: 50%; transform: translateX(-50%); padding: 12px 20px; color: #ffbaad; }
-@media (max-width: 700px) { .travel-chart { margin-inline: 12px; }.travel-intro, .travel-details { padding: 12px 16px; }.travel-actions { padding: 12px 16px; }.travel-node { min-width: 80px; padding: 8px; }.travel-node-emblem { width: 44px; height: 44px; }.travel-actions button { padding: 9px 12px; } }
+@media (max-width: 700px) {
+    .world-travel { width: calc(100% - 12px); max-height: calc(100dvh - 16px); }
+    .travel-workspace { display: block; overflow-y: auto; }
+    .travel-atlas { height: 360px; border-right: 0; border-bottom: 1px solid #47616b66; }
+    .travel-atlas > header { padding: 8px 12px; }.travel-atlas > p { padding: 6px; }
+    .travel-region-detail { padding: 6px; overflow: visible; }.travel-rules { padding: 8px 2px 0; font-size: 11px; }
+    .travel-actions { padding: 10px; flex-wrap: wrap; }.travel-actions button { margin-left: auto; padding: 8px; }
+    .embedded-map .map-actions { flex-wrap: wrap; }.embedded-map .map-actions button { flex: 1; min-width: 100px; }
+    .embedded-map .region-map-surface { height: 190px; }.embedded-map .map-reading-tip { font-size: 10px; }
+}
+
 .interface-menu i { display: inline-block; font-size: 10px; font-style: normal; margin-left: 7px; color: #10191c; padding: 0 4px; background: var(--gold); border-radius: 3px; }
 .boss-status { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 310px; padding: 12px 16px; border-color: #a96670; }
 .boss-status > strong { color: #f0c2b6; font-size: 14px; }

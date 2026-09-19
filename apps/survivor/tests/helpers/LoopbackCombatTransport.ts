@@ -5,6 +5,8 @@ import type { CombatAdvance, CombatRequest, CombatUpdate } from "../../src/worke
 import { MemorySpiritRepository } from "./MemorySpiritRepository";
 import type { CharacterCheckpoint } from "../../src/core/CharacterCheckpoint";
 import { HomesteadTerrain, type WorldLocation } from "../../src/core/Homestead";
+import { ChallengeTerrain, isChallenge } from "../../src/core/BossChallenge";
+import type { CharacterRepository } from "../../src/app/CharacterRepository";
 
 /** Unit-test transport: exercise the real protocol and transfer ownership without browser globals. */
 export class LoopbackCombatTransport implements CombatTransport {
@@ -15,14 +17,14 @@ export class LoopbackCombatTransport implements CombatTransport {
     private recycle: ArrayBuffer | undefined;
     private pending: { resolve: (update: CombatUpdate) => void; reject: (reason: Error) => void } | undefined;
     private readonly host: CombatWorkerHost;
-    constructor(progress = new MemorySpiritRepository()) {
+    constructor(progress = new MemorySpiritRepository(), characters?: Pick<CharacterRepository, "save" | "close">) {
         this.host = new CombatWorkerHost((message, transfers) => {
             const reply = structuredClone(message, { transfer: transfers });
             const pending = this.pending!; this.pending = undefined;
             if (reply.type === "error") pending.reject(new Error(reply.message));
             else { this.recycle = this.currentBuffer; this.currentBuffer = reply.update.render.buffer; pending.resolve(reply.update); }
         }, progress, (seed, start, realm, location) => this.simulation = new CombatSimulation(seed, start, realm,
-            location === "homestead" ? new HomesteadTerrain() : undefined, location));
+            location === "homestead" ? new HomesteadTerrain() : isChallenge(location) ? new ChallengeTerrain() : undefined, location), characters);
     }
     public get stats() { return { workers: 0, pending: Number(Boolean(this.pending)), completed: this.sequence, roundTripMs: 0, receiveMs: 0 }; }
     public start(seed: string, start: { x: number; z: number }, checkpoint?: CharacterCheckpoint, location: WorldLocation = "wilds") { return this.send({ type: "init", id: ++this.sequence, seed, start, ports: [], checkpoint, location }); }

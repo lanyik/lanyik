@@ -6,6 +6,7 @@ import { createOrb } from "../../src/core/Orbs";
 import { createAffixItem } from "../../src/core/AffixItem";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
+import { createChallengeScroll } from "../../src/core/BossChallenge";
 
 async function inventory(page: Parameters<typeof combatWorker>[0], items: InventoryItem[]) {
     await combatWorker(page).evaluate(items => {
@@ -32,7 +33,7 @@ test("home previews seeds before graphics starts; manual and auto saves roundtri
     await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
-    const items = [{ ...createStarterEquipment(), id: 22 }, createOrb(23, "rare", "bounty"), createConsumable(24, "legendary", "mana-percent", 7), createAffixItem(25, { stat: "damage", value: 20, rarity: "rare" })];
+    const items = [{ ...createStarterEquipment(), id: 22 }, createOrb(23, "rare", "bounty"), createConsumable(24, "legendary", "mana-percent", 7), createAffixItem(25, { stat: "damage", value: 20, rarity: "rare" }), createChallengeScroll(26, "storm-oracle", 3)];
     await inventory(page, items); await page.keyboard.press("KeyO");
     const menu = page.getByRole("dialog", { name: "游戏与存档", exact: true });
     await menu.getByRole("button", { name: "保存到手动存档 1", exact: true }).click();
@@ -42,7 +43,7 @@ test("home previews seeds before graphics starts; manual and auto saves roundtri
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await menu.getByRole("button", { name: "关闭存档界面" }).click(); await inventory(page, []); await page.keyboard.press("KeyO");
     await menu.getByRole("button", { name: "读取手动存档 1", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "确认存档操作" })).toContainText("附近怪物");
+    await expect(page.getByRole("dialog", { name: "确认存档操作" })).toContainText("副本击杀、卷轴消耗与领奖不可回退");
     await page.getByRole("button", { name: "确认读档", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat?.player.inventory)).toEqual(stored.player.inventory);

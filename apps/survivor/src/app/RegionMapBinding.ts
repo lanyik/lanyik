@@ -1,6 +1,7 @@
 import type { CombatSnapshot } from "../core/CombatState";
 import type { RegionInfo } from "../core/RegionalWorld";
 import type { ExplorationSnapshot } from "../core/Exploration";
+import type { WorldLocation } from "../core/Homestead";
 
 export interface MapDestination { readonly x: number; readonly z: number; readonly region: RegionInfo; readonly accessible: boolean }
 export interface RegionMapControls {
@@ -17,4 +18,4 @@ export interface RegionMapBinding {
     navigate(): void;
     dispose(): void;
 }
-export type AttachRegionMap = (canvas: HTMLCanvasElement, controls: RegionMapControls) => RegionMapBinding;
+export type AttachRegionMap = (canvas: HTMLCanvasElement, controls: RegionMapControls, preview?: { location: WorldLocation; combat: CombatSnapshot }) => RegionMapBinding;
