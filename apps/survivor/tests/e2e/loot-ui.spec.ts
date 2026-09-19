@@ -44,11 +44,14 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     await worldOnly.evaluate(element => element.parentNode!.removeChild(element));
     await page.keyboard.press("KeyB");
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
+    await bag.getByText("管理", { exact: true }).click();
     await bag.getByRole("combobox", { name: "自动售出装备品质" }).selectOption("rare");
     await expect(bag.locator('[data-kind="equipment"]')).toHaveCount(3);
     await expect(bag.locator('[data-item-id="103"]')).toHaveCount(1);
     await bag.getByRole("button", { name: /^宝珠/ }).click();
+    await bag.getByText("管理", { exact: true }).click();
     await expect(bag.getByRole("combobox", { name: "自动分解宝珠品质" })).toHaveValue("off");
+    await bag.getByText("管理", { exact: true }).click();
     await expect(bag.getByRole("button", { name: "丢弃", exact: true })).toHaveCount(0);
     const socket = (i: number) => bag.locator(`[data-orb-slot="${i}"]`);
     const first = bag.locator('[data-item-id="200"] .item-icon-trigger');
@@ -71,6 +74,7 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     await expect(page.locator(".equipment-tooltip")).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("orb-drag-narrow.png") });
     await bag.getByRole("button", { name: /^药剂/ }).click();
+    await bag.getByText("管理", { exact: true }).click();
     await expect(bag.getByRole("combobox", { name: "自动售出药剂品质" })).toHaveValue("off");
     await expect(bag.locator('[data-level]')).toHaveCount(0);
     await expect(bag).toContainText("恢复生命 45% 上限");
@@ -78,11 +82,14 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     await bag.getByRole("combobox", { name: "自动售出药剂品质" }).selectOption("rare");
     await expect(bag.locator('[data-item-id="300"]')).toHaveCount(0);
     await expect(bag.locator('[data-item-id="301"]')).toHaveCount(1);
-    await bag.locator('[data-item-id="301"]').getByRole("button", { name: "售出", exact: true }).click();
+    await bag.getByText("管理", { exact: true }).click();
+    await bag.locator('[data-item-id="301"]').click();
+    await bag.getByRole("button", { name: "售出", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "确认物品操作" })).toContainText("获得 36 金币");
     await page.getByRole("button", { name: "确认售出物品", exact: true }).click();
     await expect(bag.locator('[data-item-id="301"]')).toHaveCount(0);
     await bag.getByRole("button", { name: /^装备/ }).click();
+    await bag.getByText("管理", { exact: true }).click();
     await expect(bag.getByRole("combobox", { name: "自动售出装备品质" })).toHaveValue("rare");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(errors).toEqual([]);

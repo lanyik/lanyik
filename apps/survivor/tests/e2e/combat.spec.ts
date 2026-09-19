@@ -72,7 +72,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
     await expect(page.getByRole("tooltip")).toContainText("寻宝分布");
     await expect(page.getByRole("tooltip")).toContainText("收益递减");
     await page.locator(".equipment-slot[data-slot=weapon] .item-icon-trigger").click();
-    const slotLayout = () => page.locator(".equipment-slot[data-slot=weapon]").evaluate(element => { const slot = element as HTMLElement; return { width: slot.offsetWidth, height: slot.offsetHeight, x: slot.offsetLeft, y: slot.offsetTop }; });
+    const slotLayout = () => page.locator(".equipment-slot[data-slot=weapon]").evaluate(element => { const slot = element.getBoundingClientRect(), grid = element.closest(".paper-doll")!.getBoundingClientRect(); return { width: slot.width, height: slot.height, x: slot.x - grid.x, y: slot.y - grid.y }; });
     const slotBefore = await slotLayout();
     await expect(page.locator(".equipment-inspector .gear-stars")).toHaveAttribute("aria-label", "1星");
     await expect(page.locator(".equipment-inspector .affix-list")).toHaveAttribute("aria-label", "2条词条");
@@ -115,6 +115,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
     expect(await slotLayout()).toEqual(slotBefore);
     const beforeClear = await itemOrder();
     const cleanup = bag.getByRole("combobox", { name: "自动售出装备品质" });
+    await bag.getByText("管理", { exact: true }).click();
     await expect(cleanup).toHaveValue("off");
     await cleanup.selectOption("rainbow");
     await expect(cleanup).toHaveValue("rainbow");
@@ -122,7 +123,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
     await expect(page.locator(".equipment-slot[data-slot=weapon] .item-icon-trigger")).not.toHaveAttribute("aria-label", "武器：空");
     await cleanup.blur(); // Native select focus keeps typing/navigation keys local.
     await page.keyboard.press("KeyB"); await expect(bag).toHaveCount(0);
-    await page.keyboard.press("KeyB"); await expect(cleanup).toHaveValue("rainbow");
+    await page.keyboard.press("KeyB"); await bag.getByText("管理", { exact: true }).click(); await expect(cleanup).toHaveValue("rainbow");
     await cleanup.selectOption("off");
     await expect(cleanup).toHaveValue("off");
     await page.screenshot({ path: "test-results/survivor-app/character-and-bag.png" });
@@ -143,13 +144,14 @@ test("plays with baked actors, independent character/bag windows and complete ke
     await page.keyboard.press("Delete");
     await switcher.getByRole("button", { name: "背包物品" }).click();
     expect(await itemOrder()).toEqual(hiddenInventory);
-    await starter.getByRole("button", { name: "装备", exact: true }).click();
+    await bag.getByRole("button", { name: "装备", exact: true }).click();
     await page.screenshot({ path: "test-results/survivor-app/narrow-inventory.png" });
-    const dockBounds = (await page.getByRole("region", { name: "角色状态与技能" }).boundingBox())!;
+    await expect(page.getByRole("region", { name: "角色状态与技能" })).toBeHidden();
     const menuBounds = (await page.getByRole("navigation", { name: "界面快捷键" }).boundingBox())!;
-    expect(dockBounds.y + dockBounds.height).toBeLessThan(menuBounds.y);
-    expect(dockBounds.x).toBeGreaterThanOrEqual(0);
-    expect(dockBounds.x + dockBounds.width).toBeLessThanOrEqual(390);
+    const narrowBag = (await bag.boundingBox())!;
+    expect(narrowBag.y + narrowBag.height).toBeLessThan(menuBounds.y);
+    expect(narrowBag.x).toBeGreaterThanOrEqual(0);
+    expect(narrowBag.x + narrowBag.width).toBeLessThanOrEqual(390);
     await page.getByRole("button", { name: "关闭背包", exact: true }).click();
     await expect(character).toBeVisible();
     await page.keyboard.press("KeyB");

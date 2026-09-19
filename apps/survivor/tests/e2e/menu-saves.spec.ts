@@ -36,8 +36,12 @@ test("home previews seeds before graphics starts; manual and auto saves roundtri
     const items = [{ ...createStarterEquipment(), id: 22 }, createOrb(23, "rare", "bounty"), createConsumable(24, "legendary", "mana-percent", 7), createAffixItem(25, { stat: "damage", value: 20, rarity: "rare" }), createChallengeScroll(26, "storm-oracle", 3)];
     await inventory(page, items); await page.keyboard.press("KeyO");
     const menu = page.getByRole("dialog", { name: "游戏与存档", exact: true });
+    await menu.getByRole("button", { name: "选择自动存档", exact: true }).click();
+    await expect(menu.getByRole("button", { name: "保存到自动存档", exact: true })).toBeDisabled();
+    await menu.getByRole("button", { name: "选择手动存档 1", exact: true }).click();
+    await expect(menu.getByRole("button", { name: "读取手动存档 1", exact: true })).toBeDisabled();
     await menu.getByRole("button", { name: "保存到手动存档 1", exact: true }).click();
-    await expect(menu.locator(".save-card").filter({ has: page.getByRole("button", { name: "读取手动存档 1", exact: true }) })).toContainText("12,345");
+    await expect(menu.getByRole("button", { name: "选择手动存档 1", exact: true })).toContainText("12,345");
     const stored = await page.evaluate(async () => (await window.survivorApplication!.session.listSaves()).find(entry => entry.slot === "manual-1")!.save!.checkpoint);
     await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: info.outputPath("save-menu-narrow.png") });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -67,10 +71,18 @@ test("Shift toggles bag and forge locks; a single level-batch preview protects l
     const base = createStarterEquipment();
     await inventory(page, [{ ...base, id: 10, itemLevel: 4, locked: true }, { ...base, id: 11, itemLevel: 5, locked: false }, { ...base, id: 12, itemLevel: 3, locked: false }, { ...base, id: 13, itemLevel: 4, locked: true }]);
     await page.keyboard.press("KeyB"); const bag = page.locator(".inventory-window"), cell = bag.locator('[data-item-id="10"]');
+    await cell.click(); await expect(bag.getByRole("button", { name: "售出", exact: true })).toBeDisabled();
+    await expect(cell.getByRole("button", { name: /装备|售出|打造/ })).toHaveCount(0);
+    await bag.getByText("管理", { exact: true }).focus(); await page.keyboard.press("Enter");
+    await expect(bag.locator(".inventory-tools")).toHaveAttribute("open", "");
+    await expect(cell).toBeVisible(); // Opening a disclosure must not also equip the selected item.
+    await page.keyboard.press("Escape"); await expect(bag).toBeVisible();
+    await expect(bag.locator(".inventory-tools")).not.toHaveAttribute("open", "");
     await cell.click({ modifiers: ["Shift"] }); await expect(cell).not.toHaveClass(/item-locked/);
     await cell.click({ modifiers: ["Shift"] }); await expect(cell).toHaveClass(/item-locked/);
     await cell.click({ modifiers: ["Shift"] });
     await expect(bag.getByRole("button", { name: /^解锁/ })).toHaveCount(0);
+    await bag.getByText("管理", { exact: true }).click();
     await bag.getByRole("spinbutton", { name: "批量分解等级" }).fill("5"); await bag.getByRole("button", { name: "一键分解", exact: true }).click();
     const confirm = page.getByRole("dialog", { name: "确认物品操作" }); await expect(confirm.locator(".bulk-preview > div")).toHaveCount(2);
     await confirm.getByRole("button", { name: "确认一键分解装备" }).click(); await expect(confirm).toHaveCount(0);

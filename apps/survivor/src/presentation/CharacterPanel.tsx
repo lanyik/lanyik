@@ -5,6 +5,7 @@ import type { SessionCommand } from "../app/CombatSession";
 import { ORB_UNLOCK_LEVELS } from "../core/Orbs";
 import { RARITIES, RARITY_NAMES } from "../core/Loot";
 import { Hint, ItemDetails, ItemIcon, statValue } from "./ItemView";
+import { WindowHeader } from "./WindowChrome";
 import { UiIcon } from "./UiIcon";
 import { OrbSockets } from "./OrbDrag";
 import { ItemTooltip } from "./ItemTooltip";
@@ -26,7 +27,7 @@ export function CharacterPanel({ player, disabled, dispatch, onClose }: {
     const [inspectedId, setInspectedId] = useState<number>();
     const inspected = [...Object.values(player.equipment), ...player.orbs].find(item => item?.id === inspectedId);
     return <section className="character-window window" role="dialog" aria-label="角色" data-testid="character-panel">
-        <header className="window-heading"><div className="window-title"><UiIcon name="character" /><div><span className="eyebrow">CHARACTER</span><h2>守夜人 <small>Lv. {player.level}</small></h2></div></div><button className="close-button" aria-label="关闭角色" onClick={onClose}><UiIcon name="close" /></button></header>
+        <WindowHeader title="角色" icon="character" shortcut="C" close={onClose} help={<><p>选择装备查看详情，双击卸下；宝珠拖入槽位嵌入或交换。</p><p>属性右侧 + 分配点数。展开属性分组查看完整数值，悬停图标可比较装备。</p></>}><span>Lv. {player.level}</span></WindowHeader>
         <div className="character-columns">
             <div className="equipment-pane"><div className="section-heading"><h3>随身装备</h3><small>{Object.keys(player.equipment).length} / {EQUIPMENT_SLOTS.length} 已装备</small></div>
                 <div className="paper-doll" aria-label="装备栏">

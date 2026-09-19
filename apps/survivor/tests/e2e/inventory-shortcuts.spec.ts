@@ -38,7 +38,9 @@ test("Shift locking stays safe with W, repeats and auto-sale; diagnostics surviv
     await expect(cell).toHaveClass(/item-locked/);
     await page.keyboard.down("Space"); await page.keyboard.up("Space"); await page.keyboard.up("Shift");
     await expect(cell).toHaveClass(/item-locked/);
+    await bag.getByText("管理", { exact: true }).click();
     await bag.getByRole("combobox", { name: "自动售出装备品质" }).selectOption("rainbow");
+    await bag.getByText("管理", { exact: true }).click();
     const inferior = bag.locator('[data-item-id="901"]'); await expect(inferior).toHaveClass(/item-locked/);
     await inferior.locator(".item-icon-trigger").hover();
     await expect(page.getByRole("tooltip")).toContainText(weak.name);
@@ -57,12 +59,13 @@ test("Shift locking stays safe with W, repeats and auto-sale; diagnostics surviv
     await expect(gear).toHaveClass(/item-locked/);
     expect(errors).toEqual([]); expect(crashes).toEqual([]);
 
-    await page.keyboard.press("KeyO"); await expect(page.getByRole("button", { name: "导出诊断日志" })).toBeVisible();
+    await page.keyboard.press("KeyO"); await page.getByText("诊断与日志", { exact: true }).click(); await expect(page.getByRole("button", { name: "导出诊断日志" })).toBeVisible();
     // A real uncaught browser error exercises persistence, independently of the safe interaction above.
     await page.evaluate(() => { setTimeout(() => { throw new Error("runtime-log-e2e"); }, 0); });
     await expect.poll(() => errors).toEqual(["runtime-log-e2e"]);
     await page.reload(); await expect(page.locator(".survivor")).toHaveAttribute("data-state", "menu");
     const downloading = page.waitForEvent("download");
+    await page.getByText("诊断与日志", { exact: true }).click();
     await page.getByRole("button", { name: "导出诊断日志" }).click();
     const download = await downloading; await download.saveAs(info.outputPath("runtime-log.json"));
     const report = JSON.parse(await readFile(info.outputPath("runtime-log.json"), "utf8"));

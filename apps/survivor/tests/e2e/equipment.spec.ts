@@ -120,6 +120,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await expect(bag).toBeVisible();
     await page.setViewportSize({ width: 1280, height: 720 });
     const autoClear = bag.getByRole("combobox", { name: "自动售出装备品质" });
+    await bag.getByText("管理", { exact: true }).click();
     await autoClear.selectOption("rainbow"); await expect(autoClear).toHaveValue("rainbow");
     await expect(candidate).toBeVisible();
     await expect(bag.locator('[data-item-id="9002"]')).toHaveCount(0);

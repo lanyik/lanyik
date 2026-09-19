@@ -3,7 +3,7 @@ import type { CombatCommand } from "../core/CombatCommand";
 import type { CombatSnapshot } from "../core/CombatState";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { SKILLS, SKILL_IDS, SKILL_RULES } from "../core/Skills";
-import { UiIcon } from "./UiIcon";
+import { WindowHeader } from "./WindowChrome";
 import { SkillIcon, SkillTooltip, skillSummary } from "./SkillView";
 import { SkillSlot } from "./SkillSlot";
 import { useSkillDrag } from "./SkillDrag";
@@ -14,11 +14,11 @@ export function SkillsPanel({ player, disabled, dispatch, onClose }: {
 }) {
     const { skills, level } = player, drag = useSkillDrag();
     return <section className="skills-window window" role="dialog" aria-label="技能">
-        <header className="window-heading"><div className="window-title"><UiIcon name="skills" /><div><span className="eyebrow">THE ARCANUM / 守夜秘典</span><h2>技能</h2></div></div>
-            <div className="skill-points" data-points={skills.points} aria-label={`可用点数 ${skills.points}`}><b>{skills.points.toString().padStart(2, "0")}</b><span>可用<br />技能点</span></div>
-            <button className="close-button" aria-label="关闭技能" onClick={onClose}><UiIcon name="close" /></button></header>
+        <WindowHeader title="技能" icon="skills" shortcut="K" close={onClose} help={<><p>拖动图标到下方槽位装配，已装配技能互换位置。空格拿起，再按 1–4 放入；Esc 取消。</p><p>悬停查看技能详情，Alt 固定浮窗。每次升级获得 {GAME_CONFIG.skills.pointsPerLevel} 技能点。</p><p>自动施法按槽位从左至右判断。疾风步仅手动；守护结界在生命不高于 {SKILL_RULES.ward.automaticHealthRatio * 100}% 时自动施放。</p></>}>
+            <span className="skill-points" data-points={skills.points} aria-label={`可用点数 ${skills.points}`}><b>{skills.points}</b> 技能点</span>
+        </WindowHeader>
         <div className="skill-management">
-            <div className="skill-section-heading"><div><span className="eyebrow">DISCOVER YOUR POWER</span><h3>研习秘术</h3></div><span>每次升级获得 {GAME_CONFIG.skills.pointsPerLevel} 技能点</span></div>
+            <div className="skill-section-heading"><h3>技能图鉴</h3><span>拖入下方槽位装配</span></div>
             <div className="skill-catalog">{SKILL_IDS.map(id => {
                 const d = SKILLS[id], rank = skills.ranks[id], unlocked = level >= d.unlock;
                 const equipped = skills.loadout.indexOf(id), maxed = rank === GAME_CONFIG.skills.maxRank, upgradeLevel = d.unlock + rank;
@@ -33,11 +33,9 @@ export function SkillsPanel({ player, disabled, dispatch, onClose }: {
                             onClick={() => dispatch({ type: "upgrade-skill", skill: id })}>{maxed ? "已满级" : level < upgradeLevel ? `${upgradeLevel} 级可升级` : "升级 · 1 点"}<span aria-hidden="true">＋</span></button></div>
                 </article>;
             })}</div>
-            <p className="skill-auto-note">自动施法按槽位从左至右判断。疾风步仅手动；守护结界在生命不高于 {SKILL_RULES.ward.automaticHealthRatio * 100}% 时自动施放。</p>
         </div>
         <footer className="skill-loadout"><div className="skill-section-heading"><h3>战斗装配 <span>01 — {String(GAME_CONFIG.skills.slots).padStart(2, "0")}</span></h3><span>{drag.dragging ? "松开图标即可装配" : "拖动图标到槽位 · 已装配技能交换位置"}</span></div>
             <div className="loadout-slots" role="group" aria-label="技能装配槽">{skills.loadout.map((_, index) => <SkillSlot key={index} index={index} player={player} panel blocked={disabled} />)}</div>
-            <p className="skill-loadout-tip">悬停图标查看详情 <span><kbd>Alt</kbd> 固定浮窗</span></p>
         </footer>
     </section>;
 }

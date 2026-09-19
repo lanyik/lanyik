@@ -60,6 +60,6 @@ export function StartScreen({ repository, start, error, blocked = false, log }: 
                     {entry.save ? <><SaveSummary save={entry.save} /><button disabled={busy} onClick={() => void launch(entry.save!.checkpoint)}>读取{SAVE_NAMES[entry.slot]}</button></> : <p>{entry.error ?? "暂无存档"}</p>}</article>)}</div>
                 <p className="save-note">自动存档每 60 秒更新，也会在切出页面和返回主界面时保存。角色进度存于当前浏览器；灵境成长永久保留。</p>
             </section></div>{failure && <p className="menu-error" role="alert">{failure}</p>}
-        <RuntimeLogExport log={log} />
+        <details className="start-diagnostics"><summary>诊断与日志</summary><RuntimeLogExport log={log} /></details>
     </div></main>;
 }

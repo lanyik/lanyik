@@ -59,7 +59,7 @@ test("world map reuses terrain pages and restores inspection, target selection a
     expect(expanded.cachedPages).toBeLessThanOrEqual(64);
     expect(expanded.destination).toEqual(expanded.cameraTile);
     expect(page.workers()).toHaveLength(workers);
-    const tipBounds = (await panel.locator(".map-reading-tip").boundingBox())!;
+    const tipBounds = (await panel.locator(".map-action-footer").boundingBox())!;
     expect(tipBounds.y + tipBounds.height).toBeLessThan(800);
     await page.screenshot({ path: testInfo.outputPath("terrain-map-expanded.png") });
     await page.waitForTimeout(300);

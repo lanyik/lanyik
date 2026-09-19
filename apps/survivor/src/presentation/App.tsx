@@ -88,7 +88,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
             const target = event.target;
-            if (snapshot.status !== "ready" || snapshot.travelling || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey
+            if (snapshot.status !== "ready" || snapshot.travelling || event.defaultPrevented || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey
                 || document.querySelector("dialog[open]")
                 || target instanceof HTMLElement && (target.isContentEditable || !!target.closest("input:not([type=checkbox]), textarea, select"))) return;
             const menu = MENUS.find(item => item.code === event.code)?.id ?? (event.code === "KeyI" ? "inventory" : undefined);
@@ -109,7 +109,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                 // A narrow workspace keeps the other window mounted but hides it.
                 if (!workspace.current?.querySelector(".inventory-window")?.getClientRects().length) return;
                 // Focused buttons keep their native Enter activation instead of firing two actions.
-                if (event.code === "Enter" && target instanceof HTMLButtonElement) return;
+                if (event.code === "Enter" && target instanceof HTMLElement && target.closest("button, summary")) return;
                 const item = player?.inventory.find(candidate => candidate.id === selectedId);
                 if (item) { if (event.code === "Enter") useItem(item); else recycle(item); }
             } else return;
@@ -123,7 +123,8 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
     const potionSlots = (["health", "mana"] as const).map(effect => ({ effect,
         item: player ? selectConsumable(player.inventory, effect, player) : undefined,
         count: player?.inventory.reduce((count, item) => count + (item.type === "consumable" && POTIONS[item.value].resource === effect ? item.size : 0), 0) ?? 0 }));
-    return <ItemTooltipProvider><SkillDragProvider player={player} disabled={!ready || combat.gameOver} dispatch={command => session.dispatch(command)}><OrbDragProvider player={player} disabled={!ready || combat.gameOver} dispatch={command => session.dispatch(command)}><main className="survivor" data-state={snapshot.status} data-location={combat?.world.location} data-paused={snapshot.paused} data-game-over={combat?.gameOver ?? false}>
+    const windowOpen = Object.values(panels).some(Boolean);
+    return <ItemTooltipProvider><SkillDragProvider player={player} disabled={!ready || combat.gameOver} dispatch={command => session.dispatch(command)}><OrbDragProvider player={player} disabled={!ready || combat.gameOver} dispatch={command => session.dispatch(command)}><main className="survivor" data-window-open={windowOpen} data-state={snapshot.status} data-location={combat?.world.location} data-paused={snapshot.paused} data-game-over={combat?.gameOver ?? false}>
         <style>{QUALITY_CSS}</style>
         {ready && <>
             <section className="run-stats panel" aria-label="战斗记录"><header className="run-brand"><UiIcon name="rift" /><strong>{atHome ? "家园" : isChallenge(combat.world.location) ? CHALLENGES[combat.world.location].name : "荒原"}<span>RIFT</span></strong><span className={`run-state${snapshot.paused ? " paused" : ""}`}>{combat.gameOver ? "狩猎结束" : snapshot.paused ? "已暂停" : atHome ? "安全休整" : "探索中"}</span></header>
@@ -157,7 +158,6 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
             {panels.craft && <CraftingPanel key={craftItemId ?? "forge"} player={player} initialItem={player.inventory.find(item => item.id === craftItemId)} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("craft")} />}
             {panels.spirit && <SpiritRealmPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("spirit")} />}
             {panels.system && <SessionMenu session={session} snapshot={snapshot} close={() => close("system")} home={onHome} log={log} />}
-            <span className="save-status" role="status">{snapshot.saveStatus.busy ? "正在保存…" : snapshot.saveStatus.error ? `保存失败：${snapshot.saveStatus.error}` : snapshot.saveStatus.savedAt ? `已保存 ${new Date(snapshot.saveStatus.savedAt).toLocaleTimeString("zh-CN")}` : ""}</span>
             {recycling && <CraftConfirmation operation={recycling} player={player} disabled={combat.gameOver} close={() => setRecycling(undefined)} confirm={operation => session.dispatch({ type: "craft", operation })} />}
             <section className="combat-dock" aria-label="角色状态与技能">
                 <div className="hud-power"><span>战力 <strong data-testid="battle-power">{player.battlePower}</strong></span><small>装备 +{player.equipmentPower}</small></div>
@@ -183,14 +183,12 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
             <nav className="interface-menu panel" aria-label="界面快捷键">{MENUS.map(menu => <button key={menu.id} className={panels[menu.id] ? "active" : ""} aria-expanded={panels[menu.id]} disabled={snapshot.travelling || menu.id === "travel" && combat.gameOver} onClick={() => toggle(menu.id)}>
                 <UiIcon name={menu.id} /><span>{menu.name}{menu.id === "character" && player.unspentAttributePoints > 0 && <i>{player.unspentAttributePoints}</i>}{menu.id === "skills" && player.skills.points > 0 && <i>{player.skills.points}</i>}</span><kbd>{menu.key}</kbd></button>)}
                 <button disabled={panels.travel || panels.system || snapshot.travelling} onClick={() => session.dispatch({ type: "toggle-pause" })}><UiIcon name={snapshot.paused ? "play" : "pause"} /><span>{snapshot.paused ? "继续" : "暂停"}</span><kbd>P</kbd></button></nav>
-            <div className="notices" aria-live="polite">{snapshot.notices.map(notice => <div className={`notice ${notice.tone}`} key={notice.id}>{notice.message}</div>)}</div>
-            {snapshot.upgrades[0] && !combat.gameOver && !Object.values(panels).some(Boolean) && <UpgradePrompt item={snapshot.upgrades[0]} player={player} count={snapshot.upgrades.length}
+            <div className="notices" aria-live="polite">{!panels.system && snapshot.saveStatus.error && <div className="notice danger" role="alert">保存失败：{snapshot.saveStatus.error}</div>}{snapshot.travelError && <div className="notice danger" role="alert">{snapshot.travelError}</div>}{snapshot.notices.slice(-2).map(notice => <div className={`notice ${notice.tone}`} key={notice.id}>{notice.message}</div>)}</div>
+            {snapshot.upgrades[0] && !combat.gameOver && !windowOpen && <UpgradePrompt item={snapshot.upgrades[0]} player={player} count={snapshot.upgrades.length}
                 onEquip={() => session.dispatch({ type: "equip", itemId: snapshot.upgrades[0].id })}
                 onDismiss={() => session.dispatch({ type: "dismiss-upgrade", itemId: snapshot.upgrades[0].id })} />}
             {panels.travel && <WorldTravelPanel combat={combat} exploration={snapshot.exploration!} attach={attachRegionMap} initial={travelDestination}
                 busy={snapshot.travelling || snapshot.saveStatus.busy || combat.gameOver} close={() => close("travel")} travel={travel} />}
-            {snapshot.travelError && <p className="travel-error panel" role="alert">{snapshot.travelError}</p>}
-            {snapshot.paused && !combat.gameOver && !panels.system && !panels.travel && <div className="pause-banner"><span>战斗暂停</span><button onClick={() => session.dispatch({ type: "toggle-pause" })}>继续<kbd>P</kbd></button></div>}
             {combat.gameOver && !panels.system && <div className="state-overlay death"><div><small>本次狩猎结束</small><h1>你已倒下</h1><p>坚持 {formatTime(combat.elapsedMs)} · 击杀 {combat.kills} · 达到 {player.level} 级</p><button onClick={() => session.dispatch({ type: "restart" })}>{isChallenge(combat.world.location) ? "继续本轮挑战" : "再次踏入荒原"}<kbd>R</kbd></button><button onClick={() => toggle("system")}>读取存档</button><button onClick={() => void onHome()}>返回主界面</button></div></div>}
         </>}
         {(snapshot.status === "loading" || snapshot.travelling) && <div className="state-overlay loading" role="status"><div className="loading-rune" /><div><small>RIFT / 旅程</small><h1>{snapshot.travelling ? "正在前往目的地" : "世界正在苏醒"}</h1><p>准备地域与角色资源…</p></div></div>}

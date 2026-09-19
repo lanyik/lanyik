@@ -25,10 +25,10 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     await page.evaluate(async () => { const session = window.survivorApplication!.session; session.dispatch({ type: "sort-inventory" }); await session.settled; });
     await page.keyboard.press("KeyB");
     const bag = page.getByRole("dialog", { name: "背包", exact: true });
-    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "装备容量 0 / 80");
+    await expect(bag.getByLabel("装备容量 0 / 80")).toBeVisible();
     await bag.getByRole("button", { name: /^药剂/ }).click();
     await expect(bag.getByRole("button", { name: "合并药剂", exact: true })).toBeDisabled();
-    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "药剂容量 2 / 32");
+    await expect(bag.getByLabel("药剂容量 2 / 32")).toBeVisible();
     const health = bag.locator('[data-item-id="9000"]'), mana = bag.locator('[data-item-id="9002"]');
     await expect(health.locator(".item-icon-badge")).toHaveText("5");
     await expect(health.locator("[data-item-value]")).toHaveAttribute("data-item-value", "health");
@@ -47,17 +47,18 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     await expect(page.locator(".equipment-tooltip")).toHaveCount(1);
     await expect(page.locator(".equipment-tooltip")).toContainText("白·生命药剂");
     // Close away from icons, so uncovering the next icon is not a fresh hover.
-    await bag.getByRole("heading", { name: "行囊" }).hover();
+    await bag.getByRole("heading", { name: "背包" }).hover();
     await page.keyboard.press("Escape");
     await expect(page.locator(".equipment-tooltip")).toHaveCount(0); await expect(bag).toBeVisible();
-    await expect(mana.getByRole("button", { name: "使用", exact: true })).toBeDisabled();
+    await mana.click();
+    await expect(bag.getByRole("button", { name: "使用", exact: true })).toBeDisabled();
     await page.keyboard.press("KeyP");
     await expect(page.locator(".survivor")).toHaveAttribute("data-paused", "false");
-    await mana.getByRole("button", { name: "使用", exact: true }).click();
+    await bag.getByRole("button", { name: "使用", exact: true }).click();
     await expect(mana.locator(".item-icon-badge")).toHaveText("3");
     await page.keyboard.press("KeyP");
     await bag.getByRole("button", { name: /^宝珠/ }).click();
-    await expect(bag.locator(".bag-capacity")).toHaveAttribute("aria-label", "宝珠容量 1 / 48");
+    await expect(bag.getByLabel("宝珠容量 1 / 48")).toBeVisible();
     await expect(bag.locator(".inventory-card [data-item-icon=orb] .item-icon-base")).toHaveCount(1);
     await expect(bag.locator(".inventory-card [data-item-icon=orb] .item-icon-border")).toHaveCount(1);
     await page.setViewportSize({ width: 390, height: 844 });

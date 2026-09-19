@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type CSSProperties, type PointerEvent } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import type { CombatSnapshot } from "../core/CombatState";
 import type { WorldLocation } from "../core/Homestead";
 import { CHALLENGES, isChallenge } from "../core/BossChallenge";
@@ -21,6 +21,9 @@ export function WorldTravelGraph({ combat, selected, busy, select }: {
     const viewport = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null);
     const view = useRef({ x: 0, y: 0, scale: 1 });
     const drag = useRef<{ pointer: number; x: number; y: number } | null>(null);
+    const [compact, setCompact] = useState(false);
+    const nodes = NODES.map((node, index) => compact ? { ...node, x: 90 + index % 3 * 185, y: 75 + Math.floor(index / 3) * 145 } : node);
+    const origin = nodes[1];
     const paint = () => {
         const { x, y, scale } = view.current;
         if (content.current) content.current.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${scale})`;
@@ -28,8 +31,10 @@ export function WorldTravelGraph({ combat, selected, busy, select }: {
     const reset = () => {
         if (!viewport.current) return;
         const { clientWidth: width, clientHeight: height } = viewport.current;
-        const scale = Math.min(width / WIDTH, height / HEIGHT, 1);
-        view.current = { x: (width - WIDTH * scale) / 2, y: (height - HEIGHT * scale) / 2, scale };
+        const narrow = width < 420, contentHeight = narrow ? 300 : HEIGHT;
+        setCompact(narrow);
+        const scale = Math.min(width / WIDTH, height / contentHeight, 1);
+        view.current = { x: (width - WIDTH * scale) / 2, y: (height - contentHeight * scale) / 2, scale };
         paint();
     };
     useLayoutEffect(() => {
@@ -58,13 +63,13 @@ export function WorldTravelGraph({ combat, selected, busy, select }: {
                 view.current.x += event.clientX - active.x; view.current.y += event.clientY - active.y;
                 active.x = event.clientX; active.y = event.clientY; paint();
             }} onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}>
-            <div className="travel-graph-content" ref={content} style={{ width: WIDTH, height: HEIGHT }}>
-                <svg className="travel-routes" width={WIDTH} height={HEIGHT} aria-hidden="true">
-                    <circle cx="300" cy="275" r="180" />
-                    {NODES.filter(node => node.id !== "wilds").map(node => <path key={node.id} className={selected === node.id ? "selected" : ""}
-                        d={`M300 275 Q${(node.x + 300) / 2 + 30} ${(node.y + 275) / 2} ${node.x} ${node.y}`} />)}
+            <div className="travel-graph-content" ref={content} style={{ width: WIDTH, height: compact ? 300 : HEIGHT }}>
+                <svg className="travel-routes" width={WIDTH} height={compact ? 300 : HEIGHT} aria-hidden="true">
+                    {!compact && <circle cx="300" cy="275" r="180" />}
+                    {nodes.filter(node => node.id !== "wilds").map(node => <path key={node.id} className={selected === node.id ? "selected" : ""}
+                        d={`M${origin.x} ${origin.y} Q${(node.x + origin.x) / 2 + 30} ${(node.y + origin.y) / 2} ${node.x} ${node.y}`} />)}
                 </svg>
-                {NODES.map(node => {
+                {nodes.map(node => {
                     const { id } = node, state = isChallenge(id) ? combat.challenges[id] : undefined;
                     const count = combat.player.inventory.reduce((n, item) => n + (item.type === "scroll" && item.value === id ? item.size : 0), 0);
                     const title = id === "homestead" ? "灯火营地" : id === "wilds" ? "荒野" : CHALLENGES[id].name;
@@ -77,6 +82,5 @@ export function WorldTravelGraph({ combat, selected, busy, select }: {
                 })}
             </div>
         </div>
-        <p>右键拖动航图 · 点击节点查看区域</p>
     </nav>;
 }

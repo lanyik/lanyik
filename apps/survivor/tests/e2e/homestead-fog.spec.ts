@@ -127,9 +127,9 @@ test("home uses downloaded buildings, coastal sea, manual spells and a selectabl
     const dialog = page.getByRole("dialog", { name: "世界传送" });
     await expect(dialog).toBeVisible(); await expect(page.locator(".survivor")).toHaveAttribute("data-paused", "true");
     await expect(dialog.getByRole("navigation", { name: "传送区域" }).getByRole("button", { name: /^目的地：/ })).toHaveCount(6);
-    await expect(dialog.getByRole("button", { name: "当前所在 · 可在地图选点", exact: true })).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "当前所在", exact: true })).toBeDisabled();
     await page.getByRole("button", { name: "目的地：荒野", exact: true }).click();
-    await expect(dialog.locator(".travel-rules h3")).toHaveText("荒野");
+    await expect(dialog.locator(".map-toolbar strong")).toHaveText("荒野");
     await expect(dialog.getByRole("button", { name: "出战荒野", exact: true })).toBeEnabled();
     await expect(page.locator(".survivor")).toHaveAttribute("data-location", "homestead");
     await page.screenshot({ path: info.outputPath("world-travel.png") });
