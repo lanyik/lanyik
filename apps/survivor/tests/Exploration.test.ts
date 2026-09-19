@@ -29,6 +29,32 @@ test("automatic visibility is strictly below player level and does not materiali
     expect(discovery.allows(360, 0, 1, world)).toBe(true);
 });
 
+test("discovery area queries respect negative pages, row gaps and half-open cell boundaries", () => {
+    const rows = Array<number>(16).fill(0); rows[15] = 1 << 15;
+    const discovery = new Exploration({ revision: 1, pages: [{ x: -1, z: -1, rows }] });
+    expect(discovery.intersects(-4, -4, 0, 0)).toBe(true);
+    expect(discovery.intersects(-5, -5, -3.99, -3.99)).toBe(true);
+    expect(discovery.intersects(-8, -8, -4, -4)).toBe(false);
+    expect(discovery.intersects(0, 0, 64, 64)).toBe(false);
+    expect(discovery.intersects(-64, -64, 0, -4)).toBe(false);
+    expect(discovery.intersects(-4, -4, -4, 0)).toBe(false);
+    expect(discovery.intersects(-128, -128, 128, 128)).toBe(true);
+});
+
+test("level bounds reject distant fog without omitting any eligible region", () => {
+    const world = new RegionalWorld("fog-bounds", { x: -13, z: 21 });
+    expect(world.mayContainLowerLevel(-100, -100, 100, 100, 1)).toBe(false);
+    expect(world.mayContainLowerLevel(1000, 1000, 2000, 2000, 20)).toBe(false);
+    for (const level of [2, 6, 7, 10, 20, 31]) for (const region of world.nearbyRegions(world.regionAtHex(0, 0), 8)) {
+        if (region.level >= level) continue;
+        for (let i = 0; i < 6; i++) {
+            const x = region.centerX + Math.cos(i * Math.PI / 3) * 23.99, z = region.centerZ + Math.sin(i * Math.PI / 3) * 23.99;
+            expect(world.mayContainLowerLevel(x - .01, z - .01, x + .01, z + .01, level)).toBe(true);
+        }
+    }
+    expect(world.chunks.size).toBe(0);
+});
+
 test("every point at the 3D visible horizon is revealed even across quantization and negative boundaries", () => {
     for (const origin of [{ x: -4.01, z: -0.01 }, { x: 3.99, z: 3.99 }]) {
         const discovery = new Exploration(); discovery.discover(origin.x, origin.z);

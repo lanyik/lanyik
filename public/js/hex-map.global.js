@@ -20820,6 +20820,8 @@ ${HEADER}
       this.targetZoomFactor = 1;
       this.reportedPageError = false;
       this.disposed = false;
+      this.paintPending = false;
+      this.demandPending = false;
       this.handlePointerDown = (event) => {
         event.stopPropagation();
         if (!this.expanded || event.button !== 2 || !this.viewport || !this.coordinateAt(event.clientX, event.clientY)) return;
@@ -20854,8 +20856,8 @@ ${HEADER}
         viewport.centerY -= deltaY / this.contentRect.height * viewport.tileSpanY;
         this.clampViewport(viewport);
         this.recordMotion(previousX, previousY, viewport.centerX, viewport.centerY);
-        this.syncPageDemand();
-        this.render();
+        this.demandPending = true;
+        this.paintPending = true;
       };
       this.handlePointerEnd = (event) => {
         if (this.pan?.pointerId !== event.pointerId) return;
@@ -20938,17 +20940,17 @@ ${HEADER}
         void this.refresh();
       };
       this.handleFrame = (frame) => {
-        if (this.worldLoading) return;
+        if (this.disposed || this.worldLoading) return;
         const dtS = Number.isFinite(frame?.dtS) ? Math.max(0, frame.dtS) : 0;
         const cameraTarget = this.map.getCameraTargetTile();
         const followed = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
         const zoomed = this.updateExpandedZoom(dtS);
-        if (followed || zoomed) {
+        if (followed || zoomed || this.demandPending) {
+          this.demandPending = false;
           this.syncPageDemand();
-          this.render();
-          return;
+          this.paintPending = true;
         }
-        if (this.currentOverlaySignature() !== this.overlaySignature) this.render();
+        if (this.paintPending || this.currentOverlaySignature() !== this.overlaySignature) this.render();
       };
       if (!options || typeof options !== "object") throw new TypeError("world minimap options are required");
       if (!options.map) throw new TypeError("world minimap map is required");
@@ -20980,6 +20982,7 @@ ${HEADER}
       this.onError = options.onError;
       this.interactive = options.interactive ?? true;
       this.drawOverlay = options.drawOverlay;
+      this.shouldRequestPage = options.shouldRequestPage;
       if (this.interactive) {
         this.canvas.addEventListener("pointerdown", this.handlePointerDown);
         this.canvas.addEventListener("pointermove", this.handlePointerMove);
@@ -20995,7 +20998,7 @@ ${HEADER}
       this.map.on("load", this.handleWorldLoad);
       this.map.on("frame", this.handleFrame);
       if (typeof ResizeObserver !== "undefined") {
-        this.resizeObserver = new ResizeObserver(() => this.render());
+        this.resizeObserver = new ResizeObserver(() => this.redraw());
         this.resizeObserver.observe(this.canvas);
       }
       this.canvas.dataset.expanded = "false";
@@ -21060,9 +21063,9 @@ ${HEADER}
     toggleExpanded() {
       this.setExpanded(!this.expanded);
     }
-    /** Repaint host-owned overlay data without invalidating or requesting terrain. */
+    /** Coalesce host overlay changes into the existing map frame without requesting terrain. */
     redraw() {
-      this.render();
+      if (!this.disposed) this.paintPending = true;
     }
     refresh(force = false) {
       if (this.disposed) return Promise.reject(new Error("WorldMinimap has been disposed"));
@@ -21079,7 +21082,7 @@ ${HEADER}
         return Promise.resolve();
       }
       this.viewport ?? (this.viewport = this.createViewport(cameraTarget));
-      this.syncPageDemand(force);
+      this.syncPageDemand(true);
       this.render();
       return this.waitForVisiblePages(this.pageGeneration);
     }
@@ -21280,7 +21283,7 @@ ${HEADER}
       for (let pageY = visibleMinY - prefetchRings; pageY <= visibleMaxY + prefetchRings; pageY += 1) {
         for (let pageX = visibleMinX - prefetchRings; pageX <= visibleMaxX + prefetchRings; pageX += 1) {
           const options = this.pageOptions(pageX, pageY, layout);
-          if (!options) continue;
+          if (!options || this.shouldRequestPage?.(options) === false) continue;
           const visible = pageX >= visibleMinX && pageX <= visibleMaxX && pageY >= visibleMinY && pageY <= visibleMaxY;
           const pageCenterX = options.originX + options.tileSpanX / 2;
           const pageCenterY = options.originY + options.tileSpanY / 2;
@@ -21428,7 +21431,7 @@ ${HEADER}
         if (this.pendingPages.get(demand.key) !== record) return;
         this.pendingPages.delete(demand.key);
         this.updateCanvasState();
-        this.render();
+        this.redraw();
         this.pumpPageRequests();
       });
       record = { abort, visible: demand.visible, options: demand.options, control, promise };
@@ -21496,6 +21499,8 @@ ${HEADER}
       this.reportedPageError = false;
       this.demandSignature = void 0;
       this.overlaySignature = void 0;
+      this.demandPending = false;
+      this.paintPending = false;
       this.motionX = 0;
       this.motionY = 0;
     }
@@ -21513,7 +21518,7 @@ ${HEADER}
         return;
       }
       const visible = this.visiblePageDemands();
-      if (!this.viewport || visible.length === 0) {
+      if (!this.viewport) {
         this.canvas.dataset.state = "empty";
         this.canvas.setAttribute("aria-busy", "false");
         return;
@@ -21609,6 +21614,7 @@ ${HEADER}
     }
     render() {
       if (this.disposed) return;
+      this.paintPending = false;
       const bounds = this.canvas.getBoundingClientRect();
       const width = Math.max(1, bounds.width || this.canvas.clientWidth || 220);
       const height = Math.max(1, bounds.height || this.canvas.clientHeight || 220);

@@ -75,7 +75,7 @@ export class MapFog {
                 }
             }
         }
-        if (window.level > 1) for (const region of window.world.regionsInBounds(minX - REGION_RADIUS, minZ - REGION_RADIUS,
+        if (window.world.mayContainLowerLevel(minX, minZ, maxX, maxZ, window.level)) for (const region of window.world.regionsInBounds(minX - REGION_RADIUS, minZ - REGION_RADIUS,
             maxX + REGION_RADIUS, maxZ + REGION_RADIUS)) {
             if (region.level >= window.level) continue;
             const vertices: [number, number][] = [];

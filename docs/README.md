@@ -250,7 +250,7 @@ flowchart TB
 | [attack-encounters-node.json](game/measurements/attack-encounters-node.json)、[attack-encounters-workers-node.json](game/measurements/attack-encounters-workers-node.json) | 攻击遮挡/遭遇布局阶段的模拟和弹道查询 → [地形通行](game/terrain-navigation.md) |
 | [combat-balance.json](game/measurements/combat-balance.json) | 参考装备下的数值矩阵 → [数值平衡](game/combat-balance.md) |
 | [horizon-damage-browser.json](game/measurements/horizon-damage-browser.json)、[horizon-balance-node.json](game/measurements/horizon-balance-node.json) | 远景、飘字阶段的浏览器和 CPU 测量 → [环境资产](game/environment-assets.md)、[技能与效果](game/skills-and-effects.md) |
-| [minimap-fog-browser.json](game/measurements/minimap-fog-browser.json) | 小地图迷雾移动、开雾、拖动与缩放的浏览器对比 → [UI 性能](game/ui-performance.md)、[探索与家园](game/exploration-and-homestead.md) |
+| [minimap-fog-browser.json](game/measurements/minimap-fog-browser.json)、[minimap-drag-browser.json](game/measurements/minimap-drag-browser.json) | 第一轮迷雾函数回放及第二轮实际开发页面鼠标拖动对比 → [UI 性能](game/ui-performance.md)、[探索与家园](game/exploration-and-homestead.md) |
 | [enemy-view-node.json](game/measurements/enemy-view-node.json)、[enemy-view-workers-node.json](game/measurements/enemy-view-workers-node.json) | 怪物视距阶段的 CPU 与查询测量 → [模拟与 AI](game/simulation-and-ai.md) |
 | [skills-node.json](game/measurements/skills-node.json)、[patrol-node.json](game/measurements/patrol-node.json)、[spatial-node.json](game/measurements/spatial-node.json) | 技能、巡逻、空间查询阶段 → [技能与效果](game/skills-and-effects.md)、[模拟与 AI](game/simulation-and-ai.md) |
 | [workers-node.json](game/measurements/workers-node.json)、[review-node.json](game/measurements/review-node.json) | 早期线程与项目复核 → [应用集成](app-development.md)、[模拟与 AI](game/simulation-and-ai.md) |

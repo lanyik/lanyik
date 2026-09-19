@@ -40,6 +40,24 @@ export class Exploration {
         const px = Math.floor(cx / EXPLORATION.pageEdge), pz = Math.floor(cz / EXPLORATION.pageEdge);
         return Boolean((this.pages.get(`${px},${pz}`)?.rows[cz - pz * EXPLORATION.pageEdge] ?? 0) & (1 << (cx - px * EXPLORATION.pageEdge)));
     }
+    /** Whether a half-open rectangle intersects any permanently discovered cell. */
+    public intersects(minX: number, minZ: number, maxX: number, maxZ: number): boolean {
+        if (minX >= maxX || minZ >= maxZ) return false;
+        const size = EXPLORATION.cellSize, edge = EXPLORATION.pageEdge;
+        const x0 = Math.floor(minX / size), z0 = Math.floor(minZ / size), x1 = Math.ceil(maxX / size) - 1, z1 = Math.ceil(maxZ / size) - 1;
+        for (let pz = Math.floor(z0 / edge); pz <= Math.floor(z1 / edge); pz++) {
+            for (let px = Math.floor(x0 / edge); px <= Math.floor(x1 / edge); px++) {
+                const page = this.pages.get(`${px},${pz}`);
+                if (!page) continue;
+                const left = Math.max(0, x0 - px * edge), right = Math.min(edge - 1, x1 - px * edge);
+                const mask = ((1 << (right - left + 1)) - 1) << left;
+                for (let row = Math.max(0, z0 - pz * edge); row <= Math.min(edge - 1, z1 - pz * edge); row++) {
+                    if (page.rows[row] & mask) return true;
+                }
+            }
+        }
+        return false;
+    }
     public allows(x: number, z: number, level: number, world: RegionalWorld): boolean {
         return this.has(x, z) || world.regionAt(x, z).level < level;
     }

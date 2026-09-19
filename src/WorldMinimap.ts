@@ -26,6 +26,8 @@ export interface WorldMinimapOptions {
     keyboard?: boolean;
     /** Replaces the default camera/destination overlay, clipped to the terrain extent. */
     drawOverlay?: (context: CanvasRenderingContext2D, frame: WorldMinimapOverlayFrame) => void;
+    /** Suppress terrain pages covered by host-owned overlays. Call refresh() when this policy changes. */
+    shouldRequestPage?: (extent: Readonly<WorldOverviewPreparationOptions>) => boolean;
 }
 
 export interface WorldMinimapOverlayFrame {
@@ -196,6 +198,7 @@ export class WorldMinimap {
     private readonly onError: ((error: Error) => void) | undefined;
     private readonly interactive: boolean;
     private readonly drawOverlay: WorldMinimapOptions["drawOverlay"];
+    private readonly shouldRequestPage: WorldMinimapOptions["shouldRequestPage"];
     private readonly pageCache = new Map<string, CachedPage>();
     private readonly pageDemand = new Map<string, PageDemand>();
     private readonly pendingPages = new Map<string, PendingPage>();
@@ -232,6 +235,8 @@ export class WorldMinimap {
     private destination: Point | undefined;
     private reportedPageError = false;
     private disposed = false;
+    private paintPending = false;
+    private demandPending = false;
 
     constructor(options: WorldMinimapOptions) {
         if (!options || typeof options !== "object") throw new TypeError("world minimap options are required");
@@ -266,6 +271,7 @@ export class WorldMinimap {
         this.onError = options.onError;
         this.interactive = options.interactive ?? true;
         this.drawOverlay = options.drawOverlay;
+        this.shouldRequestPage = options.shouldRequestPage;
 
         if (this.interactive) {
             this.canvas.addEventListener("pointerdown", this.handlePointerDown);
@@ -282,7 +288,7 @@ export class WorldMinimap {
         this.map.on("load", this.handleWorldLoad);
         this.map.on("frame", this.handleFrame);
         if (typeof ResizeObserver !== "undefined") {
-            this.resizeObserver = new ResizeObserver(() => this.render());
+            this.resizeObserver = new ResizeObserver(() => this.redraw());
             this.resizeObserver.observe(this.canvas);
         }
         this.canvas.dataset.expanded = "false";
@@ -353,8 +359,8 @@ export class WorldMinimap {
         this.setExpanded(!this.expanded);
     }
 
-    /** Repaint host-owned overlay data without invalidating or requesting terrain. */
-    public redraw(): void { this.render(); }
+    /** Coalesce host overlay changes into the existing map frame without requesting terrain. */
+    public redraw(): void { if (!this.disposed) this.paintPending = true; }
 
     public refresh(force = false): Promise<void> {
         if (this.disposed) return Promise.reject(new Error("WorldMinimap has been disposed"));
@@ -371,7 +377,7 @@ export class WorldMinimap {
             return Promise.resolve();
         }
         this.viewport ??= this.createViewport(cameraTarget);
-        this.syncPageDemand(force);
+        this.syncPageDemand(true);
         this.render();
         return this.waitForVisiblePages(this.pageGeneration);
     }
@@ -588,7 +594,7 @@ export class WorldMinimap {
         for (let pageY = visibleMinY - prefetchRings; pageY <= visibleMaxY + prefetchRings; pageY += 1) {
             for (let pageX = visibleMinX - prefetchRings; pageX <= visibleMaxX + prefetchRings; pageX += 1) {
                 const options = this.pageOptions(pageX, pageY, layout);
-                if (!options) continue;
+                if (!options || this.shouldRequestPage?.(options) === false) continue;
                 const visible = pageX >= visibleMinX && pageX <= visibleMaxX
                     && pageY >= visibleMinY && pageY <= visibleMaxY;
                 const pageCenterX = options.originX + options.tileSpanX / 2;
@@ -761,7 +767,7 @@ export class WorldMinimap {
             if (this.pendingPages.get(demand.key) !== record) return;
             this.pendingPages.delete(demand.key);
             this.updateCanvasState();
-            this.render();
+            this.redraw();
             this.pumpPageRequests();
         });
         record = { abort, visible: demand.visible, options: demand.options, control, promise };
@@ -839,6 +845,8 @@ export class WorldMinimap {
         this.reportedPageError = false;
         this.demandSignature = undefined;
         this.overlaySignature = undefined;
+        this.demandPending = false;
+        this.paintPending = false;
         this.motionX = 0;
         this.motionY = 0;
     }
@@ -859,7 +867,7 @@ export class WorldMinimap {
             return;
         }
         const visible = this.visiblePageDemands();
-        if (!this.viewport || visible.length === 0) {
+        if (!this.viewport) {
             this.canvas.dataset.state = "empty";
             this.canvas.setAttribute("aria-busy", "false");
             return;
@@ -963,6 +971,7 @@ export class WorldMinimap {
 
     private render(): void {
         if (this.disposed) return;
+        this.paintPending = false;
         const bounds = this.canvas.getBoundingClientRect();
         const width = Math.max(1, bounds.width || this.canvas.clientWidth || 220);
         const height = Math.max(1, bounds.height || this.canvas.clientHeight || 220);
@@ -1272,8 +1281,8 @@ export class WorldMinimap {
         viewport.centerY -= deltaY / this.contentRect.height * viewport.tileSpanY;
         this.clampViewport(viewport);
         this.recordMotion(previousX, previousY, viewport.centerX, viewport.centerY);
-        this.syncPageDemand();
-        this.render();
+        this.demandPending = true;
+        this.paintPending = true;
     };
 
     private handlePointerEnd = (event: PointerEvent): void => {
@@ -1369,16 +1378,16 @@ export class WorldMinimap {
     };
 
     private handleFrame = (frame: { dtS?: number }): void => {
-        if (this.worldLoading) return;
+        if (this.disposed || this.worldLoading) return;
         const dtS = Number.isFinite(frame?.dtS) ? Math.max(0, frame.dtS as number) : 0;
         const cameraTarget = this.map.getCameraTargetTile();
         const followed = cameraTarget ? this.updateViewportFollow(cameraTarget, dtS) : false;
         const zoomed = this.updateExpandedZoom(dtS);
-        if (followed || zoomed) {
+        if (followed || zoomed || this.demandPending) {
+            this.demandPending = false;
             this.syncPageDemand();
-            this.render();
-            return;
+            this.paintPending = true;
         }
-        if (this.currentOverlaySignature() !== this.overlaySignature) this.render();
+        if (this.paintPending || this.currentOverlaySignature() !== this.overlaySignature) this.render();
     };
 }

@@ -737,8 +737,23 @@ Hosts can supply `drawOverlay(context, frame)` to replace the built-in camera,
 destination and coordinate overlay. `WorldMinimapOverlayFrame` exposes the
 content rectangle in CSS pixels, the exact logical tile extent, and the selected
 destination (when present); drawing is
-clipped and Canvas state is restored after the callback. `redraw()` only paints
-the current cache and overlay, without rebuilding demand or invalidating pages.
+clipped and Canvas state is restored after the callback. `redraw()` marks the
+current cache and overlay dirty without rebuilding demand or invalidating pages.
+Pointer motion, resize and page completions share that dirty state; the existing
+map `frame` event synchronizes the final pan position and paints at most once.
+Input events update the logical viewport immediately, so a burst retains every
+movement without submitting intermediate canvases or terrain demands. Loading,
+explicit refresh and clear still publish their state directly; there is no extra
+animation loop, and replacement/disposal clears pending work.
+
+`shouldRequestPage(extent)` optionally lets a host suppress terrain pages fully
+covered by its overlay. The predicate applies to visible and prefetched demand;
+the library owns scheduling/cancellation while the host owns visibility rules.
+Call `refresh()` when those rules change: it rebuilds demand against the current
+predicate while preserving cached pixels and generation. `refresh(true)` also
+invalidates pixels. A viewport with all pages excluded is ready, not loading;
+cached hidden pages are not drawn once visible demand is satisfied. Revealing an
+area admits its pages normally, reusing retained pages where available.
 `interactive: false` installs no pointer/wheel/keyboard navigation handlers;
 the host controls expansion through `setExpanded()`. Both sizes then follow the
 camera, never select a teleport destination, and reset the viewport on world

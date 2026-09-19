@@ -9,6 +9,53 @@ import type { Group, Mesh } from "three";
 import type { MapFog } from "../../src/adapters/MapFog";
 import type { Exploration } from "../../src/core/Exploration";
 
+test("dragging into fog stops terrain work and merges a pointer burst into one frame", async ({ page }) => {
+    await page.goto("/"); await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page); await pauseCombat(page); await page.keyboard.press("KeyM");
+    const canvas = page.getByTestId("terrain-minimap"), bounds = (await canvas.boundingBox())!;
+    const inspect = () => page.evaluate(() => {
+        const view = (window.survivorApplication!.session as unknown as { view: { regionMaps: Set<{ minimap: WorldMinimap }> } }).view;
+        return [...view.regionMaps][0].minimap.view;
+    });
+    await expect.poll(async () => (await inspect()).pendingPages).toBe(0);
+    for (let i = 0; i < 6; i++) {
+        await page.mouse.move(bounds.x + bounds.width * .8, bounds.y + bounds.height * .5);
+        await page.mouse.down({ button: "right" });
+        await page.mouse.move(bounds.x + bounds.width * .2, bounds.y + bounds.height * .5, { steps: 15 });
+        await page.mouse.up({ button: "right" });
+    }
+    await expect.poll(async () => (await inspect()).demandedPages).toBe(0);
+    await expect.poll(async () => (await inspect()).pendingPages).toBe(0);
+    await expect(canvas).toHaveAttribute("data-state", "ready");
+    const hidden = await inspect();
+    await canvas.evaluate(element => element.addEventListener("pointerdown", event => {
+        element.setAttribute("data-test-pointer", String((event as PointerEvent).pointerId));
+    }, { once: true }));
+    const x = bounds.x + bounds.width * .8, y = bounds.y + bounds.height * .5;
+    await page.mouse.move(x, y); await page.mouse.down({ button: "right" });
+    const burst = await page.evaluate(async ({ x, y }) => {
+        const canvas = document.querySelector('[data-testid="terrain-minimap"]')!;
+        const view = (window.survivorApplication!.session as unknown as { view: { regionMaps: Set<{ minimap: WorldMinimap }> } }).view;
+        const map = [...view.regionMaps][0].minimap, before = map.view;
+        for (let i = 1; i <= 100; i++) canvas.dispatchEvent(new PointerEvent("pointermove", {
+            pointerId: Number(canvas.getAttribute("data-test-pointer")), buttons: 2, clientX: x - i, clientY: y, bubbles: true
+        }));
+        const during = map.view;
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        return { synchronousPaints: during.renders - before.renders, paints: map.view.renders - before.renders,
+            moved: map.view.originX! - before.originX!, requests: map.view.pageRequests - before.pageRequests };
+    }, { x, y });
+    await page.mouse.up({ button: "right" });
+    expect(burst).toMatchObject({ synchronousPaints: 0, paints: 1, requests: 0 });
+    expect(burst.moved).toBeGreaterThan(20);
+    expect((await inspect()).pageRequests).toBe(hidden.pageRequests);
+    await page.getByRole("button", { name: /^回到玩家/ }).click();
+    await expect.poll(async () => (await inspect()).visiblePages).toBeGreaterThan(0);
+    await expect(canvas).toHaveAttribute("data-state", "ready");
+    await page.evaluate(() => window.survivorApplication!.dispose());
+});
+
 test("map fog stays opaque outside discovery and reuses its raster while the viewport moves", async ({ page }) => {
     await page.goto("/"); await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await enterWilds(page); await pauseCombat(page);

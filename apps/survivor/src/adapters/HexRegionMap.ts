@@ -5,7 +5,7 @@ import { GAME_CONFIG } from "../core/GameConfig";
 import { REGION_RADIUS, RegionalWorld, type RegionInfo } from "../core/RegionalWorld";
 import { Exploration, type ExplorationSnapshot } from "../core/Exploration";
 import { MapFog } from "./MapFog";
-import { overviewHeading, overviewPoint } from "./MapProjection";
+import { overviewBounds, overviewHeading, overviewPoint } from "./MapProjection";
 
 export class HexRegionMap implements RegionMapBinding {
     private readonly minimap: WorldMinimap;
@@ -26,7 +26,7 @@ export class HexRegionMap implements RegionMapBinding {
             onExpandedChange: controls.onExpandedChange,
             onDestinationChange: tile => { this.selectedTile = tile; controls.onDestinationChange(tile ? this.destination(tile) : undefined); },
             onNavigate: tile => controls.onNavigate(this.destination(tile)),
-            drawOverlay: this.drawOverlay, onError }); }
+            shouldRequestPage: this.shouldRequestPage, drawOverlay: this.drawOverlay, onError }); }
         catch (error) { this.fog.dispose(); throw error; }
     }
 
@@ -42,7 +42,8 @@ export class HexRegionMap implements RegionMapBinding {
             this.regions = new RegionalWorld(combat.world.seed, combat.world.origin); this.regionWindow = "";
         }
         if (knowledgeChanged && this.selectedTile) this.controls.onDestinationChange(this.destination(this.selectedTile));
-        if (knowledgeChanged || !this.regionWindow || !previous || previous.player.x !== combat.player.x || previous.player.z !== combat.player.z
+        if (knowledgeChanged) void this.minimap.refresh();
+        else if (!previous || previous.player.x !== combat.player.x || previous.player.z !== combat.player.z
             || previous.player.heading !== combat.player.heading
             || previous.region.x !== combat.region.x || previous.region.z !== combat.region.z) this.minimap.redraw();
     }
@@ -52,6 +53,18 @@ export class HexRegionMap implements RegionMapBinding {
         if (this.combat && !this.combat.gameOver && this.selectedTile && this.destination(this.selectedTile).accessible) this.minimap.navigateToDestination();
     }
     public dispose(): void { this.minimap.dispose(); this.fog.dispose(); this.combat = undefined; }
+
+    private knownArea(minX: number, minZ: number, maxX: number, maxZ: number): boolean {
+        return this.exploration.intersects(minX, minZ, maxX, maxZ)
+            || this.regions!.mayContainLowerLevel(minX, minZ, maxX, maxZ, this.combat!.player.level);
+    }
+
+    private shouldRequestPage = (extent: WorldMinimapOverlayFrame["extent"]): boolean => {
+        if (!this.combat) return false;
+        if (this.combat.world.location === "homestead") return true;
+        const { minX, minZ, maxX, maxZ } = overviewBounds(extent);
+        return this.knownArea(minX, minZ, maxX, maxZ);
+    };
 
     private destination(tile: Readonly<Point>): MapDestination {
         const point = getHexCenter(tile.x, tile.y, 1);
@@ -74,7 +87,9 @@ export class HexRegionMap implements RegionMapBinding {
             Math.ceil((extent.originX + extent.tileSpanX) * 1.5 / REGION_RADIUS) + 2,
             Math.ceil((extent.originY + extent.tileSpanY) * Math.sqrt(3) / REGION_RADIUS) + 2];
         const signature = bounds.join(",");
-        if (this.regionWindow !== signature) {
+        const showRegions = combat.world.location === "wilds" && this.shouldRequestPage(extent);
+        if (!showRegions) { this.visibleRegions = []; this.regionWindow = ""; }
+        else if (this.regionWindow !== signature) {
             this.visibleRegions = this.regions!.regionsInBounds(bounds[0] * REGION_RADIUS, bounds[1] * REGION_RADIUS,
                 bounds[2] * REGION_RADIUS, bounds[3] * REGION_RADIUS);
             this.regionWindow = signature;
@@ -82,6 +97,8 @@ export class HexRegionMap implements RegionMapBinding {
         // Overlapping washes leave the sampled river and relief colours legible.
         for (const region of combat.world.location === "homestead" ? [] : this.visibleRegions) {
             if (region.difficulty === "normal") continue;
+            const reach = REGION_RADIUS * 1.2;
+            if (!this.knownArea(region.centerX - reach, region.centerZ - reach, region.centerX + reach, region.centerZ + reach)) continue;
             const p = project(region.centerX, region.centerZ), horror = region.difficulty === "horror";
             const radiusX = REGION_RADIUS / 1.5 * scaleX, radiusY = REGION_RADIUS / Math.sqrt(3) * scaleY;
             if (p.x + radiusX * 1.2 < content.x || p.x - radiusX * 1.2 > content.x + content.width

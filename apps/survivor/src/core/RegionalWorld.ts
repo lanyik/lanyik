@@ -8,6 +8,7 @@ import { ENCOUNTER_CELL, ENCOUNTER_EDGE, EncounterNavigation } from "./Encounter
 export const COMBAT_CHUNK_SIZE = WORLD_VIEW.chunkSize;
 const COMBAT_CHUNK_HALF_SIZE = COMBAT_CHUNK_SIZE / 2;
 export const REGION_RADIUS = 24;
+const LEVELS_PER_RING = 5;
 const NEAR_CHUNK_RADIUS = 1;
 const BUFFER_CHUNK_RADIUS = 2;
 const RETAINED_CHUNK_RADIUS = WORLD_VIEW.residentRadius;
@@ -114,7 +115,7 @@ export class RegionalWorld {
         const horrorChance = Math.min(0.3, 0.12 + ring * 0.02);
         const difficulty = ring === 0 ? "normal" : roll < horrorChance ? "horror" : roll < horrorChance + 0.32 ? "hard" : "normal";
         const center = regionCenter(x, z);
-        const bandMin = 1 + ring * 5;
+        const bandMin = 1 + ring * LEVELS_PER_RING;
         return Object.freeze({ x, z, ring, difficulty, bandMin, bandMax: bandMin + 4,
             level: bandMin + REGION_RULES[difficulty].levelOffset, centerX: this.origin.x + center.x, centerZ: this.origin.z + center.z });
     }
@@ -124,6 +125,14 @@ export class RegionalWorld {
             if (hexDistance(x, z) <= radius) result.push(this.regionAtHex(region.x + x, region.z + z));
         }
         return Object.freeze(result);
+    }
+    /** Conservative bounds only; avoids generating metadata for wholly hidden distant map pages. */
+    public mayContainLowerLevel(minX: number, minZ: number, maxX: number, maxZ: number, level: number): boolean {
+        if (level <= 1) return false;
+        const ring = Math.floor((level - 2) / LEVELS_PER_RING);
+        const radiusX = REGION_RADIUS * (1.5 * ring + 1), radiusZ = REGION_RADIUS * Math.sqrt(3) * (ring + .5);
+        return minX <= this.origin.x + radiusX && maxX >= this.origin.x - radiusX
+            && minZ <= this.origin.z + radiusZ && maxZ >= this.origin.z - radiusZ;
     }
     /** Metadata only: inspecting distant terrain never creates gameplay chunks. */
     public regionsInBounds(minX: number, minZ: number, maxX: number, maxZ: number): readonly RegionInfo[] {

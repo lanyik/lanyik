@@ -18,6 +18,8 @@ Worker 接受 `teleport` 时先检查“已探索或地域等级低于角色等�
 
 缓存通过地图资源账户登记 256 KiB CPU 与 256 KiB GPU（其中纹理 256 KiB），随地图绑定释放，初始化失败同样释放。查询地域元数据不加载远处怪物或玩法驻留；复用原有重绘调度，不增加 Worker、WebGL 渲染目标或帧循环。性能回放和测量局限见 [UI 性能](ui-performance.md#地图迷雾)。
 
+荒野还通过 `WorldMinimap.shouldRequestPage` 排除完全未知的地形页，覆盖可见页与预取页。`Exploration.intersects` 按稀疏页的行位图查询矩形内是否存在已探索格子；等级揭示先使用地域环数的保守包围范围判断可能性，不枚举无限世界。范围可能包含同等级/更高级地域，因此它只用于跳过必然隐藏的工作，不授予传送权限或清除迷雾。探索/等级更新用 `refresh()` 重算需求并保留已有地形缓存；确定整个视口未知时仍显示迷雾，状态为 ready，不枚举地域或绘制被雾遮住的难度渐变。预取范围内若还有已知页可继续预取；未知页不生成地形。部分可见视口中的渐变也先检查其覆盖范围。家园全域继续采样。
+
 ## 家园与荒野
 
 新角色从“灯火营地”家园开始。家园使用 `StaticWorldSource` 的 **64×64 六边形地格**有界地图，X/Y 不循环；外圈水岸、内侧草地、十字道路和中央广场由 `HomesteadMap` 生成。64×64 是地格数量，不是以米表示的正方形。
@@ -40,4 +42,4 @@ Worker 接受 `teleport` 时先检查“已探索或地域等级低于角色等�
 - 核心：[Exploration](../../apps/survivor/src/core/Exploration.ts)、[Homestead](../../apps/survivor/src/core/Homestead.ts)、[CombatSimulation](../../apps/survivor/src/core/CombatSimulation.ts)。
 - 适配与表现：[HomesteadMap](../../apps/survivor/src/adapters/HomesteadMap.ts)、[HexRegionMap](../../apps/survivor/src/adapters/HexRegionMap.ts)、[MapFog](../../apps/survivor/src/adapters/MapFog.ts)、[MapProjection](../../apps/survivor/src/adapters/MapProjection.ts)、[HomesteadModels](../../apps/survivor/src/presentation/HomesteadModels.ts)。
 - `Exploration.test.ts` 覆盖负坐标、完整可见距离、持久化、严格等级、容量原子性和落地揭示；`Homestead.test.ts` 覆盖安全边界、八种手动技能、延迟效果结算、休整、往返、写入失败和世代取消。
-- `homestead-fog.spec.ts` 使用真实 Worker/WebGL 检查家园起步、迷雾阻止 UI/直接命令、升级揭示、重复往返、刷新读档和最终 Worker/资源归零；额外读取 Canvas 像素验证负坐标已探索/未知范围与严格等级遮挡，验证平移/缩放复用和探索/等级/越界触发重建。`region-map.spec.ts` 保留缩放、拖动、选点、传送与窄屏回归。
+- `homestead-fog.spec.ts` 使用真实 Worker/WebGL 检查家园起步、迷雾阻止 UI/直接命令、升级揭示、重复往返、刷新读档和最终 Worker/资源归零；额外读取 Canvas 像素验证负坐标已探索/未知范围与严格等级遮挡，验证平移/缩放复用和探索/等级/越界触发重建。真实拖动进入未知区后检查地形请求停止、100 个指针事件合并为一次绘制、回到玩家后可见页恢复。`region-map.spec.ts` 保留缩放、拖动、选点、传送与窄屏回归。

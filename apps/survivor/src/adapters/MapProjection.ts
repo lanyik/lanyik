@@ -9,3 +9,9 @@ export function overviewPoint(x: number, z: number): { x: number; y: number } {
 export function overviewHeading(heading: number, scaleX: number, scaleY: number): number {
     return Math.atan2(Math.sin(heading) / 1.5 * scaleX, -Math.cos(heading) / Math.sqrt(3) * scaleY);
 }
+
+/** Conservative game-space rectangle, including the terrain-column vertical offset. */
+export function overviewBounds(extent: { readonly originX: number; readonly originY: number; readonly tileSpanX: number; readonly tileSpanY: number }) {
+    return { minX: (extent.originX - .5) * 1.5, maxX: (extent.originX + extent.tileSpanX - .5) * 1.5,
+        minZ: (extent.originY - .5) * Math.sqrt(3), maxZ: (extent.originY + extent.tileSpanY) * Math.sqrt(3) };
+}
