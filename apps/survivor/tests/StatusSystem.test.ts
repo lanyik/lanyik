@@ -1,18 +1,21 @@
 import { expect, test } from "vitest";
 import { EntityWorld } from "../src/core/EntityWorld";
-import { StatusKind as Kind, StatusSystem } from "../src/core/StatusSystem";
+import { StatusKind as Kind, StatusSystem, ControlProfile } from "../src/core/StatusSystem";
 
-test("strongest refresh keeps provenance, expires exactly and clears dense entries independently", () => {
+test("independent source expiry never lets weak refresh extend the stronger status", () => {
     const world = new EntityWorld(3), status = new StatusSystem(world);
     const a = world.create(1), b = world.create(1), source = world.ids[a], target = world.ids[b];
     status.apply(Kind.Slow, source, target, .5, 10, 0);
     status.apply(Kind.Slow, target, target, .2, 20, 1);
     status.apply(Kind.Protection, target, target, .25, 15, 1);
-    expect(status.amount(Kind.Slow, b, 19)).toBe(.5);
+    expect(status.amount(Kind.Slow, b, 9)).toBe(.5);
+    expect(status.amount(Kind.Slow, b, 19)).toBe(.2);
     expect(status.source(Kind.Slow, b)).toBe(source);
     expect(status.slowScale[b]).toBe(.5);
     world.destroy(source); // The applied effect survives its source.
     status.advance(15);
+    expect(status.slowScale[b]).toBeCloseTo(.8);
+    expect(status.source(Kind.Slow, b)).toBe(target);
     expect(status.wardUntil[b]).toBe(0);
     expect(status.slowUntil[b]).toBe(20);
     status.advance(20);
@@ -45,4 +48,60 @@ test("removed targets cannot apply effects to a reused slot; invalid magnitudes 
     for (const amount of [NaN, Infinity, -1, 0, 1.1]) {
         expect(() => status.apply(Kind.Slow, world.ids[slot], world.ids[slot], amount, 10, 0)).toThrow(RangeError);
     }
+});
+
+test("same-source refresh replaces the whole instance and capacity keeps four stronger sources", () => {
+    const world = new EntityWorld(8), status = new StatusSystem(world), slot = world.create(1), target = world.ids[slot];
+    const ids = Array.from({ length: 6 }, () => world.ids[world.create(1)]);
+    ids.slice(0, 4).forEach((id, i) => status.apply(Kind.Slow, id, target, .1 + i * .1, 30, 0));
+    expect(status.apply(Kind.Slow, ids[4], target, .05, 100, 1)).toBe(false);
+    expect(status.apply(Kind.Slow, ids[5], target, .6, 10, 1)).toBe(true);
+    expect(status.save(slot, 1)).toHaveLength(4);
+    status.apply(Kind.Slow, ids[5], target, .15, 5, 2);
+    expect(status.amount(Kind.Slow, slot, 2)).toBeCloseTo(.4);
+    status.advance(5); expect(status.save(slot, 5)).toHaveLength(3);
+    status.advance(30); expect(status.slowScale[slot]).toBe(1);
+});
+
+test("five chill stacks freeze once; natural and consumed freezes grant an independent resistance window", () => {
+    const world = new EntityWorld(1), status = new StatusSystem(world), slot = world.create(1), id = world.ids[slot];
+    status.chill(id, id, 4, 300, 0, 120);
+    expect(status.slowScale[slot]).toBeCloseTo(.76); expect(status.canAct(slot, 0)).toBe(true);
+    status.chill(id, id, 1, 300, 1, 120);
+    expect(status.frozenUntil[slot]).toBe(121); expect(status.amount(Kind.Chill, slot, 1)).toBe(0);
+    expect(status.apply(Kind.Frozen, id, id, 1, 500, 2)).toBe(false);
+    status.advance(121); expect(status.canMove(slot, 121)).toBe(true);
+    expect(status.deadline(Kind.ControlResistance, slot)).toBe(481);
+    status.chill(id, id, 5, 600, 200, 120); expect(status.canAct(slot, 200)).toBe(true);
+    status.advance(481); status.chill(id, id, 5, 800, 481, 120);
+    status.consumeFreeze(slot, 500); expect(status.canAct(slot, 500)).toBe(true);
+    expect(status.deadline(Kind.ControlResistance, slot)).toBe(860);
+    status.advance(860); expect(status.save(slot, 860)).toEqual([]);
+});
+
+test("elite duration is halved, bosses retain capped soft control, and saved durations are not reduced twice", () => {
+    const world = new EntityWorld(3), status = new StatusSystem(world), normal = world.create(1), elite = world.create(1), boss = world.create(1);
+    status.controlProfile[elite] = ControlProfile.Elite; status.controlProfile[boss] = ControlProfile.Boss;
+    const id = world.ids[normal];
+    for (const slot of [normal, elite, boss]) status.chill(id, world.ids[slot], 5, 300, 0, 120);
+    expect(status.frozenUntil[normal]).toBe(120); expect(status.frozenUntil[elite]).toBe(60);
+    expect(status.frozenUntil[boss]).toBe(0); expect(status.slowScale[boss]).toBeCloseTo(.8);
+    expect(status.amount(Kind.Chill, boss, 0)).toBe(5);
+    status.clear(normal); status.durationScale[normal] = .8;
+    status.apply(Kind.Frozen, id, id, 1, 100, 0);
+    const saved = status.save(normal, 20); expect(saved[0].remaining).toBe(60);
+    status.restore(normal, saved, 200); expect(status.frozenUntil[normal]).toBe(260);
+    status.advance(300); expect(status.canAct(elite, 300)).toBe(true); expect(status.slowScale[boss]).toBe(1);
+    status.advance(1000); expect(status.save(normal, 1000)).toEqual([]); expect(status.save(elite, 1000)).toEqual([]);
+});
+
+test("restored external provenance cannot merge with a new actor reusing that handle", () => {
+    const world = new EntityWorld(2), status = new StatusSystem(world), slot = world.create(1), external = world.ids[world.create(1)], id = world.ids[slot];
+    status.apply(Kind.Slow, external, id, .5, 100, 0);
+    status.restore(slot, status.save(slot, 10), 10);
+    status.apply(Kind.Slow, external, id, .2, 200, 11);
+    const saved = status.save(slot, 11); expect(saved).toHaveLength(2);
+    status.restore(slot, saved, 11);
+    expect(new Set(status.save(slot, 11).map(entry => entry.source)).size).toBe(2);
+    status.advance(100); expect(status.slowScale[slot]).toBeCloseTo(.8);
 });

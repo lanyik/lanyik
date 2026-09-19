@@ -1,0 +1,85 @@
+.skills-window.constellation-window { width: min(1180px, calc(100vw - 40px)); max-height: none; top: 18px; bottom: 124px; border-color: #69818b; background: #0a121d; box-shadow: 0 28px 110px #000d, inset 0 0 0 1px #b8e6ff12; }
+.constellation-window .window-heading { padding: 10px 20px; background: linear-gradient(105deg, #162733, #0d1521 60%); }
+.constellation-window .skill-points { display: flex; align-items: center; gap: 9px; color: #b5d9de; }
+.constellation-window .skill-points b { color: #f8e0a0; font: 30px Georgia, serif; text-shadow: 0 0 22px #f9cf6755; }
+.constellation-window .skill-points span { font-size: 11px; }
+.school-tabs { display: flex; flex-shrink: 0; padding: 0 20px; border-bottom: 1px solid #7acfee25; background: #0b1421; gap: 4px; }
+.school-tabs button { position: relative; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 6px 18px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: #859eae; }
+.school-tabs button i { color: var(--tab-color); font-size: 23px; font-style: normal; }
+.school-tabs button small { font-size: 9px; opacity: .7; }
+.school-tabs button[aria-pressed=true] { border-bottom-color: var(--tab-color); color: #e5f8ff; background: linear-gradient(0deg, color-mix(in srgb, var(--tab-color) 13%, transparent), transparent); }
+.constellation-workspace { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 260px; }
+.constellation-stage { min-height: 0; min-width: 0; position: relative; display: flex; flex-direction: column; background: radial-gradient(ellipse at 50% 30%, color-mix(in srgb, var(--school-color) 9%, #09121d), #070d17 70%); }
+.constellation-heading { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; padding: 8px 24px; pointer-events: none; background: linear-gradient(#101c29aa, #101c2900); }
+.constellation-heading span { color: #608798; letter-spacing: 3px; font-size: 8px; }
+.constellation-heading h3 { font-size: 20px; letter-spacing: 7px; color: #d9f7ff; margin: 2px 0; font-weight: 400; text-shadow: 0 0 30px #91e4ff4a; }
+.constellation-heading p { font-size: 10px; letter-spacing: 2px; margin: 0; color: #84afbc; }
+.constellation-heading button { pointer-events: auto; color: #a4d4df; padding: 5px 10px; border-color: #34525f; background: #111d2a; font-size: 11px; }
+.constellation-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #3e6a7c #08111b; }
+.constellation-map { position: relative; width: 840px; height: 820px; isolation: isolate; }
+.constellation-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.constellation-lines path { fill: none; stroke: #2f5266; stroke-width: 1.3; }
+.constellation-lines .learned-link { stroke: var(--school-color); stroke-width: 2; filter: drop-shadow(0 0 4px var(--school-color)); }
+.constellation-lines .astral-ring { fill: none; stroke: #73aec519; stroke-width: 1; stroke-dasharray: 3 13; }
+.constellation-lines .astral-ring.outer { stroke-dasharray: 1 5; }
+.constellation-lines .astral-axis { stroke: #6fc8eb12; stroke-dasharray: 5 15; }
+.astral-star { fill: #9fe4ff; opacity: .3; }
+.constellation-label { position: absolute; top: 200px; color: #6990a2; letter-spacing: 7px; font-size: 10px; }
+.damage-path { left: 155px; }.control-path { left: 595px; }
+.constellation-node { position: absolute; transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; padding: 0; border: 1px solid #5a798c; border-radius: 50%; background: radial-gradient(#1c3446, #0c1926); color: #afcdd7; z-index: 1; overflow: visible; transition: border-color .15s, box-shadow .15s; touch-action: pan-x pan-y; }
+.constellation-node.active { width: 65px; height: 65px; border-radius: 12px; border-color: #779cb2; box-shadow: 0 0 0 5px #0b1724, 0 0 0 6px #43617655; }
+.constellation-node.active.learned { touch-action: none; }
+.constellation-node.mastery { width: 51px; height: 51px; border-radius: 5px; transform: translate(-50%, -50%) rotate(45deg); color: #d2bc88; border-color: #8b795a; }
+.constellation-node.mastery .node-emblem { transform: rotate(-45deg); }
+.constellation-node.mastery .node-name { transform: rotate(-45deg); left: 30px; top: 38px; }
+.constellation-node.mastery .node-rank { transform: rotate(-45deg); left: 51px; top: 43px; }
+.node-emblem { display: grid; place-items: center; font-size: 22px; }
+.constellation-node .skill-art { --icon-size: 57px; border: 0; background: transparent; box-shadow: none; }
+.constellation-node .item-icon-frame:before, .constellation-node .item-icon-frame:after { display: none; }
+.node-name { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%); width: 110px; white-space: nowrap; font-size: 11px; letter-spacing: 1px; text-shadow: 0 2px 5px #000; pointer-events: none; }
+.node-rank { position: absolute; top: calc(100% + 26px); left: 50%; transform: translateX(-50%); color: #e7c994; font-size: 10px; white-space: nowrap; pointer-events: none; }
+.node-rank i { font-style: normal; color: #7695a5; }
+.node-aura { position: absolute; inset: -8px; border: 1px solid transparent; border-radius: inherit; pointer-events: none; }
+.constellation-node.learned { color: #e5f8ff; border-color: var(--school-color); box-shadow: 0 0 16px color-mix(in srgb, var(--school-color) 22%, transparent), inset 0 0 12px #9cefff22; }
+.constellation-node.locked { border-color: #354955; color: #738491; background: #101b27; }
+.constellation-node.locked .skill-artwork { opacity: .4; }
+.constellation-node[aria-pressed=true] { outline: 1px solid #e7e7c6; outline-offset: 3px; box-shadow: 0 0 35px color-mix(in srgb, var(--school-color) 28%, transparent); z-index: 2; }
+.constellation-node[aria-pressed=true] .node-aura { border-color: #a2daee66; }
+.constellation-node.draft .node-aura { border-color: #f5d793; border-style: dashed; }
+.constellation-node:hover { border-color: #dcf7ff; }
+.constellation-node:focus-visible { outline: 2px solid #fff2b8; outline-offset: 5px; }
+.constellation-legend { display: flex; flex-shrink: 0; gap: 14px; padding: 9px 20px; font-size: 10px; color: #7f9aa9; border-top: 1px solid #42677a30; background: #0b1520; }
+.constellation-legend b { margin-left: auto; color: #a7bfca; font-weight: 400; }
+.constellation-details { min-height: 0; overflow-y: auto; padding: 22px 20px; border-left: 1px solid #49687c55; background: linear-gradient(150deg, #152333, #0b1420 70%); scrollbar-width: thin; }
+.node-detail-kind { display: block; font-size: 10px; letter-spacing: 3px; color: var(--school-color); margin-bottom: 17px; }
+.node-detail-icon { display: inline-block; }.node-detail-icon .skill-art { --icon-size: 68px; }
+.constellation-details h3 { margin: 14px 0 8px; font-size: 22px; font-weight: 400; letter-spacing: 2px; color: #dceef4; }
+.node-detail-rank { font-size: 14px; color: #aac2d1; }.node-detail-rank span { color: #627d91; }.node-detail-rank b { color: #f6d994; }.node-detail-rank small { color: #5e7e92; }
+.constellation-details p { color: #a7c0cf; font-size: 12px; line-height: 1.9; margin: 16px 0; }
+.node-detail-stats { margin: 12px 0; border-block: 1px solid #587c902d; padding: 9px 0; }.node-detail-stats div { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; padding: 5px 0; }.node-detail-stats dt { color: #86a4b6; }.node-detail-stats dd { margin: 0; color: #c9dee7; }
+.node-requirements { color: #d3bd8c; font-size: 11px; padding: 12px 0; line-height: 1.8; }.node-parent { background: transparent; border: 0; padding: 0; font-size: 11px; color: #9ac6dc; }
+.node-point-controls { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; text-align: center; margin: 20px 0 12px; gap: 12px; }.node-point-controls button { font-size: 22px; color: #cae5f1; background: #1e3545; border-color: #547787; }.node-point-controls span { font: 25px Georgia, serif; color: #edce92; }
+.node-drag-hint { display: block; font-size: 10px; line-height: 1.8; color: #7191a4; }
+.build-draft-summary { display: grid; gap: 8px; padding-top: 18px; margin-top: 20px; border-top: 1px solid #54768844; font-size: 11px; color: #bac6ba; }.build-draft-summary strong { font-weight: 400; letter-spacing: 2px; color: #d5be8d; }.build-draft-summary small { color: #859caa; line-height: 1.8; }
+.constellation-window .skill-loadout { padding: 12px 18px; background: #111d29; border-color: #546577; }
+.tree-build-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 13px; }.tree-build-actions > span { margin-right: auto; font-size: 11px; color: #8faabb; }.tree-build-actions button { font-size: 11px; padding: 6px 10px; }
+.tree-build-actions .apply-skill-build { color: #102330; background: linear-gradient(120deg, #9ac7d4, #d3e9e4); border-color: #d3e9e4; }.tree-build-actions .apply-skill-build:disabled { color: #8fabb7; background: #243743; border-color: #3a5362; }
+.constellation-window .loadout-slots { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; }.constellation-window .loadout-slot { padding: 8px; grid-template-columns: 40px minmax(0, 1fr); gap: 3px 6px; }.constellation-window .loadout-slot .skill-art { --icon-size: 40px; }.constellation-window .loadout-slot small { font-size: 9px; }.constellation-window .skill-slot-name { font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+.empty-skill { color: #6f8594; border-style: dashed; }.empty-skill-glyph { font-size: 25px; display: grid; place-items: center; height: 40px; grid-row: span 2; color: #4d7187; }.empty-skill > small { font-size: 9px; }
+.player-buffs:empty { display: none; }
+.combat-dock .hud-power, .combat-dock .status-bar { order: -1; }
+.combat-dock .skill-slots { order: 1; }
+.combat-dock .player-buffs { order: 2; }
+.combat-dock .player-castbar { order: 3; }
+.combat-dock .skill-slots { grid-template-columns: repeat(8, minmax(0, 1fr)); }.player-buffs { display: flex; flex-wrap: wrap; gap: 5px; grid-column: 1 / -1; }.player-buffs > span { border: 1px solid #50937877; color: #a2e1cc; background: #132d29; border-radius: 3px; font-size: 10px; padding: 3px 6px; }.player-buffs > span[data-beneficial=false] { color: #f3b5a5; border-color: #b0726b88; background: #321f29; }.player-buffs small { margin-left: 5px; opacity: .8; }
+.player-castbar { height: 20px; background: #112433; border: 1px solid #497b93; position: relative; overflow: hidden; margin-top: 7px; grid-column: 1 / -1; }.player-castbar i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, #345971, #669daf); transition: width .1s linear; }.player-castbar[data-phase=recovery] i { background: linear-gradient(90deg, #635334, #a78958); }.player-castbar span { position: relative; display: block; text-align: center; line-height: 18px; color: #e4f4f6; font-size: 10px; }
+@media (max-width: 1179px) { .skills-window.constellation-window { bottom: 88px; } }
+@media (max-width: 760px) {
+    .skills-window.constellation-window { top: 8px; width: calc(100vw - 16px); bottom: 80px; }
+    .school-tabs { padding: 0 5px; justify-content: space-between; gap: 0; }.school-tabs button { padding: 8px 9px; gap: 5px; font-size: 11px; }.school-tabs button small { display: none; }.school-tabs button i { font-size: 18px; }
+    .constellation-workspace { display: flex; flex-direction: column; overflow-y: auto; }.constellation-stage { flex: 0 0 340px; }.constellation-heading { padding: 12px 16px 4px; }.constellation-heading h3 { font-size: 20px; }.constellation-details { flex-shrink: 0; overflow: visible; border-left: 0; border-top: 1px solid #42677a66; padding: 16px; }.node-detail-icon { float: right; }.node-detail-kind { margin-bottom: 10px; }.constellation-details h3 { margin-top: 8px; }.node-detail-stats { display: grid; grid-template-columns: 1fr 1fr; column-gap: 20px; }.node-point-controls { margin: 12px 0; grid-template-columns: 50px 50px 50px; justify-content: center; }.build-draft-summary { padding-top: 10px; margin-top: 10px; }.node-drag-hint { display: none; }
+    .constellation-window .skill-loadout { padding: 10px; }.tree-build-actions { gap: 5px; margin-bottom: 10px; }.tree-build-actions > span { display: none; }.tree-build-actions .apply-skill-build { margin-left: auto; }.tree-build-actions button { padding: 5px 8px; }
+    .constellation-window .loadout-slots { gap: 5px; }.constellation-window .loadout-slot { display: flex; flex-direction: column; padding: 7px 2px 3px; min-height: 54px; }.constellation-window .loadout-slot .skill-art { --icon-size: 35px; }.constellation-window .loadout-slot .skill-slot-name { font-size: 9px; max-width: 100%; }.constellation-window .loadout-slot small { display: none; }.empty-skill-glyph { font-size: 20px; height: 28px; }.empty-skill > span:not(.empty-skill-glyph) { font-size: 9px; }
+    .combat-dock .skill-slots { grid-template-columns: repeat(4, minmax(0, 1fr)); }.combat-dock .skill-slot { min-height: 45px; }.combat-dock .skill-slot .skill-art { --icon-size: 34px; }
+}
+@media (prefers-reduced-motion: reduce) { .constellation-node, .player-castbar i { transition: none; } }

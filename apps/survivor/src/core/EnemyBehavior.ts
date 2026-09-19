@@ -45,6 +45,12 @@ export class EnemyBehavior {
             p.previousX[slot] = p.x[slot]; p.previousZ[slot] = p.z[slot];
             v.hitFlash[slot] = Math.max(0, v.hitFlash[slot] - COMBAT_STEP_MS / 1000);
             if (this.regions.residencyAt(p.x[slot], p.z[slot]) === "unloaded") { this.entities.remove(slot); continue; }
+            if (!this.entities.status.canAct(slot, tick)) {
+                // Cancel only uncommitted windups. Released projectiles and terrain effects survive.
+                if (a.kind[slot] >= ActorAction.Melee && tick <= a.hitAt[slot]) { tree.halt(this, slot, e.runningNode); this.cancel(slot); }
+                e.intent[slot] = MoveIntent.None;
+                cursor++; continue;
+            }
             const wasActive = e.active[slot], wasAwake = e.awake[slot], previousTarget = e.target[slot];
             const distance = this.distance = Math.hypot(p.x[player] - p.x[slot], p.z[player] - p.z[slot]);
             this.playerVisible = undefined;

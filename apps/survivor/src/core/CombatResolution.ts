@@ -30,14 +30,14 @@ export class CombatResolution {
                 const source = impacts.source[i];
                 if (target === player) {
                     if (this.damageImmunity <= 0 && !dashing) this.damagePlayer(source, impacts.damage[i], impacts.elite[i] !== 0, impacts.boss[i] !== 0, tick, stats, random);
-                } else this.hitEnemy(source, target, impacts.damage[i], impacts.critical[i] !== 0, tick, stats, random);
+                } else this.hitEnemy(source, target, impacts.damage[i], impacts.critical[i] !== 0, tick, stats, random, i);
                 // Loot consumes the same RNG before the next hit, preserving seeded combat order.
                 e.events.drain(consume);
             }
         } finally { impacts.count = 0; this.resolving = false; }
     }
 
-    private hitEnemy(source: number, slot: number, rolled: number, critical: boolean, tick: number, stats: DerivedStats, random: DeterministicRandom): void {
+    private hitEnemy(source: number, slot: number, rolled: number, critical: boolean, tick: number, stats: DerivedStats, random: DeterministicRandom, impact: number): void {
         const e = this.e, { enemy, action, position: p, player, world, vitality } = e;
         if (enemy.kind[slot] === EnemyKind.Guard && action.kind[slot] < ActorAction.Melee) {
             const dx = p.x[player] - p.x[slot], dz = p.z[player] - p.z[slot], distance = Math.hypot(dx, dz);
@@ -46,12 +46,18 @@ export class CombatResolution {
         const elite = enemy.elite[slot] !== 0;
         const evasion = enemy.boss[slot] ? ENEMY_HIT_RULES.evasion.boss : elite ? ENEMY_HIT_RULES.evasion.elite : ENEMY_HIT_RULES.evasion.normal;
         if (!random.chance(Math.max(0, Math.min(1, stats.accuracy - evasion)))) { this.prevent(source, slot, tick, Prevention.Dodge); return; }
+        const frozen = !e.status.canAct(slot, tick);
+        if (frozen) rolled *= e.impacts.frozenMultiplier[impact];
         const damage = outgoingDamage(stats, rolled, e.vitals.maxHealth[slot], elite, random.chance(stats.lethalChance))
             * (1 - e.status.amount(StatusKind.Protection, slot, tick));
         const target = world.ids[slot];
         const lost = vitality.damage(source, target, damage, tick, EffectCause.Attack, critical);
         vitality.heal(source, world.ids[player], lost * stats.lifesteal * (1 + stats.regenBonus), tick, EffectCause.Lifesteal);
         vitality.defeat(source, target, tick, EffectCause.Attack);
+        if (world.resolve(target) >= 0 && e.vitals.health[slot] > 0) {
+            if (frozen && e.impacts.consumeFreeze[impact]) e.status.consumeFreeze(slot, tick);
+            if (e.impacts.chill[impact] > 0) e.status.chill(source, target, e.impacts.chill[impact], tick + e.impacts.chillTicks[impact], tick, e.impacts.freezeTicks[impact]);
+        }
     }
 
     private damagePlayer(source: number, base: number, elite: boolean, boss: boolean, tick: number, stats: DerivedStats, random: DeterministicRandom): void {

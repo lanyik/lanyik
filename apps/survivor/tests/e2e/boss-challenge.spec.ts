@@ -16,7 +16,7 @@ test("draggable world nodes preview real maps; challenge progress survives leave
     await pauseCombat(page);
     await combatWorker(page).evaluate(() => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation, cp = simulation.checkpoint();
-        simulation.restore({ ...cp, nextItemId: 3, player: { ...cp.player, level: 10, inventory: [
+        simulation.restore({ ...cp, nextItemId: 3, skills: { ...cp.skills, points: 9 }, player: { ...cp.player, level: 10, inventory: [
             { id: 2, type: "scroll", value: "rift-lord", size: 2, rarity: "rainbow", name: "裂爪巢穴传送卷轴" }
         ] } });
     });

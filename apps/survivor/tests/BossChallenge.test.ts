@@ -21,7 +21,7 @@ const entities = (sim: CombatSimulation) => (sim as unknown as { entities: Comba
 function home(id: ChallengeId = "rift-lord", count = 2): CombatSimulation {
     const sim = new CombatSimulation("challenge-fixture", { x: 0, z: 0 }, EMPTY_SPIRIT_REALM, new HomesteadTerrain(), "homestead");
     const cp = sim.checkpoint();
-    sim.restore({ ...cp, nextItemId: 3, player: { ...cp.player, level: 10, inventory: [createChallengeScroll(2, id, count)] } });
+    sim.restore({ ...cp, nextItemId: 3, skills: { ...cp.skills, points: 9 }, player: { ...cp.player, level: 10, inventory: [createChallengeScroll(2, id, count)] } });
     return sim;
 }
 function restore(cp: CharacterCheckpoint): CombatSimulation {

@@ -8,6 +8,7 @@ import type { CharacterRepository } from "../src/app/CharacterRepository";
 import { LoopbackCombatTransport } from "./helpers/LoopbackCombatTransport";
 import { SKILLS } from "../src/core/Skills";
 import { EffectKind } from "../src/core/CombatEffects";
+import { nodeIndex } from "../src/core/SkillBuild";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -21,12 +22,12 @@ test("home is a finite safe map with solid buildings and boundaries", () => {
     const combat = new CombatSimulation("safe-home", { x: 0, z: 0 }, undefined, terrain, "homestead");
     const before = combat.getSnapshot().player;
     for (let i = 0; i < 600; i++) combat.step({ x: 0, z: 0, active: false });
-    combat.castSkill("frost"); combat.teleport(-1, -1);
+    combat.castSkill("pulse"); combat.teleport(-1, -1);
     const snapshot = combat.getSnapshot();
     expect(snapshot.world.location).toBe("homestead");
     expect(snapshot.livingEnemies).toBe(0); expect(snapshot.nearbyRegions).toEqual([]);
-    expect(snapshot.player).toMatchObject({ x: before.x, z: before.z, health: before.health, mana: before.mana - SKILLS.frost.mana });
-    expect(snapshot.player.skills.remaining.frost).toBeGreaterThan(0);
+    expect(snapshot.player).toMatchObject({ x: before.x, z: before.z, health: before.health, mana: before.mana - SKILLS.pulse.mana });
+    expect(snapshot.player.skills.remaining.pulse).toBeGreaterThan(0);
     combat.dispose();
 });
 
@@ -52,20 +53,25 @@ test("roundtrip rests at home and preserves wilderness position, growth, equipme
 
 test.each(["chain", "meteor", "vortex", "blades", "pulse", "frost", "ward", "dash"] as const)("home permits manual %s with costs, cooldowns and complete effect lifetime", skill => {
     const combat = new CombatSimulation("home-practice", { x: 0, z: 0 }, undefined, new HomesteadTerrain(), "homestead");
-    const state = combat.checkpoint(); combat.restore({ ...state, player: { ...state.player, level: 10 } });
+    const state = combat.checkpoint(); combat.restore({ ...state, player: { ...state.player, level: 10 }, skills: { ...state.skills, points: 9 } });
+    if (skill === "frost") {
+        const ranks = [...state.skills.ranks]; ranks[nodeIndex("icebolt")] = 3; ranks[nodeIndex("icebolt.power")] = 3; ranks[nodeIndex("frost")] = 1;
+        combat.commitSkillBuild(ranks, 0);
+    }
     combat.equipSkill(skill, 0);
     const before = combat.getSnapshot().player, discovery = combat.explorationSnapshot;
     combat.castSkill(skill);
     expect(combat.getSnapshot().player.mana).toBe(before.mana - SKILLS[skill].mana);
     expect(combat.getSnapshot().player.skills.remaining[skill]).toBeGreaterThan(0);
-    expect(combat.getRenderState().effects.count).toBeGreaterThan(0);
-    let impact = false;
+    let impact = false, visible = combat.getRenderState().effects.count > 0;
     for (let tick = 0; tick < 960; tick++) {
         combat.step({ x: 0, z: 0, active: false });
         const effects = combat.getRenderState().effects;
+        visible ||= effects.count > 0;
         if (Array.from(effects.kind.subarray(0, effects.count)).includes(EffectKind.MeteorImpact)) impact = true;
     }
     if (skill === "meteor") expect(impact).toBe(true);
+    expect(visible).toBe(true);
     expect(combat.getRenderState().effects.count).toBe(0);
     expect(combat.getSnapshot().livingEnemies).toBe(0);
     expect(combat.explorationSnapshot).toBe(discovery);

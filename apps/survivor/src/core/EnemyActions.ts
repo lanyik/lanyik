@@ -50,6 +50,7 @@ export function advanceEnemyActions(entities: CombatWorld, tick: number): void {
     for (let cursor = 0; cursor < enemies.count; cursor++) {
         const slot = enemies.slots[cursor], kind = a.kind[slot];
         if (kind < ActorAction.Melee || !e.active[slot]) continue;
+        if (!status.canAct(slot, tick) && (tick <= a.hitAt[slot] || kind === ActorAction.Charge)) continue;
         a.progress[slot] = tick < a.hitAt[slot]
             ? .5 * (tick - a.started[slot]) / (a.hitAt[slot] - a.started[slot])
             : .5 + .5 * (tick - a.hitAt[slot]) / (a.endsAt[slot] - a.hitAt[slot]);

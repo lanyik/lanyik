@@ -9,6 +9,7 @@ import { RegionalWorld } from "../src/core/RegionalWorld";
 import { SkillSystem } from "../src/core/SkillSystem";
 import { CombatSimulation } from "../src/core/CombatSimulation";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
+import { initialSkillRanks, nodeIndex } from "../src/core/SkillBuild";
 
 const regions = new RegionalWorld("attack-cover", { x: 0, z: 0 }); regions.synchronize(0, 0);
 // Infinite vertical wall at x=2. Navigation and attack obstruction are deliberately separate contracts.
@@ -99,8 +100,14 @@ test("healers cannot select an injured ally through solid cover", () => {
 test.each(["pulse", "frost", "chain"] as const)("%s excludes occluded targets, including chain jumps", id => {
     const { e, spawn } = arena(), blocked = spawn(2.6), visible = spawn(-2.8), skills = new SkillSystem(e);
     const simulation = new CombatSimulation("skill-reference"), stats = simulation.getSnapshot().player.stats; simulation.dispose();
-    e.vitals.mana[e.player] = 100;
-    expect(skills.cast(id, 1, stats, 1, new DeterministicRandom(1))).toBe(true);
+    e.vitals.mana[e.player] = 100; e.vitals.health[e.player] = stats.maxHealth;
+    if (id === "frost") {
+        const ranks = initialSkillRanks(); ranks[nodeIndex("icebolt")] = 3; ranks[nodeIndex("icebolt.power")] = 3; ranks[nodeIndex("frost")] = 1;
+        skills.points = 7; expect(skills.commitBuild(ranks, 0, 8, false, 0)).toBeNull(); expect(skills.equip(id, 0, 8)).toBe(true);
+    }
+    const random = new DeterministicRandom(1);
+    expect(skills.cast(id, 1, stats, 8, random)).toBe(true);
+    skills.advanceCasting(31, random, false, () => {});
     expect(Array.from(e.impacts.target.slice(0, e.impacts.count))).toEqual([e.world.ids[visible]]);
     expect(e.status.slowUntil[blocked]).toBe(0);
 });

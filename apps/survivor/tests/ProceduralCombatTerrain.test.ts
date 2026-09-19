@@ -73,4 +73,7 @@ test("terrain cache has a fixed cap and regenerated negative chunks give identic
     for (let i = 0; i < 106; i++) terrain.isClear(i * 12 + 3, 2, .3);
     expect(terrain.cachedChunks).toBeLessThanOrEqual(WORLD_VIEW.navigationChunks);
     expect(terrain.isClear(-12.25, -12.25, .3)).toBe(first); terrain.dispose();
+    expect(terrain.cachedChunks).toBe(0);
+    expect(terrain.isClear(-12.25, -12.25, .3)).toBe(first);
+    expect(terrain.cachedChunks).toBe(4); terrain.dispose(); // Radius .3 crosses both chunk boundaries at -12.
 });

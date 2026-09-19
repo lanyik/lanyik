@@ -80,7 +80,7 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
     const { enemies, enemy: e, position: p, action: a, world, player, status } = entities;
     for (let cursor = 0; cursor < enemies.count; cursor++) {
         const slot = enemies.slots[cursor], intent = e.intent[slot];
-        if (intent === MoveIntent.None) continue;
+        if (intent === MoveIntent.None || !status.canMove(slot, tick)) continue;
         let dx = (intent === MoveIntent.Patrol ? e.patrolX[slot] : intent === MoveIntent.Return ? e.homeX[slot] : p.x[player]) - p.x[slot];
         let dz = (intent === MoveIntent.Patrol ? e.patrolZ[slot] : intent === MoveIntent.Return ? e.homeZ[slot] : p.z[player]) - p.z[slot];
         const distance = Math.hypot(dx, dz);

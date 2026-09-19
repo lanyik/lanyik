@@ -124,7 +124,7 @@ describe("CombatSimulation", () => {
             const dz = targetZ === undefined ? Math.sin(angle) : targetZ - render.player.z;
             combat.step({ x: dx, z: dz, active: true });
             const snapshot = combat.getSnapshot();
-            if (snapshot.player.level > 1 && snapshot.player.inventory.length > 0) break;
+            if (snapshot.player.level > 1 && snapshot.player.inventory.some(item => item.type === "equipment")) break;
         }
 
         const before = combat.getSnapshot();
@@ -212,6 +212,7 @@ describe("CombatSimulation", () => {
         const combat = new CombatSimulation("lod-motion");
         let lowUpdates = 0;
         let staticChecks = 0;
+        let largestDistantStep = 0;
         for (let tick = 0; tick < ticksForSeconds(5); tick += 1) {
             const before = enemySamples(combat.getRenderState());
             const positions = new Map(Array.from({ length: before.length }, (_, index) =>
@@ -224,17 +225,17 @@ describe("CombatSimulation", () => {
                 if (!previous) continue;
                 const distance = Math.hypot(previous.x - player.x, previous.z - player.z);
                 if (distance > GAME_CONFIG.enemies.sleepDistance) {
-                    expect(after[index].x).toBe(previous.x);
-                    expect(after[index].z).toBe(previous.z);
+                    if (after[index].x !== previous.x || after[index].z !== previous.z) throw new Error(`Sleeping actor ${after[index].id} moved at tick ${tick}`);
                     staticChecks += 1;
                 }
                 if (distance > 22 && distance < 29 && (after[index].x !== previous.x || after[index].z !== previous.z)) {
-                    expect(Math.hypot(after[index].x - previous.x, after[index].z - previous.z)).toBeLessThan(.03);
+                    largestDistantStep = Math.max(largestDistantStep, Math.hypot(after[index].x - previous.x, after[index].z - previous.z));
                     lowUpdates += 1;
                 }
             }
         }
         expect(staticChecks).toBeGreaterThan(100);
         expect(lowUpdates).toBeGreaterThan(0);
+        expect(largestDistantStep).toBeLessThan(.03);
     });
 });

@@ -1,0 +1,46 @@
+{
+  "url": "http://127.0.0.1:4174",
+  "inventoryItems": 80,
+  "closed": {
+    "frames": 152,
+    "p95Ms": 16.700000000000728,
+    "taskMs": 510.212,
+    "layoutMs": 0.435,
+    "styleMs": 0.342,
+    "domNodes": 647
+  },
+  "open": {
+    "frames": 144,
+    "p95Ms": 16.799999999999272,
+    "taskMs": 505.729,
+    "layoutMs": 0,
+    "styleMs": 0.1330000000000003,
+    "domNodes": 1566
+  },
+  "mountedCells": 24,
+  "forge": {
+    "frames": 149,
+    "p95Ms": 16.700000000000728,
+    "taskMs": 494.9779999999999,
+    "layoutMs": 0,
+    "styleMs": 0.7119999999999991,
+    "domNodes": 2234
+  },
+  "mountedForge": 16,
+  "skills": {
+    "frames": 145,
+    "p95Ms": 16.799999999999272,
+    "taskMs": 500.4719999999998,
+    "layoutMs": 0,
+    "styleMs": 0.46000000000000035,
+    "domNodes": 3082
+  },
+  "mountedSkillNodes": 34,
+  "context": {
+    "date": "2026-09-19",
+    "browser": "Chromium / ANGLE D3D11",
+    "viewport": "1280x720",
+    "secondsPerScenario": 2.5,
+    "simulation": "paused real Worker; includes background world rendering; not a sustained combat FPS claim"
+  }
+}

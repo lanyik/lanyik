@@ -17,7 +17,7 @@ function share<T>(previous: T | undefined, next: T): T {
 export function shareSnapshot(previous: CombatSnapshot | undefined, next: CombatSnapshot): CombatSnapshot {
     if (!previous) return next;
     const player = { ...next.player };
-    for (const key of ["inventory", "equipment", "attributes", "stats", "orbs", "autoRecycle", "recycled", "spiritRealm", "orbResonance"] as const) {
+    for (const key of ["inventory", "equipment", "attributes", "stats", "orbs", "autoRecycle", "recycled", "spiritRealm", "orbResonance", "skills"] as const) {
         Object.assign(player, { [key]: share(previous.player[key], player[key]) });
     }
     return { ...next, player };

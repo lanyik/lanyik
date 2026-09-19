@@ -3,7 +3,9 @@ import type { PlayerSnapshot } from "./CombatState";
 import { GAME_CONFIG } from "./GameConfig";
 import { POTION_RARITIES, POTION_TYPES, type InventoryItem } from "./InventoryItem";
 import { RARITIES } from "./Loot";
-import { SKILL_IDS } from "./Skills";
+import { SKILL_IDS, SKILLS, isUltimate, type SkillId } from "./Skills";
+import { investedPoints, nodeIndex, validateSkillRanks } from "./SkillBuild";
+import { STATUS_DEFINITIONS } from "./StatusSystem";
 import type { SkillCheckpoint } from "./SkillSystem";
 import { validateSpiritRealm } from "./SpiritRealm";
 import { validateExploration, type ExplorationSnapshot } from "./Exploration";
@@ -12,7 +14,7 @@ import { CHALLENGE_IDS, CHALLENGE_ARENA, ChallengeTerrain, challengeSpawns, isCh
 import { ENEMY_DEFINITIONS, enemyStats } from "./EnemyDefinitions";
 
 export interface CharacterCheckpoint {
-    readonly version: 5;
+    readonly version: 6;
     readonly characterId: string;
     readonly challengeRevision: number;
     readonly challenges: ChallengeProgressMap;
@@ -59,7 +61,7 @@ function assertItem(item: InventoryItem): void {
 
 /** Reject invalid/currently unsupported saves before changing a running character. No migration. */
 export function validateCharacterCheckpoint(value: CharacterCheckpoint): CharacterCheckpoint {
-    if (!value || value.version !== 5) throw new Error("角色存档版本与当前游戏不一致");
+    if (!value || value.version !== 6) throw new Error("角色存档版本与当前游戏不一致");
     if (typeof value.characterId !== "string" || !value.characterId.length || value.characterId.length > 128 || !integer(value.challengeRevision)
         || !integer(value.teleportReadyAt) || value.teleportReadyAt > value.tick + GAME_CONFIG.timing.simulationHz * 5) throw new Error("角色传送进度无效");
     if ((!isChallenge(value.location) && !["wilds", "homestead"].includes(value.location)) || !value.wildsPosition
@@ -110,9 +112,17 @@ export function validateCharacterCheckpoint(value: CharacterCheckpoint): Charact
         || Object.entries(p.equipment).some(([slot, item]) => item && (item.type !== "equipment" || item.value !== slot))
         || p.orbs.some(item => item && item.type !== "orb")
         || Object.entries(GAME_CONFIG.inventory).some(([type, rule]) => p.inventory.filter(item => item.type === type).length > rule.capacity)) throw new Error("角色物品位置或数量无效");
-    if (!integer(s.points) || !Array.isArray(s.loadout) || s.loadout.length !== GAME_CONFIG.skills.slots || new Set(s.loadout).size !== s.loadout.length
-        || s.loadout.some(id => !SKILL_IDS.includes(id)) || !Array.isArray(s.ranks) || !Array.isArray(s.readyAt)
-        || s.ranks.length !== SKILL_IDS.length || s.readyAt.length !== SKILL_IDS.length || s.ranks.some(rank => !integer(rank, 1) || rank > GAME_CONFIG.skills.maxRank)
-        || s.readyAt.some(tick => !finite(tick)) || !finite(s.ward) || !finite(s.wardUntil) || !finite(s.dashUntil) || !Number.isFinite(s.dashX) || !Number.isFinite(s.dashZ)) throw new Error("角色技能存档无效");
+    if (!integer(s.points) || !integer(s.revision) || validateSkillRanks(s.ranks, p.level) || s.points + investedPoints(s.ranks) !== p.level - 1
+        || !Array.isArray(s.loadout) || s.loadout.length !== GAME_CONFIG.skills.slots
+        || new Set(s.loadout.filter(id => id !== null)).size !== s.loadout.filter(id => id !== null).length
+        || s.loadout.some((id: SkillId | null) => id !== null && (!SKILL_IDS.includes(id) || s.ranks[nodeIndex(id)] === 0 || p.level < SKILLS[id].unlock))
+        || s.loadout.filter(id => id && isUltimate(id)).length > 1 || !Array.isArray(s.readyAt) || s.readyAt.length !== SKILL_IDS.length
+        || s.readyAt.some(tick => !integer(tick)) || !integer(s.recoveryUntil) || s.recoveryUntil > value.tick + 600
+        || !finite(s.dashUntil) || !Number.isFinite(s.dashX) || !Number.isFinite(s.dashZ)) throw new Error("角色技能存档无效");
+    if (!Array.isArray(s.statuses) || s.statuses.length > 15 || s.statuses.some(entry => !entry || !integer(entry.kind)
+        || !STATUS_DEFINITIONS[entry.kind] || !Number.isSafeInteger(entry.source) || entry.source === 0 || !finite(entry.amount, Number.MIN_VALUE)
+        || entry.amount > STATUS_DEFINITIONS[entry.kind].maximum || !integer(entry.remaining, 1) || entry.remaining > 7200)
+        || new Set(s.statuses.map(entry => `${entry.kind}:${entry.source}`)).size !== s.statuses.length
+        || STATUS_DEFINITIONS.some((def, kind) => s.statuses.filter(entry => entry.kind === kind).length > def.sources)) throw new Error("角色状态存档无效");
     return value;
 }

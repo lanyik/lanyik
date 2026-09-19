@@ -18,7 +18,7 @@ export function SkillDragProvider({ player, disabled, dispatch, children }: {
     readonly dispatch: (command: CombatCommand) => void; readonly children: ReactNode;
 }) {
     const drag = useSlotDrag<SkillId>({ attribute: "skill", slots: GAME_CONFIG.skills.slots, disabled: disabled || !player,
-        canEquip: id => !!player && player.level >= SKILLS[id].unlock,
+        canEquip: id => !!player && player.level >= SKILLS[id].unlock && player.skills.ranks[id] > 0,
         equip: (skill, slot) => dispatch({ type: "equip-skill", skill, slot }), name: id => SKILLS[id].name });
     return <Context.Provider value={drag}>{children}<span className="sr-only" role="status" aria-live="polite">{drag.announcement}</span>
         {drag.dragging && createPortal(<div className="skill-drag-ghost" ref={drag.ghost} style={{ transform: `translate(${drag.position.x + 14}px, ${drag.position.y + 14}px)` }}>

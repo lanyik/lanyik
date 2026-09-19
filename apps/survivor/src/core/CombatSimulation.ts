@@ -38,7 +38,7 @@ import { PlayerAutoCombat } from "./PlayerAutoCombat";
 import type { ProjectileExecutor } from "./ProjectileBatch";
 import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSystems";
 import { SkillSystem } from "./SkillSystem";
-import { SKILLS, type SkillId } from "./Skills";
+import { mobileCast, type SkillId } from "./Skills";
 import { validateCharacterCheckpoint, type CharacterCheckpoint } from "./CharacterCheckpoint";
 import { MAX_PROJECTILES, CONSUMABLE_COOLDOWN } from "./GameConfig";
 import type { CombatRenderState, CombatSnapshot, CombatNotice, PlayerSnapshot, PlayerRenderState, MovementInput, ChestRenderBuffer } from "./CombatState";
@@ -200,7 +200,7 @@ export class CombatSimulation {
         if ((this.gameOverValue && !recoverDefeat) || this.closed || this.awaitingQueries) throw new Error("当前角色状态不可保存");
         const { stats: _stats, skills: _skills, battlePower: _power, equipmentPower: _equipmentPower, lootProfile: _loot, orbResonance: _resonance, experienceToLevel: _nextLevel, ...player } = this.getSnapshot().player;
         const wildsPosition = this.location === "wilds" ? { x: this.playerX, z: this.playerZ } : { ...this.wildsPosition };
-        const travelling = destination !== this.location, skills = this.skills.checkpoint();
+        const travelling = destination !== this.location, skills = this.skills.checkpoint(this.tickValue);
         let challenges = this.captureChallenges(), inventory = player.inventory, challengeRevision = this.challengeRevisionValue;
         if (travelling && isChallenge(destination) && (!challenges[destination] || challenges[destination]!.claimed)) {
             const scroll = inventory.find(item => item.type === "scroll" && item.value === destination);
@@ -223,7 +223,7 @@ export class CombatSimulation {
         }
         const recovering = recoverDefeat && this.gameOverValue;
         if (recovering) { position = CHALLENGE_SPAWN; challengeRevision++; }
-        return validateCharacterCheckpoint({ version: 5, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
+        return validateCharacterCheckpoint({ version: 6, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
             location: destination, wildsPosition, exploration: this.exploration.snapshot,
             player: travelling || point || recovering ? { ...player, inventory, ...position, ...(destination === "homestead" || recovering ? { health: this.stats.maxHealth, mana: this.stats.maxMana } : {}) } : player,
             tick: this.tickValue, kills: this.rewards.kills, openedChests: this.openedChests, nextItemId: this.rewards.nextItemId, random: this.random.state,
@@ -317,7 +317,12 @@ export class CombatSimulation {
         this.potionCooldown = Math.max(0, this.potionCooldown - STEP_SECONDS);
         this.entities.effects.advance(this.tickValue); this.entities.combatText.advance(this.tickValue);
         const movement = this.autoCombat.update(input, this.tickValue, this.stats, this.movementX, this.movementZ);
-        if (!this.skills.advance(this.tickValue)) this.movePlayer(movement);
+        this.skills.advanceCasting(this.tickValue, this.random, movement.active && (input.active && !this.skills.mobile || this.autoCombat.activity === "evade"), this.settleOngoing);
+        if (this.gameOverValue) return executor ? Promise.resolve() : undefined;
+        if (!this.skills.advance(this.tickValue)) {
+            if (this.skills.winding(this.tickValue) && !this.skills.mobile || !this.entities.status.canMove(this.entities.player, this.tickValue)) this.movementX = this.movementZ = 0;
+            else this.movePlayer(movement);
+        }
         if (this.location === "homestead") {
             this.skills.advanceOngoing(this.tickValue, this.random, this.settleOngoing);
             if (this.tickValue % REGENERATION_TICKS === 0) this.mana = Math.min(this.stats.maxMana, this.mana + this.stats.manaRegen);
@@ -352,10 +357,9 @@ export class CombatSimulation {
         this.resolveImpacts();
         if (this.gameOverValue) return;
         this.skills.advanceOngoing(this.tickValue, this.random, this.settleOngoing);
-        if (this.autoCast && this.tickValue % AUTO_SKILL_TICKS === 0) {
+        if (this.autoCast && !this.skills.busy(this.tickValue) && this.autoCombat.activity !== "evade" && this.tickValue % AUTO_SKILL_TICKS === 0) {
             for (const id of this.skills.loadout) {
-                this.skills.cast(id, this.tickValue, this.stats, this.level, this.random, true);
-                this.resolveImpacts();
+                if (id && (mobileCast(id) || Math.hypot(this.movementX, this.movementZ) < .05) && this.skills.cast(id, this.tickValue, this.stats, this.level, this.random, true)) { this.resolveImpacts(); break; }
             }
         }
         this.behavior.update(this.tickValue);
@@ -632,10 +636,10 @@ export class CombatSimulation {
         if (!this.gameOverValue && this.skills.equip(id, slot, this.level)) this.markChanged();
     }
 
-    public upgradeSkill(id: SkillId): void {
-        if (!this.gameOverValue && this.skills.upgrade(id, this.level)) {
-            this.pushNotice("info", `${SKILLS[id].name}已强化`); this.markChanged();
-        }
+    public commitSkillBuild(ranks: readonly number[], revision: number): void {
+        if (this.gameOverValue) return;
+        const reason = this.skills.commitBuild(ranks, revision, this.level, this.location === "homestead", this.tickValue);
+        this.pushNotice(reason ? "danger" : "info", reason ?? "技能构筑已应用"); this.markChanged();
     }
 
     public useConsumable(effect: ConsumableEffect, itemId?: number): void {
@@ -656,7 +660,7 @@ export class CombatSimulation {
 
     private movePlayer(input: MovementInput): void {
         const length = Math.max(1, Math.hypot(input.x, input.z));
-        const speed = input.active ? this.stats.moveSpeed / length : 0;
+        const speed = input.active ? this.stats.moveSpeed * this.entities.status.slowScale[this.entities.player] / length : 0;
         const response = 1 - Math.exp(-36 * STEP_SECONDS);
         this.movementX += (input.x * speed - this.movementX) * response;
         this.movementZ += (input.z * speed - this.movementZ) * response;
@@ -775,6 +779,7 @@ export class CombatSimulation {
 
     private fireWeapon(): void {
         this.attackCooldown -= STEP_SECONDS;
+        if (this.skills.busy(this.tickValue) || !this.entities.status.canAct(this.entities.player, this.tickValue)) return;
         if (this.attackCooldown > 0 || this.entities.projectiles.count === MAX_PROJECTILES) return;
         let target = -1;
         let nearest = this.stats.attackRange * this.stats.attackRange;

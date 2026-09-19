@@ -44,5 +44,7 @@ try {
     const open = await sample(), mountedCells = await page.locator('[data-testid="inventory-item"]').count();
     await page.keyboard.press("KeyJ"); await page.locator(".craft-window").waitFor();
     const forge = await sample(), mountedForge = await page.locator(".craft-cell").count();
-    console.log(JSON.stringify({ url, inventoryItems: 80, closed, open, mountedCells, forge, mountedForge }, null, 2));
+    await page.keyboard.press("KeyK"); await page.locator(".skills-window").waitFor();
+    const skills = await sample(), mountedSkillNodes = await page.locator(".constellation-node").count();
+    console.log(JSON.stringify({ url, inventoryItems: 80, closed, open, mountedCells, forge, mountedForge, skills, mountedSkillNodes }, null, 2));
 } finally { await browser.close(); }

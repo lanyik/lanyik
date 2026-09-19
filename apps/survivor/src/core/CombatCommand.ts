@@ -15,7 +15,7 @@ export type CombatCommand =
     | { readonly type: "remove-orb"; readonly socket: number }
     | { readonly type: "cast-skill"; readonly skill: SkillId }
     | { readonly type: "equip-skill"; readonly skill: SkillId; readonly slot: number }
-    | { readonly type: "upgrade-skill"; readonly skill: SkillId }
+    | { readonly type: "commit-skill-build"; readonly ranks: readonly number[]; readonly revision: number }
     | { readonly type: "toggle-autocast" }
     | { readonly type: "toggle-auto-combat" }
     | { readonly type: "use-consumable"; readonly effect: ConsumableEffect; readonly itemId?: number }
@@ -37,7 +37,7 @@ export function applyCombatCommand(simulation: CombatSimulation, command: Combat
         case "remove-orb": simulation.removeOrb(command.socket); break;
         case "cast-skill": simulation.castSkill(command.skill); break;
         case "equip-skill": simulation.equipSkill(command.skill, command.slot); break;
-        case "upgrade-skill": simulation.upgradeSkill(command.skill); break;
+        case "commit-skill-build": simulation.commitSkillBuild(command.ranks, command.revision); break;
         case "toggle-autocast": simulation.toggleAutoCast(); break;
         case "toggle-auto-combat": simulation.toggleAutoCombat(); break;
         case "use-consumable": simulation.useConsumable(command.effect, command.itemId); break;

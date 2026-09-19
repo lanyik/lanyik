@@ -18,6 +18,7 @@ export class AutoCombatThreats {
     private tick = 0;
     private readonly pathX = new Float64Array(STEPS + 1);
     private readonly pathZ = new Float64Array(STEPS + 1);
+    private readonly pathHeight = new Float64Array(STEPS + 1);
     private readonly blade = new Float64Array(4);
     private readonly beforeBlade = new Float64Array(4);
     private readonly boltX = new Float64Array(BOLTS * (STEPS + 1));
@@ -127,6 +128,7 @@ export class AutoCombatThreats {
         if (!this.count && !this.bolts) return 0;
         const e = this.entities, p = e.position;
         this.pathX[0] = p.x[e.player]; this.pathZ[0] = p.z[e.player];
+        this.pathHeight.fill(NaN);
         const length = Math.hypot(dx, dz), moveUntil = length ? travel / (speed * length) : 0;
         for (let step = 1; step <= STEPS; step++) {
             const active = Math.max(0, Math.min(STEP, moveUntil - (step - 1) * STEP));
@@ -151,13 +153,19 @@ export class AutoCombatThreats {
             for (let step = Math.floor(start / STEP); step < STEPS && step * STEP < end; step++) {
                 const from = Math.max(start, step * STEP), to = Math.min(end, (step + 1) * STEP);
                 if (to <= from) continue;
-                const ax = this.xAt(from), az = this.zAt(from), bx = this.xAt(to), bz = this.zAt(to);
+                // Most segments align with the shared forecast grid; only clipped endpoints
+                // need interpolation. Avoid four repeated divisions/floors per bolt and step.
+                const wholeStart = from === step * STEP, wholeEnd = to === (step + 1) * STEP;
+                const ax = wholeStart ? this.pathX[step] : this.xAt(from), az = wholeStart ? this.pathZ[step] : this.zAt(from);
+                const bx = wholeEnd ? this.pathX[step + 1] : this.xAt(to), bz = wholeEnd ? this.pathZ[step + 1] : this.zAt(to);
                 const radial = segmentCircleHit(this.boltX[base + step] - ax, this.boltZ[base + step] - az,
                     this.boltX[base + step + 1] - bx, this.boltZ[base + step + 1] - bz, 0, 0, PLAYER_RADIUS + this.radii[bolt] + MARGIN);
                 if (radial === Infinity) continue;
                 const radius = this.radii[bolt];
-                const hit = segmentCylinderHit(this.boltX[base + step] - ax, this.boltY[base + step] - e.terrain.height(ax, az), this.boltZ[base + step] - az,
-                    this.boltX[base + step + 1] - bx, this.boltY[base + step + 1] - e.terrain.height(bx, bz), this.boltZ[base + step + 1] - bz,
+                const groundA = wholeStart ? this.groundAt(step) : e.terrain.height(ax, az);
+                const groundB = wholeEnd ? this.groundAt(step + 1) : e.terrain.height(bx, bz);
+                const hit = segmentCylinderHit(this.boltX[base + step] - ax, this.boltY[base + step] - groundA, this.boltZ[base + step] - az,
+                    this.boltX[base + step + 1] - bx, this.boltY[base + step + 1] - groundB, this.boltZ[base + step + 1] - bz,
                     0, 0, -radius, e.bodyHeight(e.player) + radius, PLAYER_RADIUS + radius + MARGIN);
                 if (hit === Infinity) continue;
                 risk += 1 / (.25 + from + (to - from) * hit);
@@ -168,6 +176,9 @@ export class AutoCombatThreats {
         return risk;
     }
 
+    private groundAt(step: number): number {
+        return Number.isNaN(this.pathHeight[step]) ? this.pathHeight[step] = this.entities.terrain.height(this.pathX[step], this.pathZ[step]) : this.pathHeight[step];
+    }
     private xAt(time: number): number { return this.at(this.pathX, time); }
     private zAt(time: number): number { return this.at(this.pathZ, time); }
     private at(path: Float64Array, time: number): number {

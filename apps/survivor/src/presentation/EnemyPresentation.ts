@@ -113,7 +113,7 @@ export class EnemyPresentation {
     public begin(facts: EffectBuffer, seconds: number, height: Height, x: number, z: number): void {
         this.reset(); this.originX = x; this.originZ = z; this.seconds = seconds;
         for (let i = 0; i < facts.count; i++) {
-            const kind = facts.kind[i]; if (kind < EffectKind.Heal) continue;
+            const kind = facts.kind[i]; if (kind < EffectKind.Heal || kind > EffectKind.EnemyQuake) continue;
             const age = seconds - facts.started[i] / GAME_CONFIG.timing.simulationHz;
             if (age < 0 || seconds * GAME_CONFIG.timing.simulationHz >= facts.endsAt[i]) continue;
             const x = facts.x[i], z = facts.z[i], heading = Math.atan2(facts.endX[i] - x, facts.endZ[i] - z);

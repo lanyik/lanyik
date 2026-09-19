@@ -87,6 +87,6 @@ test("shared protection applies before barrier absorption and an active barrier 
     const saved = simulation.checkpoint(), restored = new CombatSimulation("settlement-events");
     restored.restore(saved);
     expect(restored.getSnapshot().player.skills.ward).toBe(13);
-    expect(restored.checkpoint().skills.wardUntil).toBe(100);
+    expect(restored.checkpoint().skills.statuses.find(status => status.kind === StatusKind.Barrier)?.remaining).toBe(100);
     simulation.dispose(); restored.dispose();
 });

@@ -7,7 +7,7 @@ export const GAME_CONFIG = Object.freeze({
         awakeDistance: WORLD_VIEW.awakeRadius, sleepDistance: WORLD_VIEW.sleepRadius, patrolSpeed: .45, patrolRadius: 2.5 }),
     timing: Object.freeze({ simulationHz: 120, activeAiHz: 30, distantAiHz: 5, regenerationHz: 2,
         snapshotHz: 10, supportSenseHz: 5, autoSkillHz: 10, diagnosticsMs: 1000, maxCatchUpMs: 250 }),
-    skills: Object.freeze({ slots: 4, maxRank: 5, pointsPerLevel: 1, maxEffects: 128 }),
+    skills: Object.freeze({ slots: 6, pointsPerLevel: 1, maxEffects: 128 }),
     spiritRealm: Object.freeze({ soulsPerLevel: 1000 }),
     presentation: Object.freeze({ effectInstances: 4096, mistInnerRadius: WORLD_VIEW.mistInner, mistDenseRadius: WORLD_VIEW.mistDense,
         mistFadeRadius: WORLD_VIEW.mistFade, mistOuterRadius: WORLD_VIEW.mistOuter,

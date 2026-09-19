@@ -13,6 +13,18 @@ import { ticksForSeconds } from "../src/core/GameConfig";
 const rest = { x: 0, z: 0, active: false };
 const stats = deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, sumEquipment({}));
 const region = new RegionalWorld("avoidance", { x: 0, z: 0 }).regionAt(0, 0);
+
+test("forecast endpoint reuse retains grazing contact and resets when a projectile slot is reused", () => {
+    const e = new CombatWorld(0, 0), threats = new AutoCombatThreats(e);
+    const spawn = (z: number) => {
+        e.spawnProjectile(0, Faction.Enemy, -4, z, 5, 0, 1, 2, { height: .8 });
+        const slot = e.hostileProjectiles.slots[0]; e.position.radius[slot] = .2; return slot;
+    };
+    const first = spawn(.619); threats.sense(1);
+    expect(threats.risk(0, 0, 5, 0, 0, 0)).toBeGreaterThan(0); // .3 body + .2 projectile + .12 margin.
+    e.remove(first); spawn(.621); threats.sense(2);
+    expect(threats.risk(0, 0, 5, 0, 0, 0)).toBe(0);
+});
 const attacks = [
     { kind: ActorAction.Melee, distance: 1, windup: .36, duration: .64 },
     { kind: ActorAction.Charge, distance: 5, ...ENEMY_SPECIAL.charge },

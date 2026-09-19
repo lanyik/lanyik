@@ -11,6 +11,10 @@ const baselinePath = args.find(arg => arg.startsWith("--baseline="))?.slice("--b
 const bundle = await build({ stdin: { contents: `
     export { CombatSimulation } from './apps/survivor/src/core/CombatSimulation';
     export { CombatWorld, Faction, ActorAction } from './apps/survivor/src/core/CombatWorld';
+    export { FrostCasting } from './apps/survivor/src/core/FrostCasting';
+    export { CombatResolution } from './apps/survivor/src/core/CombatResolution';
+    export { StatusKind } from './apps/survivor/src/core/StatusSystem';
+    export { skillValues } from './apps/survivor/src/core/Skills';
     export { PlayerAutoCombat } from './apps/survivor/src/core/PlayerAutoCombat';
     export { EnemyKind } from './apps/survivor/src/core/EnemyDefinitions';
     export { deriveStats } from './apps/survivor/src/core/CombatStats';
@@ -68,6 +72,37 @@ function crowded() {
     const elapsed = performance.now() - started;
     assert.equal(entities.enemies.count, current.MAX_ENEMIES); assert.equal(entities.projectiles.count, 128);
     return { msPerTick: elapsed / ticks, ticks, enemies: current.MAX_ENEMIES, projectiles: 128 };
+}
+
+function iceEffects() {
+    const e = new current.CombatWorld(0, 0), regions = new current.RegionalWorld("ice-budget", { x: 0, z: 0 });
+    regions.synchronize(0, 0);
+    const home = regions.chunks.get("0,0"), region = regions.regionAt(0, 0), source = e.world.ids[e.player];
+    const stats = current.deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, current.sumEquipment({}));
+    e.vitals.health[e.player] = stats.maxHealth;
+    for (let i = 0; i < current.MAX_ENEMIES; i++) {
+        const angle = i * Math.PI * 2 / current.MAX_ENEMIES;
+        const slot = e.spawnEnemy({ x: Math.sin(angle) * 2, z: Math.cos(angle) * 2, kind: 0, level: 1, elite: false, boss: false, region }, home);
+        e.vitals.health[slot] = e.vitals.maxHealth[slot] = 1e6;
+        // Four independently expiring sources and a synchronized hard-control expiry.
+        for (let j = 0; j < 4; j++) e.status.apply(current.StatusKind.Slow, source + j, e.world.ids[slot], .1 + j * .1, 100 + j * 30, 0);
+        e.status.apply(current.StatusKind.Frozen, source, e.world.ids[slot], 1, 120, 0);
+    }
+    const frost = new current.FrostCasting(e), resolution = new current.CombatResolution(e), random = new current.DeterministicRandom("ice-budget");
+    for (const id of ["icestorm", "blizzard"]) frost.release(id, 0, stats, current.skillValues(id, 1, stats), 0, 0, 0, random);
+    const timings = [], ticks = 480; let hits = 0;
+    const consume = () => {};
+    const settle = () => { hits += e.impacts.count; resolution.resolve(tick, stats, random, false, consume); };
+    let tick = 0;
+    const started = performance.now();
+    for (tick = 1; tick <= ticks; tick++) {
+        const before = performance.now(); e.status.advance(tick); frost.advance(tick, random, settle);
+        timings.push(performance.now() - before);
+    }
+    const elapsed = performance.now() - started; timings.sort((a, b) => a - b);
+    assert.equal(hits, current.MAX_ENEMIES * 16); assert.equal(frost.ongoing, false); assert.equal(e.enemies.count, current.MAX_ENEMIES);
+    return { msPerTick: elapsed / ticks, ticks, enemies: current.MAX_ENEMIES, initialStatusInstances: current.MAX_ENEMIES * 5, hits,
+        p95TickMs: timings[Math.floor(ticks * .95)], p99TickMs: timings[Math.floor(ticks * .99)], maxTickMs: timings.at(-1) };
 }
 
 function measure(run, budgetMs, unit = "Tick") {
@@ -150,7 +185,7 @@ function autoLoadout() {
         p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
 }
 
-const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), terrain: measure(terrainCombat, 3),
+const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), iceEffects: measure(iceEffects, 3), terrain: measure(terrainCombat, 3),
     autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision"), autoLoadout: measure(autoLoadout, 3, "Decision") };
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
@@ -158,7 +193,7 @@ console.log(JSON.stringify({ context: { node: process.version, platform: platfor
     gc: Boolean(globalThis.gc), timing: "one warmup, five samples, simulation only; travel/terrain restore health between ticks while retaining hit settlement; no browser/GPU claim" }, results }, null, 2));
 if (args.includes("--check")) {
     assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");
-    for (const result of [results.travel, results.crowded, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
+    for (const result of [results.travel, results.crowded, results.iceEffects, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
     assert.ok(results.autoAvoidance.medianMsPerDecision <= results.autoAvoidance.budgetMsPerDecision, "Automatic avoidance exceeded its decision CPU budget");
     assert.ok(results.autoLoadout.medianMsPerDecision <= results.autoLoadout.budgetMsPerDecision, "Automatic loadout exceeded its decision CPU budget");
 }

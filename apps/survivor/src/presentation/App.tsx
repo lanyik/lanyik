@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CombatSession, SessionSnapshot } from "../app/CombatSession";
 import { GAME_CONFIG } from "../core/GameConfig";
+import { SKILLS } from "../core/Skills";
+import { StatusKind } from "../core/StatusSystem";
 import type { AttachRegionMap } from "../app/RegionMapBinding";
 import { POTIONS, canUseConsumable, selectConsumable, type InventoryItem } from "../core/InventoryItem";
 import { CharacterPanel } from "./CharacterPanel";
@@ -28,6 +30,7 @@ import type { WorldLocation } from "../core/Homestead";
 import { CHALLENGES, isChallenge } from "../core/BossChallenge";
 import "./app.css";
 import "./menus.css";
+import "./skill-tree.css";
 
 const MENUS = [{ id: "character", name: "角色", key: "C", code: "KeyC" }, { id: "inventory", name: "背包", key: "B", code: "KeyB" },
     { id: "map", name: "地图", key: "M", code: "KeyM" }, { id: "skills", name: "技能", key: "K", code: "KeyK" },
@@ -99,7 +102,9 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
             else if (event.code === "Escape") {
                 const open = (["system", "travel", "craft", "spirit", "inventory", "character", "skills", "map"] as const).find(id => panels[id]);
                 if (open) close(open); else session.dispatch({ type: "toggle-pause" });
-            } else if (/^Digit[1-9]$/.test(event.code) && Number(event.code.slice(-1)) <= GAME_CONFIG.skills.slots && player) session.dispatch({ type: "cast-skill", skill: player.skills.loadout[Number(event.code.slice(-1)) - 1] });
+            } else if (/^Digit[1-9]$/.test(event.code) && Number(event.code.slice(-1)) <= GAME_CONFIG.skills.slots && player) {
+                const skill = player.skills.loadout[Number(event.code.slice(-1)) - 1]; if (skill) session.dispatch({ type: "cast-skill", skill });
+            }
             else if (event.code === "KeyQ") session.dispatch({ type: "use-consumable", effect: "health" });
             else if (event.code === "KeyE") session.dispatch({ type: "use-consumable", effect: "mana" });
             else if (event.code === "KeyF") session.dispatch({ type: "toggle-autocast" });
@@ -154,7 +159,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                 onCraft={item => { setCraftItemId(item.id); toggle("craft"); }} onRemoveOrb={socket => session.dispatch({ type: "remove-orb", socket })}
                 disabled={combat.gameOver} paused={snapshot.paused} />}
             </div>}
-            {panels.skills && <SkillsPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("skills")} />}
+            {panels.skills && <SkillsPanel player={player} homestead={combat.world.location === "homestead"} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("skills")} />}
             {panels.craft && <CraftingPanel key={craftItemId ?? "forge"} player={player} initialItem={player.inventory.find(item => item.id === craftItemId)} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("craft")} />}
             {panels.spirit && <SpiritRealmPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("spirit")} />}
             {panels.system && <SessionMenu session={session} snapshot={snapshot} close={() => close("system")} home={onHome} log={log} />}
@@ -172,8 +177,12 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                     <div className="vital-bars"><div className={`bar health-bar${player.health / player.stats.maxHealth <= .25 ? " critical" : ""}`} aria-label="生命"><span style={{ width: `${player.health / player.stats.maxHealth * 100}%` }} /><b><em>{player.health / player.stats.maxHealth <= .25 ? "生命危急" : "生命"}</em>{Math.ceil(player.health)} / {player.stats.maxHealth}</b></div>
                         <div className="bar mana-bar" aria-label="法力"><span style={{ width: `${player.mana / player.stats.maxMana * 100}%` }} /><b><em>法力</em>{Math.floor(player.mana)} / {player.stats.maxMana}</b></div>
                         <div className="experience-track" aria-label="经验"><div className="experience-label"><span>经验</span><b>{Math.floor(player.experience)} / {player.experienceToLevel}</b></div><div className="bar experience-bar"><span style={{ width: `${player.experience / player.experienceToLevel * 100}%` }} /></div></div></div></div>
+                <div className="player-buffs" aria-label="增益与减益">{player.skills.statuses.map(status => <span key={status.kind} data-beneficial={status.beneficial} title={`${status.name} · ${status.control ? "控制" : "状态"} · ${status.remaining.toFixed(1)} 秒`}>
+                    {status.name} {status.kind === StatusKind.Chill ? status.amount.toFixed(1) : status.kind === StatusKind.Barrier ? Math.ceil(status.amount) : ""}<small>{status.remaining.toFixed(1)}s</small></span>)}</div>
+                {player.skills.action && <div className="player-castbar" data-phase={player.skills.action.phase} role="progressbar" aria-label="施法进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((1 - player.skills.action.remaining / player.skills.action.duration) * 100)}>
+                    <i style={{ width: `${Math.max(0, 1 - player.skills.action.remaining / player.skills.action.duration) * 100}%` }} /><span>{SKILLS[player.skills.action.skill].name} · {player.skills.action.phase === "windup" ? "施法前摇" : "收招后摇"} {player.skills.action.remaining.toFixed(1)}s</span></div>}
                 <div className="skill-slots">
-                    {player.skills.loadout.map((id, index) => <SkillSlot key={index} index={index} player={player} blocked={combat.gameOver || snapshot.paused} cast={() => session.dispatch({ type: "cast-skill", skill: id })} />)}
+                    {player.skills.loadout.map((id, index) => <SkillSlot key={index} index={index} player={player} blocked={combat.gameOver || snapshot.paused} cast={() => { if (id) session.dispatch({ type: "cast-skill", skill: id }); }} />)}
                     {potionSlots.map(({ effect, item, count }, index) => <div key={effect} className={`skill-slot ${effect}-skill`}>
                         <kbd>{index === 0 ? "Q" : "E"}</kbd><ItemTooltip item={item} player={player}><button className="item-icon-trigger" aria-label={effect === "health" ? "使用生命药剂" : "使用法力药剂"}
                         disabled={combat.gameOver || snapshot.paused || player.potionRemaining > 0 || !item || !canUseConsumable(item, player)}

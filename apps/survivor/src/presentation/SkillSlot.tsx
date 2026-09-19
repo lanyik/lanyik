@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { CombatSnapshot } from "../core/CombatState";
 import { SKILLS, skillValues } from "../core/Skills";
+import { StatusKind } from "../core/StatusSystem";
 import { SkillIcon, SkillTooltip } from "./SkillView";
 import { useSkillDrag } from "./SkillDrag";
 
@@ -8,9 +9,13 @@ export function SkillSlot({ index, player, blocked, panel = false, cast }: {
     readonly index: number; readonly player: CombatSnapshot["player"]; readonly blocked: boolean;
     readonly panel?: boolean; readonly cast?: () => void;
 }) {
-    const id = player.skills.loadout[index], d = SKILLS[id], drag = useSkillDrag();
-    const remaining = player.skills.remaining[id], cooldown = skillValues(id, player.skills.ranks[id], player.stats).cooldown;
-    const unavailable = blocked || player.skills.dashing || remaining > 0 || player.mana < d.mana || id === "ward" && player.skills.ward > 0;
+    const id = player.skills.loadout[index], drag = useSkillDrag();
+    if (!id) return <div data-skill-slot={index} data-drop-active={drag.over === index} className={panel ? "loadout-slot empty-skill" : "skill-slot empty-skill"}>
+        <kbd>{index + 1}</kbd><span className="empty-skill-glyph" aria-hidden="true">＋</span><span>空槽位</span><small>拖入已学技能</small></div>;
+    const d = SKILLS[id], values = skillValues(id, player.skills.ranks[id], player.stats, player.skills.modifiers[id]);
+    const remaining = player.skills.remaining[id], cooldown = values.cooldown;
+    const unavailable = blocked || player.skills.dashing || player.skills.recoveryRemaining > 0 && id !== "dash" || player.skills.statuses.some(status => status.kind === StatusKind.Frozen)
+        || remaining > 0 || player.mana < values.mana || id === "ward" && player.skills.ward > 0;
     return <div data-skill-slot={index} data-drop-active={drag.over === index} className={`${panel ? "loadout-slot" : "skill-slot"} ${id}-skill`}
         style={{ "--skill-color": d.color, "--cooldown": `${Math.min(100, remaining / cooldown * 100)}%` } as CSSProperties}>
         <kbd>{index + 1}</kbd>
@@ -20,6 +25,6 @@ export function SkillSlot({ index, player, blocked, panel = false, cast }: {
             <SkillIcon id={id} rank={player.skills.ranks[id]} />
             {!panel && remaining > 0 && <span className="skill-cooldown-mask" />}
         </button></SkillTooltip>
-        <span className="skill-slot-name">{d.name}</span><small>{panel ? d.role : remaining > 0 ? `${remaining.toFixed(1)}s` : `${d.mana} 法力`}</small>
+        <span className="skill-slot-name">{d.name}</span><small>{panel ? d.role : remaining > 0 ? `${remaining.toFixed(1)}s` : `${values.mana} 法力`}</small>
     </div>;
 }

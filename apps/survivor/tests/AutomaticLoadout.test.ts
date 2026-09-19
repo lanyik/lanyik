@@ -26,7 +26,7 @@ function input(inventory: InventoryItem[], equipment: EquippedItems = { weapon: 
 function simulation(inventory: InventoryItem[], equipment: EquippedItems = { weapon: old() }, level = 1) {
     const sim = new CombatSimulation("automatic-loadout");
     const saved = sim.checkpoint();
-    sim.restore({ ...saved, nextItemId: 10000, player: { ...saved.player, inventory, equipment, level } });
+    sim.restore({ ...saved, nextItemId: 10000, skills: { ...saved.skills, points: level - 1 }, player: { ...saved.player, inventory, equipment, level } });
     const fixture = sim as unknown as { entities: CombatWorld; rewards: CombatRewards; world: RegionalWorld; chests: { count: number }; receiveItems(items: readonly InventoryItem[], protectedId?: number, receipt?: object): boolean;
         gainExperience(amount: number): void };
     return { sim, fixture };
@@ -80,7 +80,7 @@ test("small upgrades retain the old equipment, and manual locking permanently re
     expect(sim.getSnapshot().player.inventory.find(item => item.id === 2)).toMatchObject({ autoEquipped: true });
     sim.setEquipmentLock(2, true);
     expect(sim.getSnapshot().player.inventory.find(item => item.id === 2)).toMatchObject({ locked: true, autoEquipped: false });
-    const checkpoint = sim.checkpoint(); expect(checkpoint.version).toBe(5); sim.restore(checkpoint);
+    const checkpoint = sim.checkpoint(); expect(checkpoint.version).toBe(6); sim.restore(checkpoint);
     expect(sim.getSnapshot().autoCombat.enabled).toBe(false);
     expect(sim.getSnapshot().player.equipment.weapon?.autoEquipped).toBe(true);
     expect(sim.getSnapshot().player.inventory.find(item => item.id === 2)).toMatchObject({ autoEquipped: false });

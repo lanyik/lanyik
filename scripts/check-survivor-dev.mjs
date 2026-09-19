@@ -54,11 +54,12 @@ try {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.keyboard.press("KeyK");
     await page.locator(".skills-window").waitFor();
-    assert.equal(await page.locator(".skill-catalog article").count(), 8);
-    assert.equal(await page.locator('.skill-catalog [data-item-icon="skill"]').count(), 8);
-    await page.locator('[data-skill="frost"] .skill-icon-trigger').dragTo(page.locator('.skill-loadout [data-skill-slot="0"]'));
-    await page.waitForFunction(() => document.querySelector('.skill-loadout [data-skill-slot="0"] [data-item-icon="skill"]')?.getAttribute("data-item-value") === "frost");
-    await page.locator(".skill-management").evaluate(element => { element.scrollTop = element.scrollHeight; });
+    assert.equal(await page.locator(".constellation-node").count(), 34);
+    assert.equal(await page.locator(".skill-loadout [data-skill-slot]").count(), 6);
+    await page.locator('.school-tabs button').last().click();
+    await page.locator('[data-node="pulse"]').dragTo(page.locator('.skill-loadout [data-skill-slot="5"]'));
+    await page.waitForFunction(() => document.querySelector('.skill-loadout [data-skill-slot="5"] [data-item-icon="skill"]')?.getAttribute("data-item-value") === "pulse");
+    await page.locator(".constellation-scroll").evaluate(element => { element.scrollTop = element.scrollHeight; });
     const panel = await page.locator(".skills-window").boundingBox();
     const close = await page.locator(".skills-window .close-button").boundingBox();
     assert.ok(panel && close && close.y >= panel.y && close.y + close.height <= panel.y + panel.height,

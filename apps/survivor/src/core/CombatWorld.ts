@@ -11,7 +11,7 @@ import { groundItemKind, type InventoryItem } from "./InventoryItem";
 import { CombatEffects } from "./CombatEffects";
 import { CombatEvents } from "./CombatEvents";
 import { CombatVitality } from "./CombatVitality";
-import { StatusSystem } from "./StatusSystem";
+import { ControlProfile, StatusSystem } from "./StatusSystem";
 import { CombatText } from "./CombatText";
 import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
 import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
@@ -34,6 +34,11 @@ class DamageBuffer {
     public readonly elite = new Uint8Array(MAX_ENEMIES + MAX_PROJECTILES);
     public readonly boss = new Uint8Array(MAX_ENEMIES + MAX_PROJECTILES);
     public readonly critical = new Uint8Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly chill = new Float64Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly chillTicks = new Uint32Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly freezeTicks = new Uint32Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly frozenMultiplier = new Float32Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly consumeFreeze = new Uint8Array(MAX_ENEMIES + MAX_PROJECTILES);
 
     public add(source: number, target: number, damage: number, elite = 0, boss = 0, critical = 0): void {
         if (this.count === this.source.length) throw new Error("Damage event capacity exhausted");
@@ -41,6 +46,15 @@ class DamageBuffer {
         this.source[i] = source; this.target[i] = target; this.damage[i] = damage;
         this.elite[i] = elite; this.boss[i] = boss;
         this.critical[i] = critical;
+        this.chill[i] = this.chillTicks[i] = this.freezeTicks[i] = this.consumeFreeze[i] = 0;
+        this.frozenMultiplier[i] = 1;
+    }
+
+    public ice(source: number, target: number, damage: number, critical: boolean, chill: number, chillTicks: number, freezeTicks: number, multiplier: number, consume: boolean): void {
+        const i = this.count;
+        this.add(source, target, damage, 0, 0, Number(critical));
+        this.chill[i] = chill; this.chillTicks[i] = chillTicks; this.freezeTicks[i] = freezeTicks;
+        this.frozenMultiplier[i] = multiplier; this.consumeFreeze[i] = Number(consume);
     }
 }
 
@@ -135,6 +149,7 @@ export class CombatWorld {
         e.patrolX[slot] = spawn.x; e.patrolZ[slot] = spawn.z; e.patrolStep[slot] = e.patrolWaitUntil[slot] = 0;
         e.supportTarget[slot] = e.senseAt[slot] = e.specialReadyAt[slot] = e.enraged[slot] = 0;
         this.status.clear(slot); e.attackStep[slot] = 0;
+        this.status.controlProfile[slot] = spawn.boss ? ControlProfile.Boss : spawn.elite ? ControlProfile.Elite : ControlProfile.Normal;
         a.targetX[slot] = spawn.x; a.targetZ[slot] = spawn.z;
         a.target[slot] = a.variant[slot] = 0;
         a.kind[slot] = ActorAction.Idle; a.started[slot] = a.hitAt[slot] = a.endsAt[slot] = a.readyAt[slot] = a.progress[slot] = a.committed[slot] = 0;

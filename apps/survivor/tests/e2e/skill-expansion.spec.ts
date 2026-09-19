@@ -26,6 +26,8 @@ test("new skill choreography and boss attacks cross the real Worker boundary and
         const f = sim as unknown as { entities: CombatWorld; world: RegionalWorld; skills: SkillSystem; autoCast: boolean; attackCooldown: number; gainExperience(amount: number): void };
         const e = f.entities, p = e.position, player = e.player;
         f.autoCast = false; f.attackCooldown = 1000; f.gainExperience(1000);
+        const cp = f.skills.checkpoint(sim.tick);
+        f.skills.restore({ ...cp, readyAt: cp.readyAt.map(() => 0), recoveryUntil: 0 }, sim.tick);
         while (e.enemies.count) e.remove(e.enemies.slots[0]);
         while (e.projectiles.count) e.remove(e.projectiles.slots[0]);
         e.effects.buffer.count = 0;
@@ -35,9 +37,16 @@ test("new skill choreography and boss attacks cross the real Worker boundary and
             e.vitals.health[slot] = e.vitals.maxHealth[slot] = 10000; e.enemy.speed[slot] = 0; e.action.readyAt[slot] = 100000;
         }
         for (const [slot, id] of (["meteor", "vortex", "blades"] as const).entries()) sim.equipSkill(id, slot);
-        for (const id of ["meteor", "vortex", "blades"] as const) { e.vitals.mana[player] = 100; sim.castSkill(id); }
     });
-    await advanceCombat(page, 35);
+    // Distinct slots share one action timeline; preserve overlapping fields by casting meteor last.
+    for (const id of ["vortex", "blades", "meteor"] as const) {
+        await combatWorker(page).evaluate(id => {
+            const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+            const e = (sim as unknown as { entities: CombatWorld }).entities;
+            e.vitals.mana[e.player] = 100; sim.castSkill(id);
+        }, id);
+        await advanceCombat(page, id === "meteor" ? 55 : 90);
+    }
     const read = () => page.evaluate(() => {
         const runtime = window.survivorApplication!.session as unknown as { renderState: CombatRenderState; view: { layer: { effects: { mesh: InstancedMesh } } } };
         const b = runtime.renderState.effects, mesh = runtime.view.layer.effects.mesh;
@@ -51,12 +60,15 @@ test("new skill choreography and boss attacks cross the real Worker boundary and
     expect(before.styles.filter((_, i) => i % 4 === 0)).toEqual(expect.arrayContaining([2, 4, 5]));
     await page.screenshot({ path: info.outputPath("meteor-vortex-blades.png") });
     expect(await read()).toEqual(before);
-    await advanceCombat(page, 80);
+    await advanceCombat(page, 110);
     expect((await read()).kinds).toContain(EffectKind.MeteorImpact);
     await page.screenshot({ path: info.outputPath("meteor-impact.png") });
     await page.keyboard.press("KeyK");
     const panel = page.getByRole("dialog", { name: "技能", exact: true });
-    for (const id of ["meteor", "vortex", "blades"]) await expect(panel.locator(`[data-skill="${id}"]`)).toBeVisible();
+    for (const [school, id] of [["火焰", "meteor"], ["通用", "vortex"], ["星辰", "blades"]]) {
+        await panel.getByRole("button", { name: school }).click();
+        await expect(panel.locator(`[data-skill="${id}"]`)).toBeVisible();
+    }
     await page.screenshot({ path: info.outputPath("expanded-skill-catalog.png") });
     await page.keyboard.press("Escape");
     await advanceCombat(page, 500);

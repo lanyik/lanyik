@@ -276,6 +276,8 @@ export class CombatLayer implements WorldRenderLayer {
             if (enemy.boss[index]) this.color.lerp(BOSS, .5);
             if (enemy.enraged[index]) this.color.lerp(ENRAGED, .6);
             if (status.slowUntil[index] > state.player.animationTime * GAME_CONFIG.timing.simulationHz) this.color.lerp(FROST, .65);
+            const frozen = status.frozenUntil[index] > state.player.animationTime * GAME_CONFIG.timing.simulationHz;
+            if (frozen) this.color.lerp(FROST, .92);
             if (status.wardUntil[index] > state.player.animationTime * GAME_CONFIG.timing.simulationHz) this.color.lerp(HEAL, .45);
             if (vitals.hitFlash[index] > 0) this.color.setRGB(2, 2, 2);
             for (const mesh of this.actors.enemies[ENEMY_DEFINITIONS[enemy.kind[index]].model]) {
@@ -283,7 +285,7 @@ export class CombatLayer implements WorldRenderLayer {
                 this.setInstance(mesh, instance, x, this.height(x, z), z, position.radius[index] / .3, rotation);
                 mesh.setColorAt(instance, this.color);
                 mesh.geometry.getAttribute("actorHome").setXY(instance, homeX - playerX, homeZ - playerZ);
-                this.actors.animateEnemy(mesh, instance, index, ids[index], state.player.animationTime, action.kind[index], action.progress[index]);
+                this.actors.animateEnemy(mesh, instance, index, ids[index], frozen ? 0 : state.player.animationTime, frozen ? ActorAction.Idle : action.kind[index], frozen ? 0 : action.progress[index]);
                 if (action.kind[index] >= ActorAction.Cast && action.kind[index] !== ActorAction.Charge
                     && action.progress[index] < .5 && this.actors.castingHand(mesh, this.hand)) {
                     const scale = position.radius[index] / .3, sin = Math.sin(rotation), cos = Math.cos(rotation);

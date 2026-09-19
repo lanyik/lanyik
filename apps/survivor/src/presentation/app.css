@@ -417,33 +417,7 @@ canvas { display: block; }
 .skill-points { margin-left: auto; display: flex; align-items: center; gap: 9px; color: var(--gold); padding-right: 20px; }
 .skill-points b { font-size: 30px; font-weight: 400; }
 .skill-points span { font-size: 11px; max-width: 48px; line-height: 1.5; }
-.skill-management { flex: 1; min-height: 0; padding: 22px 24px 16px; overflow-y: auto; scrollbar-width: thin; }
-.skill-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 17px; }
-.skill-section-heading h3 { font-size: 15px; font-weight: 500; letter-spacing: 2px; }
-.skill-section-heading > span { font-size: 11px; color: #92a3b3; }
-.skill-section-heading .eyebrow { color: #7f939f; font-size: 9px; letter-spacing: 2px; }
-.skill-catalog { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.skill-card { position: relative; min-width: 0; padding: 17px; overflow: hidden; border: 1px solid #38444d; border-radius: 5px; background: linear-gradient(125deg, color-mix(in srgb, var(--skill-color) 7%, #19232f), #141e28 65%); }
-.skill-card:before { content: ''; position: absolute; left: 0; top: 20px; bottom: 20px; width: 2px; background: var(--skill-color); opacity: .6; }
-.skill-card-top { display: flex; align-items: center; gap: 13px; }
-.skill-card-title { min-width: 0; }
-.skill-card h3 { font-size: 16px; letter-spacing: 1px; margin: 4px 0; color: #f0efeb; }
-.skill-school { display: flex; align-items: center; gap: 6px; color: var(--skill-color); font-size: 10px; }
-.skill-school i { display: inline-block; width: 3px; height: 3px; background: currentColor; transform: rotate(45deg); }
-.skill-card-title small { font-size: 10px; color: #a3b1ba; }
-.skill-card-index { position: absolute; right: 9px; top: 5px; font-family: Georgia, serif; font-size: 38px; color: var(--skill-color); opacity: .07; pointer-events: none; }
-.skill-card-summary { color: #c7d4de; font-size: 12px; margin: 15px 0 12px; padding-bottom: 12px; border-bottom: 1px solid #60718430; }
-.skill-rank-row { display: flex; align-items: center; gap: 8px; }
-.skill-rank-pips { display: flex; gap: 4px; }
-.skill-rank-pips i { width: 7px; height: 7px; border: 1px solid #667480; transform: rotate(45deg); }
-.skill-rank-pips [data-filled=true] { background: var(--skill-color); border-color: var(--skill-color); box-shadow: 0 0 5px color-mix(in srgb, var(--skill-color) 30%, transparent); }
-.skill-rank-row small { font-size: 10px; white-space: nowrap; }
-.skill-upgrade { margin-left: auto; padding: 4px 6px; font-size: 10px; color: #e4c996; background: #342f25; border-color: #665c43; white-space: nowrap; }
-.skill-upgrade span { font-size: 14px; }
-.skill-catalog .locked .skill-artwork { opacity: .4; }
-.skill-catalog .locked .skill-card-title small { color: #b9987e; }
 .skill-loadout { flex-shrink: 0; padding: 18px 24px 12px; border-top: 1px solid #75664b; background: #111a22; box-shadow: 0 -8px 24px #07101755; }
-.skill-loadout .skill-section-heading { margin-bottom: 12px; }
 .skill-loadout h3 span { margin-left: 9px; font-size: 10px; letter-spacing: 2px; color: #a59270; }
 .loadout-slots { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .loadout-slot { position: relative; display: grid; grid-template-columns: 48px minmax(0, 1fr); grid-template-rows: 1fr 1fr; column-gap: 9px; min-width: 0; padding: 10px; background: #1b2630; border: 1px solid #4b5660; border-radius: 4px; }
@@ -603,12 +577,7 @@ canvas { display: block; }
     .skills-window .eyebrow { font-size: 8px; letter-spacing: 1.5px; }
     .skill-points { padding-right: 8px; gap: 6px; }
     .skill-points b { font-size: 24px; }
-    .skill-management { padding: 16px 12px; }
-    .skill-section-heading > span { font-size: 10px; }
-    .skill-catalog { grid-template-columns: 1fr; gap: 10px; }
-    .skill-card { padding: 14px; }
     .skill-loadout { padding: 14px 12px 10px; }
-    .skill-loadout .skill-section-heading { flex-wrap: wrap; gap: 6px; }
     .loadout-slots { gap: 6px; }
     .loadout-slot { display: flex; flex-direction: column; align-items: center; padding: 8px 2px; gap: 4px; }
     .loadout-slot .skill-art { --icon-size: 42px; }

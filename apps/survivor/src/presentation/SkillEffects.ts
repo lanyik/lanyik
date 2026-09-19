@@ -109,12 +109,26 @@ export class SkillEffects {
         const tick = seconds * GAME_CONFIG.timing.simulationHz;
         for (let i = 0; i < b.count; i++) {
             const kind = b.kind[i], t = clamp((tick - b.started[i]) / (b.endsAt[i] - b.started[i]));
-            if (kind >= EffectKind.Heal || t >= 1 || tick < b.started[i]) continue;
+            if (kind >= EffectKind.Heal && kind < EffectKind.IceBolt || t >= 1 || tick < b.started[i]) continue;
             const x = kind === EffectKind.Blades ? playerX : b.x[i], z = kind === EffectKind.Blades ? playerZ : b.z[i];
             const y = height(x, z) + .13, r = b.radius[i];
             const fade = (1 - t) ** .7, burst = 1 - (1 - t) ** 3;
             const seed = b.started[i] * .17 + x * 2.3 + z * 1.7;
-            if (kind === EffectKind.Meteor) {
+            if (kind === EffectKind.IceBolt) {
+                const ex = b.endX[i], ez = b.endZ[i], ey = height(ex, ez) + .7;
+                this.beam(x, y + .5, z, ex, ey, ez, .18 * fade, kind, fade);
+                this.stamp(ex, ey, ez, .8 * fade, 1.3 * fade, t * 2, kind, fade, 4, 1, true);
+                for (let j = 0; j < 5; j++) { const at = (j + 1) / 6;
+                    this.stamp(x + (ex - x) * at, y + .5 + (ey - y - .5) * at, z + (ez - z) * at, .18, .5, t + j, kind, fade, 4, 1, true); }
+            } else if (kind === EffectKind.IceField) {
+                const opacity = Math.min(1, t * 10, (1 - t) * 10), spin = seconds * .35;
+                this.stamp(x, y, z, r * 2.1, r * 2.1, spin, kind, opacity * .5, 5, 0, false, true);
+                for (let j = 0; j < 18; j++) {
+                    const angle = j * 2.4 + spin, radius = r * (.25 + (j % 5) * .15), px = x + Math.sin(angle) * radius, pz = z + Math.cos(angle) * radius;
+                    const phase = (seconds * 1.6 + j / 18) % 1;
+                    this.stamp(px, height(px, pz) + .2 + (1 - phase) * 2.5, pz, .15, .6, angle, kind, opacity * .7, 4, 1, true);
+                }
+            } else if (kind === EffectKind.Meteor) {
                 this.stamp(x, y, z, r * 2.42, r * 2.42, -t, kind, .35 + t * .5, 5, 0, false, true);
                 this.stamp(x, y, z, r * 2.42 * (1 - t), r * 2.42 * (1 - t), 0, -1, .8, 1, 0, false, true);
                 const lift = 8 * (1 - t * t), mx = x - (1 - t) * 2;
@@ -234,7 +248,7 @@ export class SkillEffects {
         this.dummy.position.set(x - this.originX, projected ? 0 : y, z - this.originZ); this.dummy.rotation.set(0, rotation, 0);
         if (!vertical) this.dummy.rotateX(-Math.PI / 2 - pitch);
         this.dummy.scale.set(width, length, 1); this.dummy.updateMatrix(); this.mesh.setMatrixAt(i, this.dummy.matrix);
-        this.mesh.setColorAt(i, kind < 0 ? WHITE : COLORS[kind]);
+        this.mesh.setColorAt(i, kind < 0 ? WHITE : COLORS[kind === EffectKind.IceBolt || kind === EffectKind.IceField ? EffectKind.Frost : kind]);
         this.styles.setXYZW(i, tile, 0, alpha, shape + (projected ? 8 : 0));
     }
     public reset(): void { this.mesh.count = this.ground.count = 0; this.ward.visible = false; }

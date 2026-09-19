@@ -15,12 +15,15 @@ const isWater = (tile: TileInfo) => tile.type === Land.sea || tile.type === Land
 export class ProceduralCombatTerrain implements CombatTerrain {
     private readonly resolver;
     private readonly chunks = new Map<string, TerrainChunk>();
+    private lastChunk: TerrainChunk | undefined;
+    private lastChunkX = 0;
+    private lastChunkZ = 0;
     private readonly contactResult: SurfaceContact = { x: 0, z: 0, round: false };
     private contactDepth = -Infinity;
     private readonly motion = new SurfaceMotion((x, z, radius) => this.contact(x, z, radius));
     constructor(seed: string | number) { this.resolver = createWorldSurfaceResolver({ seed, waterStyle: COMBAT_WATER_STYLE }); }
     public get cachedChunks(): number { return this.chunks.size; }
-    public dispose(): void { this.chunks.clear(); }
+    public dispose(): void { this.chunks.clear(); this.lastChunk = undefined; }
 
     public height(x: number, z: number): number {
         const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), chunk = this.chunk(cx, cz);
@@ -115,9 +118,12 @@ export class ProceduralCombatTerrain implements CombatTerrain {
     }
 
     private chunk(cx: number, cz: number): TerrainChunk {
+        // Adjacent height/cover samples usually stay in one chunk. Avoid allocating its
+        // string key repeatedly; the single cached reference is cleared on disposal.
+        if (this.lastChunk && cx === this.lastChunkX && cz === this.lastChunkZ) return this.lastChunk;
         const key = `${cx},${cz}`;
-        const existing = this.chunks.get(key);
-        if (existing) return existing;
+        this.lastChunkX = cx; this.lastChunkZ = cz; this.lastChunk = this.chunks.get(key);
+        if (this.lastChunk) return this.lastChunk;
         const ox = cx * CHUNK, oz = cz * CHUNK, window = this.resolver.createWindow();
         const map: MapInfo = { w: 1, h: 1, infinite: true, data: {} }, points = [];
         try {
@@ -156,7 +162,7 @@ export class ProceduralCombatTerrain implements CombatTerrain {
             const trees = generateWorldTreePositions({ ...COMBAT_ENVIRONMENT, map, points, size: 1, grassDensity: 0, grassBladeWidth: 0, grassBladeHeight: 0, treeModel: "Assets/models/oak" }, surface)
                 .filter(tree => tree.x >= ox - .25 && tree.x <= ox + CHUNK + .25 && tree.z >= oz - .25 && tree.z <= oz + CHUNK + .25);
             if (this.chunks.size === MAX_CHUNKS) this.chunks.delete(this.chunks.keys().next().value!);
-            const chunk = { blocked, trees, heights, waters }; this.chunks.set(key, chunk); return chunk;
+            const chunk = { blocked, trees, heights, waters }; this.chunks.set(key, chunk); this.lastChunk = chunk; return chunk;
         } finally { window.clear(); }
     }
 }

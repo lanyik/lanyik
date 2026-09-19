@@ -45,7 +45,7 @@ describe("player auto combat", () => {
         expect(simulation.getSnapshot().autoCombat.enabled).toBe(true);
         expect(simulation.getSnapshot().player.autoCast).toBe(false);
         const beforeCast = simulation.getSnapshot().player;
-        applyCombatCommand(simulation, { type: "cast-skill", skill: beforeCast.skills.loadout[0] });
+        applyCombatCommand(simulation, { type: "cast-skill", skill: beforeCast.skills.loadout[0]! });
         expect(simulation.getSnapshot().player.mana).toBeLessThan(beforeCast.mana);
         expect(simulation.getSnapshot().autoCombat.enabled).toBe(true);
         const saved = simulation.checkpoint();

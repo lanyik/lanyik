@@ -90,7 +90,6 @@
 .skills-window, .craft-window, .spirit-window { top: 20px; bottom: 180px; max-height: none; }
 .skill-points { display: inline-flex; gap: 6px; align-items: baseline; border: 0; padding: 0; margin: 0; }
 .skill-points b { font-size: 17px; }
-.skill-management { padding: 18px 20px; }
 .skill-loadout { padding: 14px 20px; background: #151a22; }
 .craft-tabs { padding: 10px 16px; }
 .craft-workbench { background: #141b23; }
@@ -184,7 +183,6 @@
     .bag-tabs button span { font-size: 9px; }
     .bag-toolbar { padding: 8px 10px; gap: 6px; }
     .bag-cards { padding: 8px; }
-    .skill-management { padding: 14px 12px; }
     .skill-loadout { padding: 12px; }
     .spirit-body { padding: 16px; }
     .spirit-paths { gap: 10px; margin: 18px 0; }
