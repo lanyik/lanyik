@@ -6,6 +6,57 @@ import { RegionalWorld } from "../../src/core/RegionalWorld";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import type { Group, Mesh } from "three";
+import type { MapFog } from "../../src/adapters/MapFog";
+import type { Exploration } from "../../src/core/Exploration";
+
+test("map fog stays opaque outside discovery and reuses its raster while the viewport moves", async ({ page }) => {
+    await page.goto("/"); await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page); await pauseCombat(page);
+    const result = await page.evaluate(() => {
+        const view = (window.survivorApplication!.session as unknown as { view: { regionMaps: Set<{
+            fog: { draw: MapFog["draw"]; paint: (...args: unknown[]) => void }; exploration: Exploration; regions: RegionalWorld;
+        }> } }).view;
+        const { fog, exploration, regions } = [...view.regionMaps][0];
+        const canvas = document.createElement("canvas"); canvas.width = canvas.height = 256;
+        const context = canvas.getContext("2d")!, paint = fog.paint;
+        let rebuilds = 0;
+        fog.paint = function (...args) { rebuilds++; paint.apply(this, args); };
+        const region = regions.regionAtHex(-8, -3), x = region.centerX, z = region.centerZ;
+        const column = x / 1.5, left = Math.floor(column), fraction = column - left;
+        const center = { x: column + .5, y: z / Math.sqrt(3) - (left % 2 === 0 ? 1 - fraction : fraction) * .5 + .5 };
+        const extent = { originX: center.x - 64, originY: center.y - 64, tileSpanX: 128, tileSpanY: 128 };
+        const draw = (level = 1) => {
+            context.clearRect(0, 0, 256, 256);
+            fog.draw(context, { content: { x: 0, y: 0, width: 256, height: 256 }, extent }, exploration, level, regions);
+        };
+        const alpha = () => context.getImageData(128, 128, 1, 1).data[3];
+        try {
+            draw(region.level); const equalLevel = alpha();
+            draw(region.level + 1); const lowerLevel = alpha();
+            draw(); const unseen = alpha(), initial = rebuilds;
+            // Small pans, heading redraws and continuous zoom share the same overscan image.
+            for (let i = 0; i < 20; i++) { extent.originX += .1; extent.originY -= .1; extent.tileSpanX -= .1; draw(); }
+            const warm = rebuilds - initial;
+            extent.originX = center.x - 64; extent.originY = center.y - 64; extent.tileSpanX = 128;
+            exploration.discover(x, z); draw(); const discovery = rebuilds - initial, discovered = alpha();
+            const samples: { radius: number; alpha: number }[] = [];
+            for (const radius of [45, 75]) for (let i = 0; i < 16; i++) {
+                const sx = x + Math.cos(i * Math.PI / 8) * radius, sz = z + Math.sin(i * Math.PI / 8) * radius;
+                const tx = sx / 1.5, lx = Math.floor(tx), f = tx - lx;
+                const px = (tx + .5 - extent.originX) * 2;
+                const py = (sz / Math.sqrt(3) - (lx % 2 === 0 ? 1 - f : f) * .5 + .5 - extent.originY) * 2;
+                samples.push({ radius, alpha: context.getImageData(Math.floor(px), Math.floor(py), 1, 1).data[3] });
+            }
+            extent.originX += 400; draw(); const outside = rebuilds - initial;
+            extent.tileSpanX = extent.tileSpanY = 256; draw(); const zoom = rebuilds - initial;
+            return { equalLevel, lowerLevel, unseen, discovered, warm, discovery, outside, zoom, samples, chunks: regions.chunks.size };
+        } finally { fog.paint = paint; }
+    });
+    expect(result).toMatchObject({ equalLevel: 255, lowerLevel: 0, unseen: 255, discovered: 0,
+        warm: 0, discovery: 1, outside: 2, zoom: 3, chunks: 0 });
+    for (const sample of result.samples) expect(sample.alpha).toBe(sample.radius === 45 ? 0 : 255);
+    await page.evaluate(() => window.survivorApplication!.dispose());
+});
 
 test("home uses downloaded buildings, coastal sea, manual spells and a selectable travel chart", async ({ page }, info) => {
     const errors: string[] = [];

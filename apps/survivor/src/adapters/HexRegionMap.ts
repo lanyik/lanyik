@@ -4,18 +4,8 @@ import type { CombatSnapshot } from "../core/CombatState";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { REGION_RADIUS, RegionalWorld, type RegionInfo } from "../core/RegionalWorld";
 import { Exploration, type ExplorationSnapshot } from "../core/Exploration";
-
-/** Inverse even-column offset layout, interpolated between tile centres. */
-export function overviewPoint(x: number, z: number): { x: number; y: number } {
-    const column = x / 1.5, left = Math.floor(column), fraction = column - left;
-    const shift = (left % 2 === 0 ? 1 - fraction : fraction) * .5;
-    return { x: column + .5, y: z / Math.sqrt(3) - shift + .5 };
-}
-
-/** North-up map: combat heading zero faces +Z (down), independently of camera orbit. */
-export function overviewHeading(heading: number, scaleX: number, scaleY: number): number {
-    return Math.atan2(Math.sin(heading) / 1.5 * scaleX, -Math.cos(heading) / Math.sqrt(3) * scaleY);
-}
+import { MapFog } from "./MapFog";
+import { overviewHeading, overviewPoint } from "./MapProjection";
 
 export class HexRegionMap implements RegionMapBinding {
     private readonly minimap: WorldMinimap;
@@ -26,17 +16,18 @@ export class HexRegionMap implements RegionMapBinding {
     private exploration = new Exploration();
     private discoveryRevision = -1;
     private selectedTile: Readonly<Point> | undefined;
-    private fogSignature = "";
-    private fogRects: number[] = [];
+    private readonly fog: MapFog;
 
     constructor(map: HexMap, canvas: HTMLCanvasElement, private readonly controls: RegionMapControls, onError: (error: Error) => void) {
         const policy = GAME_CONFIG.presentation.minimap;
-        this.minimap = new WorldMinimap({ map, element: canvas, keyboard: false,
+        this.fog = new MapFog(map.createResourceAccount("survivor-map-fog"));
+        try { this.minimap = new WorldMinimap({ map, element: canvas, keyboard: false,
             infiniteTileSpan: policy.tileSpan, rasterSize: policy.rasterSize, cacheEntries: policy.cacheEntries,
             onExpandedChange: controls.onExpandedChange,
             onDestinationChange: tile => { this.selectedTile = tile; controls.onDestinationChange(tile ? this.destination(tile) : undefined); },
             onNavigate: tile => controls.onNavigate(this.destination(tile)),
-            drawOverlay: this.drawOverlay, onError });
+            drawOverlay: this.drawOverlay, onError }); }
+        catch (error) { this.fog.dispose(); throw error; }
     }
 
     public update(combat: CombatSnapshot, discovery: ExplorationSnapshot): void {
@@ -60,7 +51,7 @@ export class HexRegionMap implements RegionMapBinding {
     public navigate(): void {
         if (this.combat && !this.combat.gameOver && this.selectedTile && this.destination(this.selectedTile).accessible) this.minimap.navigateToDestination();
     }
-    public dispose(): void { this.minimap.dispose(); this.combat = undefined; }
+    public dispose(): void { this.minimap.dispose(); this.fog.dispose(); this.combat = undefined; }
 
     private destination(tile: Readonly<Point>): MapDestination {
         const point = getHexCenter(tile.x, tile.y, 1);
@@ -139,48 +130,7 @@ export class HexRegionMap implements RegionMapBinding {
         }
     };
 
-    private drawFog(context: CanvasRenderingContext2D, { content, extent }: WorldMinimapOverlayFrame): void {
-        const level = this.combat!.player.level, resolution = 128;
-        const signature = `${extent.originX},${extent.originY},${extent.tileSpanX},${extent.tileSpanY},${level},${this.discoveryRevision}`;
-        if (signature !== this.fogSignature) {
-            const rectangles: number[] = [];
-            let region: RegionInfo | undefined;
-            for (let row = 0; row < resolution; row++) {
-                let run = -1;
-                for (let column = 0; column <= resolution; column++) {
-                    const tx = extent.originX + (column + .5) / resolution * extent.tileSpanX - .5;
-                    const left = Math.floor(tx), fraction = tx - left;
-                    const shift = (left % 2 === 0 ? 1 - fraction : fraction) * .5;
-                    const x = tx * 1.5, z = (extent.originY + (row + .5) / resolution * extent.tileSpanY - .5 + shift) * Math.sqrt(3);
-                    let known = column === resolution || this.exploration.has(x, z);
-                    if (!known && level > 1) { region = this.regions!.regionAt(x, z, region); known = region.level < level; }
-                    if (!known && run < 0) run = column;
-                    else if (known && run >= 0) { rectangles.push(run / resolution, row / resolution, (column - run) / resolution, 1 / resolution); run = -1; }
-                }
-            }
-            this.fogRects = rectangles; this.fogSignature = signature;
-        }
-        const shade = context.createLinearGradient(0, content.y, 0, content.y + content.height);
-        shade.addColorStop(0, "#172732"); shade.addColorStop(1, "#09141e");
-        context.fillStyle = shade; context.beginPath();
-        for (let i = 0; i < this.fogRects.length; i += 4) context.rect(content.x + this.fogRects[i] * content.width,
-            content.y + this.fogRects[i + 1] * content.height, this.fogRects[i + 2] * content.width, this.fogRects[i + 3] * content.height);
-        context.fill();
-        // Opaque cover first, then world-anchored cloud billows clipped to unknown cells.
-        // No terrain/region labels can show through and no additional canvas or animation loop is needed.
-        context.save(); context.clip();
-        const span = Math.max(16, 2 ** Math.floor(Math.log2(Math.max(extent.tileSpanX, extent.tileSpanY) / 5)));
-        for (let x = Math.floor(extent.originX / span) - 1; x <= Math.ceil((extent.originX + extent.tileSpanX) / span); x++) {
-            for (let y = Math.floor(extent.originY / span) - 1; y <= Math.ceil((extent.originY + extent.tileSpanY) / span); y++) {
-                const hash = Math.sin(x * 127.1 + y * 311.7) * 43758.5453, fraction = hash - Math.floor(hash);
-                const px = content.x + ((x + fraction) * span - extent.originX) / extent.tileSpanX * content.width;
-                const py = content.y + ((y + 1 - fraction) * span - extent.originY) / extent.tileSpanY * content.height;
-                const radius = span / extent.tileSpanX * content.width * (1 + fraction * .6);
-                const cloud = context.createRadialGradient(px, py, 0, px, py, radius);
-                cloud.addColorStop(0, "#65858e42"); cloud.addColorStop(.45, "#3f606d28"); cloud.addColorStop(1, "#20374300");
-                context.fillStyle = cloud; context.fillRect(px - radius, py - radius, radius * 2, radius * 2);
-            }
-        }
-        context.restore();
+    private drawFog(context: CanvasRenderingContext2D, frame: WorldMinimapOverlayFrame): void {
+        this.fog.draw(context, frame, this.exploration, this.combat!.player.level, this.regions!);
     }
 }

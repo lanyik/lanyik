@@ -14,7 +14,9 @@ Worker 接受 `teleport` 时先检查“已探索或地域等级低于角色等�
 
 探索由模拟独占写入，每页 16×16 个格子，用 16 行 16 位掩码存储，支持负坐标。最多 4096 个稀疏页；新增页超过容量在提交前明确失败，不部分写入。记录校验页坐标、重复页、行数和掩码范围。未改变时复用只读快照，变化时递增 revision；Worker 只在 revision 变化或首次初始化时发送独立 `exploration` 字段，不在每份 10 Hz 战斗快照中重复携带。
 
-`HexRegionMap` 在既有 Canvas 覆盖层画雾，缓存当前视口 128×128 采样的连续行段；探索 revision、等级或视口改变才重建。先不透明覆盖地表，再将世界坐标锚定的径向云团裁剪到未知区域；云层透明度不会泄漏底图。查询地域元数据不加载远处怪物或玩法驻留，不增加 Worker、Canvas、渲染目标或帧循环。渲染采样只决定外观，传送权限始终使用精确格子与地域查询。
+`HexRegionMap` 的覆盖层使用 `MapFog`，持有一张固定 256×256 的离屏 Canvas。缓存覆盖视口外侧的余量，跨度按 2 的幂分档，再扩展至该档的 1.5 倍；转向、窗口尺寸变化、余量内拖动及同档缩放只裁切贴图。探索 revision、等级、世界变化，或视口越出缓存/切换跨度档时重建。离屏图先画不透明底色和世界坐标锚定的云团，再一次性扣除已探索格子的连续行段与严格低等级地域的并集；不再逐像素查询探索/地域，也不在每次重绘时重画云团。多边形边在地格列边界分段投影，保证负坐标和六边形错列处连续；关闭贴图插值，避免缩放滤波额外露出未知底图。渲染边缘的栅格化只决定外观，传送权限始终使用精确格子与地域查询。
+
+缓存通过地图资源账户登记 256 KiB CPU 与 256 KiB GPU（其中纹理 256 KiB），随地图绑定释放，初始化失败同样释放。查询地域元数据不加载远处怪物或玩法驻留；复用原有重绘调度，不增加 Worker、WebGL 渲染目标或帧循环。性能回放和测量局限见 [UI 性能](ui-performance.md#地图迷雾)。
 
 ## 家园与荒野
 
@@ -36,6 +38,6 @@ Worker 接受 `teleport` 时先检查“已探索或地域等级低于角色等�
 ## 实现与验证
 
 - 核心：[Exploration](../../apps/survivor/src/core/Exploration.ts)、[Homestead](../../apps/survivor/src/core/Homestead.ts)、[CombatSimulation](../../apps/survivor/src/core/CombatSimulation.ts)。
-- 适配与表现：[HomesteadMap](../../apps/survivor/src/adapters/HomesteadMap.ts)、[HexRegionMap](../../apps/survivor/src/adapters/HexRegionMap.ts)、[HomesteadModels](../../apps/survivor/src/presentation/HomesteadModels.ts)。
+- 适配与表现：[HomesteadMap](../../apps/survivor/src/adapters/HomesteadMap.ts)、[HexRegionMap](../../apps/survivor/src/adapters/HexRegionMap.ts)、[MapFog](../../apps/survivor/src/adapters/MapFog.ts)、[MapProjection](../../apps/survivor/src/adapters/MapProjection.ts)、[HomesteadModels](../../apps/survivor/src/presentation/HomesteadModels.ts)。
 - `Exploration.test.ts` 覆盖负坐标、完整可见距离、持久化、严格等级、容量原子性和落地揭示；`Homestead.test.ts` 覆盖安全边界、八种手动技能、延迟效果结算、休整、往返、写入失败和世代取消。
-- `homestead-fog.spec.ts` 使用真实 Worker/WebGL 检查家园起步、迷雾阻止 UI/直接命令、升级揭示、重复往返、刷新读档和最终 Worker/资源归零；`region-map.spec.ts` 保留缩放、拖动、选点、传送与窄屏回归。
+- `homestead-fog.spec.ts` 使用真实 Worker/WebGL 检查家园起步、迷雾阻止 UI/直接命令、升级揭示、重复往返、刷新读档和最终 Worker/资源归零；额外读取 Canvas 像素验证负坐标已探索/未知范围与严格等级遮挡，验证平移/缩放复用和探索/等级/越界触发重建。`region-map.spec.ts` 保留缩放、拖动、选点、传送与窄屏回归。

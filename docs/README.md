@@ -154,7 +154,7 @@ flowchart TB
 | [exploration-and-homestead.md](game/exploration-and-homestead.md) | 迷雾探索、等级揭示、传送权限、64×64 安全家园与往返 | [Exploration](../apps/survivor/src/core/Exploration.ts)、[Homestead](../apps/survivor/src/core/Homestead.ts)、[HomesteadMap](../apps/survivor/src/adapters/HomesteadMap.ts) |
 | [terrain-navigation.md](game/terrain-navigation.md) | 坡度、水体、树干、滑移、攻击遮挡、营地落点与可达性 | [CombatTerrain](../apps/survivor/src/core/CombatTerrain.ts)、[SurfaceMotion](../apps/survivor/src/core/SurfaceMotion.ts)、[EncounterNavigation](../apps/survivor/src/core/EncounterNavigation.ts) |
 | [interface-design.md](game/interface-design.md) | HUD 与页面职责、背包/技能交互、快捷键、窄屏布局 | [presentation](../apps/survivor/src/presentation/)、[app.css](../apps/survivor/src/presentation/app.css) |
-| [ui-performance.md](game/ui-performance.md) | 快照分支复用、虚拟网格、UI 实测方法与局限 | [ShareSnapshot](../apps/survivor/src/app/ShareSnapshot.ts)、[VirtualItemGrid](../apps/survivor/src/presentation/VirtualItemGrid.tsx)、[UI 基准](../scripts/benchmark-survivor-ui.mjs) |
+| [ui-performance.md](game/ui-performance.md) | 快照分支复用、虚拟网格、迷雾缓存、UI 实测方法与局限 | [ShareSnapshot](../apps/survivor/src/app/ShareSnapshot.ts)、[VirtualItemGrid](../apps/survivor/src/presentation/VirtualItemGrid.tsx)、[UI 基准](../scripts/benchmark-survivor-ui.mjs)、[地图基准](../scripts/benchmark-survivor-map.mjs) |
 | [visual-modernization.md](game/visual-modernization.md) | 当前免费美术方向、整体效果和不足 | 具体实现分别由下两份资产合同及界面合同定义 |
 | [actor-assets.md](game/actor-assets.md) | 角色来源、动作烘焙、手部轨迹、材质、实例池和预算 | [ActorModels](../apps/survivor/src/presentation/ActorModels.ts)、[ActorPose](../apps/survivor/src/presentation/ActorPose.ts)、[角色生成](../scripts/lib/survivor-actors.mjs) |
 | [environment-assets.md](game/environment-assets.md) | 树木、地表材质、天空、雾、前景透视及离线构建 | [CombatEnvironment](../apps/survivor/src/adapters/CombatEnvironment.ts)、[环境生成](../scripts/lib/survivor-environment.mjs)、[渲染模块](../src/rendering/) |
@@ -250,6 +250,7 @@ flowchart TB
 | [attack-encounters-node.json](game/measurements/attack-encounters-node.json)、[attack-encounters-workers-node.json](game/measurements/attack-encounters-workers-node.json) | 攻击遮挡/遭遇布局阶段的模拟和弹道查询 → [地形通行](game/terrain-navigation.md) |
 | [combat-balance.json](game/measurements/combat-balance.json) | 参考装备下的数值矩阵 → [数值平衡](game/combat-balance.md) |
 | [horizon-damage-browser.json](game/measurements/horizon-damage-browser.json)、[horizon-balance-node.json](game/measurements/horizon-balance-node.json) | 远景、飘字阶段的浏览器和 CPU 测量 → [环境资产](game/environment-assets.md)、[技能与效果](game/skills-and-effects.md) |
+| [minimap-fog-browser.json](game/measurements/minimap-fog-browser.json) | 小地图迷雾移动、开雾、拖动与缩放的浏览器对比 → [UI 性能](game/ui-performance.md)、[探索与家园](game/exploration-and-homestead.md) |
 | [enemy-view-node.json](game/measurements/enemy-view-node.json)、[enemy-view-workers-node.json](game/measurements/enemy-view-workers-node.json) | 怪物视距阶段的 CPU 与查询测量 → [模拟与 AI](game/simulation-and-ai.md) |
 | [skills-node.json](game/measurements/skills-node.json)、[patrol-node.json](game/measurements/patrol-node.json)、[spatial-node.json](game/measurements/spatial-node.json) | 技能、巡逻、空间查询阶段 → [技能与效果](game/skills-and-effects.md)、[模拟与 AI](game/simulation-and-ai.md) |
 | [workers-node.json](game/measurements/workers-node.json)、[review-node.json](game/measurements/review-node.json) | 早期线程与项目复核 → [应用集成](app-development.md)、[模拟与 AI](game/simulation-and-ai.md) |

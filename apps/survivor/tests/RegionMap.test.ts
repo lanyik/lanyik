@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { getHexCenter } from "three-hex-map";
-import { overviewPoint, overviewHeading } from "../src/adapters/HexRegionMap";
+import { overviewPoint, overviewHeading } from "../src/adapters/MapProjection";
 import { RegionalWorld } from "../src/core/RegionalWorld";
 
 test("north-up heading keeps all cardinal directions and compensates map aspect ratio", () => {
