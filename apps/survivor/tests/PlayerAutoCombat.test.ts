@@ -108,19 +108,14 @@ describe("player auto combat", () => {
         expect(a.update(206).x).toBe(1);
     });
 
-    test("telegraphed charges trigger a delayed, bounded dodge with a cooldown; manual input interrupts it", () => {
+    test("telegraphed charges immediately preempt combat; manual input interrupts avoidance", () => {
         const a = arena(); const slot = a.spawn(0, -4), e = a.e;
         e.enemy.active[slot] = 1; e.action.kind[slot] = ActorAction.Charge; e.action.hitAt[slot] = 40; e.action.endsAt[slot] = 240;
-        a.controller.setEnabled(true); a.update(1); expect(a.controller.activity).not.toBe("evade");
-        a.update(13); expect(a.controller.activity).not.toBe("evade");
-        const dodge = a.update(25); expect(a.controller.activity).toBe("evade"); expect(Math.abs(dodge.x)).toBeGreaterThan(.5);
-        a.update(74); expect(a.controller.activity).not.toBe("evade");
-        e.action.hitAt[slot] = 110;
-        a.update(85); expect(a.controller.activity).not.toBe("evade");
-        a.controller.setEnabled(false); a.controller.setEnabled(true);
-        a.update(86); a.update(111); expect(a.controller.activity).toBe("evade");
+        a.controller.setEnabled(true);
+        const dodge = a.update(1); expect(a.controller.activity).toBe("evade"); expect(Math.abs(dodge.x)).toBeGreaterThan(.1);
+        expect(Math.hypot(dodge.x, dodge.z)).toBeCloseTo(1);
         const manual = { x: 0, z: -1, active: true };
-        expect(a.update(112, manual)).toBe(manual); expect(a.controller.activity).toBe("manual");
+        expect(a.update(2, manual)).toBe(manual); expect(a.controller.activity).toBe("manual");
     });
 
     test("medicine shares manual cooldown/inventory rules and lethal settlement disables automation", () => {
@@ -193,8 +188,10 @@ describe("bounded local paths and threat observation", () => {
     test("projectile prediction uses hostile live trajectories and ignores friendly fire", () => {
         const a = arena(), threats = new AutoCombatThreats(a.e);
         a.e.spawnProjectile(0, Faction.Player, -1, 0, 4, 0, 1, 3);
-        expect(threats.risk(0, 0, 1, .5)).toBe(0);
+        threats.sense(1); expect(threats.risk(0, 0, stats.moveSpeed, 0, 0, 0)).toBe(0);
         a.e.spawnProjectile(0, Faction.Enemy, -1, 0, 4, 0, 1, 3);
-        expect(threats.risk(0, 0, 1, .5)).toBe(1); expect(threats.risk(0, 2, 1, .5)).toBe(0);
+        threats.sense(1); expect(threats.risk(0, 0, stats.moveSpeed, 0, 0, 0)).toBeGreaterThan(0);
+        a.e.position.z[a.e.player] = 2;
+        expect(threats.risk(0, 0, stats.moveSpeed, 0, 0, 0)).toBe(0);
     });
 });

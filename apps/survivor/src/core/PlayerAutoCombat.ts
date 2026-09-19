@@ -8,8 +8,7 @@ import { AutoCombatThreats } from "./AutoCombatThreats";
 
 export type AutoCombatActivity = "off" | "manual" | "evade" | "fight" | "chest" | "seek" | "idle";
 const DECISION_TICKS = ticksPerUpdate(10), SEARCH_RADIUS = 16, CHEST_RADIUS = 6;
-const MANUAL_GRACE = ticksForSeconds(.35), DODGE_DURATION = ticksForSeconds(.4), DODGE_COOLDOWN = ticksForSeconds(1.8);
-const REACTION_TICKS = ticksForSeconds(.15), BLOCKED_TICKS = ticksForSeconds(1.5);
+const MANUAL_GRACE = ticksForSeconds(.35), BLOCKED_TICKS = ticksForSeconds(1.5);
 const branch = (test: (c: PlayerAutoCombat) => boolean, tick: (c: PlayerAutoCombat) => void): BehaviorNode<PlayerAutoCombat> => ({
     type: "sequence", children: [{ type: "condition", test }, { type: "action", tick: c => { tick(c); return BehaviorStatus.Running; }, halt: () => {} }]
 });
@@ -18,7 +17,6 @@ const branch = (test: (c: PlayerAutoCombat) => boolean, tick: (c: PlayerAutoComb
 export class PlayerAutoCombat {
     private static readonly tree = new BehaviorTree<PlayerAutoCombat>({ type: "selector", children: [
         branch(c => c.tick < c.manualUntil, c => c.stop("manual")),
-        branch(c => c.chooseDodge(), c => c.evade()),
         branch(c => c.enemySlot >= 0 && (c.engaged || c.inRange()), c => { c.engaged = true; c.fight(); }),
         branch(c => c.chooseChest(), c => c.approach("chest", c.chestX, c.chestZ, .65)),
         branch(c => c.enemySlot >= 0, c => c.fight()),
@@ -26,6 +24,8 @@ export class PlayerAutoCombat {
     ] });
     private readonly running = new Int16Array(1).fill(-1);
     private readonly movement = { x: 0, z: 0, active: false };
+    private readonly evasion = { x: 0, z: 0, active: false };
+    private evading = false;
     private readonly path: AutoCombatPath;
     private readonly threats: AutoCombatThreats;
     private readonly rejectedX = new Float64Array(8);
@@ -45,11 +45,6 @@ export class PlayerAutoCombat {
     private nextDecision = 0;
     private nextPlan = 0;
     private manualUntil = 0;
-    private dangerSince = -1;
-    private dodgeUntil = 0;
-    private dodgeReadyAt = 0;
-    private dodgeX = 0;
-    private dodgeZ = 0;
     private progressX = 0;
     private progressZ = 0;
     private progressAt = 0;
@@ -62,40 +57,41 @@ export class PlayerAutoCombat {
         this.path = new AutoCombatPath(entities.terrain); this.threats = new AutoCombatThreats(entities);
     }
     public get enabled(): boolean { return this.enabledValue; }
-    public get activity(): AutoCombatActivity { return this.activityValue; }
+    public get activity(): AutoCombatActivity { return this.evading ? "evade" : this.activityValue; }
     private get x(): number { return this.entities.position.x[this.entities.player]; }
     private get z(): number { return this.entities.position.z[this.entities.player]; }
 
     public setEnabled(enabled: boolean): void {
         PlayerAutoCombat.tree.halt(this, 0, this.running);
         this.enabledValue = enabled; this.target = 0; this.enemySlot = -1; this.engaged = false;
-        this.nextDecision = this.manualUntil = this.dodgeUntil = this.dodgeReadyAt = 0; this.dangerSince = -1;
+        this.nextDecision = this.manualUntil = 0; this.evading = false;
         this.rejectedUntil.fill(0); this.stop(enabled ? "idle" : "off");
     }
 
-    public update(input: MovementInput, tick: number, stats: DerivedStats): MovementInput {
+    public update(input: MovementInput, tick: number, stats: DerivedStats, velocityX = 0, velocityZ = 0): MovementInput {
         if (!this.enabledValue) return input;
         this.tick = tick; this.stats = stats;
         if (input.active) {
             if (this.activityValue !== "manual") this.nextDecision = 0;
             this.manualUntil = tick + MANUAL_GRACE;
-            this.dodgeUntil = 0; this.dangerSince = -1;
+            this.evading = false;
             this.target = 0; this.engaged = false; this.stop("manual");
         }
         if (tick >= this.nextDecision) {
             this.nextDecision = tick + DECISION_TICKS;
             if (this.entities.vitals.health[this.entities.player] <= stats.maxHealth * .4) this.heal();
-            if (tick >= this.manualUntil) {
-                this.findEnemy(); this.threats.sense(this.x, this.z);
-            }
+            if (tick >= this.manualUntil) this.findEnemy();
             PlayerAutoCombat.tree.tick(this, 0, this.running);
+            if (tick >= this.manualUntil) {
+                if (this.activityValue === "chest" || this.activityValue === "seek") this.followPath();
+                this.threats.sense(tick);
+                this.chooseDodge(velocityX, velocityZ);
+            }
+            return input.active ? input : this.evading ? this.evasion : this.movement;
         }
         if (input.active) return input;
         if (tick < this.manualUntil) return this.movement;
-        if (this.activityValue === "evade") {
-            if (tick >= this.dodgeUntil) { this.stop("idle"); this.nextDecision = 0; }
-            return this.movement;
-        }
+        if (this.evading) return this.evasion;
         if (this.activityValue === "chest" || this.activityValue === "seek") this.followPath();
         return this.movement;
     }
@@ -185,29 +181,27 @@ export class PlayerAutoCombat {
         this.movement.x = dx * scale; this.movement.z = dz * scale;
     }
 
-    private chooseDodge(): boolean {
-        if (this.tick < this.dodgeUntil) return true;
-        const danger = this.threats.risk(this.x, this.z, this.tick, .5);
-        if (!danger) { this.dangerSince = -1; return false; }
-        if (this.dangerSince < 0) this.dangerSince = this.tick;
-        if (this.tick < this.dodgeReadyAt || this.tick - this.dangerSince < REACTION_TICKS) return false;
-        const travel = Math.min(1.5, this.stats.moveSpeed * .35);
-        let best = danger * 2, found = false;
-        for (let direction = 0; direction < 8; direction++) {
-            const angle = direction * Math.PI / 4, dx = Math.sin(angle) * travel, dz = Math.cos(angle) * travel;
-            const moved = this.entities.terrain.move(this.x, this.z, dx, dz, PLAYER_RADIUS, false);
-            if (Math.hypot(moved.x - this.x - dx, moved.z - this.z - dz) > 1e-5) continue;
-            const score = this.threats.risk(this.x + dx * .5, this.z + dz * .5, this.tick, .25)
-                + this.threats.risk(this.x + dx, this.z + dz, this.tick, .5);
-            if (score >= best) continue;
-            best = score; found = true; this.dodgeX = dx / travel; this.dodgeZ = dz / travel;
+    private chooseDodge(vx: number, vz: number): void {
+        const speed = this.stats.moveSpeed, travel = Math.min(6, speed * 1.5);
+        const arrival = this.activityValue === "seek" ? this.stats.attackRange * .85 : this.arrival;
+        const intendedTravel = this.movement.active ? Math.min(travel, Math.max(0, Math.hypot(this.goalX - this.x, this.goalZ - this.z) - arrival)) : 0;
+        const danger = this.threats.risk(this.movement.x, this.movement.z, speed, intendedTravel, vx, vz, 0);
+        const wasEvading = this.evading; this.evading = danger > 0;
+        if (!this.evading) return;
+        // Safety overrides pursuit/pickup without discarding their path or imposing a dodge cooldown.
+        let best = this.threats.risk(0, 0, speed, 0, vx, vz), tie = 0;
+        let bestX = 0, bestZ = 0;
+        const directions = best > 0 ? 16 : 0;
+        for (let direction = 0; direction < directions; direction++) {
+            const angle = direction * Math.PI / 8, dx = Math.sin(angle), dz = Math.cos(angle);
+            const score = this.threats.risk(dx, dz, speed, travel, vx, vz, best);
+            const preference = .01 + (wasEvading ? 1 - dx * this.evasion.x - dz * this.evasion.z : 0)
+                + .1 * (1 - dx * this.movement.x - dz * this.movement.z);
+            if (score > best || (score === best && preference >= tie)) continue;
+            best = score; tie = preference; bestX = dx; bestZ = dz;
         }
-        if (found) { this.dodgeUntil = this.tick + DODGE_DURATION; this.dodgeReadyAt = this.tick + DODGE_COOLDOWN; }
-        return found;
-    }
-    private evade(): void {
-        this.stop("evade"); this.movement.active = true;
-        const scale = Math.min(1, 1.5 / (this.stats.moveSpeed * .4));
-        this.movement.x = this.dodgeX * scale; this.movement.z = this.dodgeZ * scale;
+        this.evasion.x = bestX; this.evasion.z = bestZ; this.evasion.active = bestX !== 0 || bestZ !== 0;
+        // An evasive detour is movement progress, not an unreachable chest/monster.
+        this.progressAt = this.tick; this.progressX = this.x; this.progressZ = this.z;
     }
 }

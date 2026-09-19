@@ -308,7 +308,7 @@ export class CombatSimulation {
         this.entities.status.advance(this.tickValue);
         this.potionCooldown = Math.max(0, this.potionCooldown - STEP_SECONDS);
         this.entities.effects.advance(this.tickValue); this.entities.combatText.advance(this.tickValue);
-        const movement = this.autoCombat.update(input, this.tickValue, this.stats);
+        const movement = this.autoCombat.update(input, this.tickValue, this.stats, this.movementX, this.movementZ);
         if (!this.skills.advance(this.tickValue)) this.movePlayer(movement);
         if (this.location === "homestead") {
             this.skills.advanceOngoing(this.tickValue, this.random, this.settleOngoing);

@@ -10,7 +10,11 @@ if (args.some(arg => arg !== "--check" && !arg.startsWith("--baseline="))) throw
 const baselinePath = args.find(arg => arg.startsWith("--baseline="))?.slice("--baseline=".length);
 const bundle = await build({ stdin: { contents: `
     export { CombatSimulation } from './apps/survivor/src/core/CombatSimulation';
-    export { CombatWorld, Faction } from './apps/survivor/src/core/CombatWorld';
+    export { CombatWorld, Faction, ActorAction } from './apps/survivor/src/core/CombatWorld';
+    export { PlayerAutoCombat } from './apps/survivor/src/core/PlayerAutoCombat';
+    export { EnemyKind } from './apps/survivor/src/core/EnemyDefinitions';
+    export { deriveStats } from './apps/survivor/src/core/CombatStats';
+    export { sumEquipment } from './apps/survivor/src/core/Equipment';
     export { EnemyBehavior } from './apps/survivor/src/core/EnemyBehavior';
     export { RegionalWorld } from './apps/survivor/src/core/RegionalWorld';
     export { advanceProjectiles, moveEnemies, advanceEnemyActions } from './apps/survivor/src/core/CombatSystems';
@@ -61,13 +65,13 @@ function crowded() {
     return { msPerTick: elapsed / ticks, ticks, enemies: current.MAX_ENEMIES, projectiles: 128 };
 }
 
-function measure(run, budgetMsPerTick) {
+function measure(run, budgetMs, unit = "Tick") {
     run();
     const samples = [];
     let workload;
-    for (let i = 0; i < 5; i++) { globalThis.gc?.(); workload = run(); samples.push(workload.msPerTick); }
+    for (let i = 0; i < 5; i++) { globalThis.gc?.(); workload = run(); samples.push(workload[`msPer${unit}`]); }
     const median = [...samples].sort((a, b) => a - b)[2];
-    return { samplesMsPerTick: samples, medianMsPerTick: median, budgetMsPerTick, workload };
+    return { [`samplesMsPer${unit}`]: samples, [`medianMsPer${unit}`]: median, [`budgetMsPer${unit}`]: budgetMs, workload };
 }
 
 function terrainCombat(automatic = false) {
@@ -89,8 +93,41 @@ function terrainCombat(automatic = false) {
     return { msPerTick: elapsed / ticks, coldStartMs, ticks, chunks };
 }
 
+function autoAvoidance() {
+    const terrain = new current.ProceduralCombatTerrain("rift-ember-1"), entities = new current.CombatWorld(0, 0, terrain);
+    const region = new current.RegionalWorld("avoidance-budget", { x: 0, z: 0 }).regionAt(0, 0);
+    const stats = current.deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, current.sumEquipment({}));
+    entities.vitals.health[entities.player] = stats.maxHealth;
+    for (let index = 0; index < 8; index++) {
+        const angle = index * Math.PI / 4;
+        const slot = entities.spawnEnemy({ x: Math.sin(angle) * 5, z: Math.cos(angle) * 5, kind: current.EnemyKind.StormOracle,
+            level: 1, elite: true, boss: true, region }, { resident: true });
+        entities.enemy.active[slot] = 1; entities.position.heading[slot] = angle + Math.PI;
+        entities.action.kind[slot] = current.ActorAction.Storm; entities.action.variant[slot] = 5;
+        entities.action.hitAt[slot] = 60; entities.action.endsAt[slot] = 360;
+    }
+    for (let index = 0; index < 64; index++) {
+        const angle = index * Math.PI / 32;
+        entities.spawnProjectile(0, current.Faction.Enemy, Math.sin(angle) * 2, Math.cos(angle) * 2,
+            -Math.sin(angle) * 4.5, -Math.cos(angle) * 4.5, 1, 2, { turnRate: index % 2 ? .65 : -.65 });
+    }
+    const chests = { count: 0, x: new Float64Array(0), z: new Float64Array(0), tiers: new Uint8Array(0) };
+    const controller = new current.PlayerAutoCombat(entities, chests, () => {}), timings = [];
+    const started = performance.now();
+    // Repeated identical worst-capacity decisions; these timings are per decision, not amortized ticks.
+    for (let index = 0; index < 120; index++) {
+        controller.setEnabled(true);
+        const before = performance.now(); controller.update({ x: 0, z: 0, active: false }, 1, stats);
+        timings.push(performance.now() - before);
+        assert.equal(controller.activity, "evade");
+    }
+    const elapsed = performance.now() - started; terrain.dispose(); timings.sort((a, b) => a - b);
+    return { msPerDecision: elapsed / 120, decisions: 120, enemies: 8, liveProjectiles: 64,
+        p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
+}
+
 const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), terrain: measure(terrainCombat, 3),
-    autoCombat: measure(() => terrainCombat(true), 3) };
+    autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision") };
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
     simulationHz: current.GAME_CONFIG.timing.simulationHz, activeAiHz: current.GAME_CONFIG.timing.activeAiHz,
@@ -98,4 +135,5 @@ console.log(JSON.stringify({ context: { node: process.version, platform: platfor
 if (args.includes("--check")) {
     assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");
     for (const result of [results.travel, results.crowded, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
+    assert.ok(results.autoAvoidance.medianMsPerDecision <= results.autoAvoidance.budgetMsPerDecision, "Automatic avoidance exceeded its decision CPU budget");
 }
