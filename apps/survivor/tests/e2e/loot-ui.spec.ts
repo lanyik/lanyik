@@ -7,7 +7,7 @@ import { RARITIES } from "../../src/core/Loot";
 import { DeterministicRandom } from "../../src/core/DeterministicRandom";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { CombatWorld } from "../../src/core/CombatWorld";
-import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 
 test("quality cleanup, orb mouse/touch swaps and all ground quality effects render through the real worker", async ({ page }, testInfo) => {
@@ -17,6 +17,7 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     page.on("console", message => { if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text()); });
     await inspectCombatWorker(page); await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const random = new DeterministicRandom("loot-ui");

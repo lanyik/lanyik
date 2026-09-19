@@ -6,7 +6,7 @@ import type { RegionalWorld } from "../../src/core/RegionalWorld";
 import type { CombatTransport } from "../../src/app/CombatTransport";
 import type { HexMap, HexMapFrameEndEvent, GroundProjection } from "three-hex-map";
 import type { CombatLayer } from "../../src/presentation/CombatLayer";
-import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 
 async function startCrowdedCombat(page: Page): Promise<void> {
     await page.addInitScript(() => {
@@ -16,6 +16,7 @@ async function startCrowdedCombat(page: Page): Promise<void> {
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     await combatWorker(page).evaluate(() => {

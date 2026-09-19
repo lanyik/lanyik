@@ -4,6 +4,8 @@
 
 对应 `scripts/lib/survivor-environment.mjs`、`src/objects/Forest.ts`、`TerrainMesh.ts`、`TerrainArrayTexture.ts`、`terrainMaterial.ts` 和 `SunLight.ts`。源文件及哈希固定于 `assets/environment/sources.json`。
 
+家园三栋营地建筑由应用 `HomesteadModels` 使用共享 Box/Cone 几何和四份标准材质现场构造，属于仓库原创代码布景，无外部资产输入或离线构建产物。尺寸与碰撞共用 `HOMESTEAD.buildings`，由 `CombatLayer` 的资源账户统一登记和释放；仅家园显示。家园地图和玩法边界见[探索与家园](exploration-and-homestead.md)。
+
 ## 比例与实例化
 
 一个游戏单位为 34 世界单位，主角 1.6，即 54.4。树根高度归零，保留生成器树干根部 XZ=0，不能按不对称树冠中心平移，否则会偏离导航树干碰撞。应用 `treeScale=1`，稳定缩放抖动 0.8–1.2；每格树候选密度 .45，草高 3。森林与导航共用 `COMBAT_ENVIRONMENT`，水岸与碰撞规则见[地形通行](terrain-navigation.md)。

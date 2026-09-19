@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { Group, PerspectiveCamera, Vector4, Vector3, WebGLRenderer, Scene } from "three";
 import type { HexMap } from "three-hex-map";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
-import { pauseCombat } from "../helpers/browserCombat";
+import { enterWilds, pauseCombat } from "../helpers/browserCombat";
 
 type Fixture = { view: {
     render(): void;
@@ -20,6 +20,7 @@ test("foreground trees reveal the player locally and orbiting a ridge keeps the 
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text()); });
     await page.goto("/"); await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await pauseCombat(page);
     const coverage = await page.evaluate(async () => {

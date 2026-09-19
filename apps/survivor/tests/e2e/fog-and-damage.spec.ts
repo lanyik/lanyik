@@ -4,7 +4,7 @@ import type { Group, PerspectiveCamera, WebGLRenderer, Scene, Fog, Mesh, Instanc
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { CombatWorld } from "../../src/core/CombatWorld";
 import type { DamageNumbers } from "../../src/presentation/DamageNumbers";
-import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 
 test("distant terrain merges into the sky and 256 damage labels add exactly one draw", async ({ page }, info) => {
@@ -13,6 +13,7 @@ test("distant terrain merges into the sky and 256 damage labels add exactly one 
     page.on("console", message => { if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text()); });
     await inspectCombatWorker(page); await page.goto("/");
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45000 }); await pauseCombat(page);
     const fogResults = await page.evaluate(() => {
         const { map, layer } = (window.survivorApplication!.session as unknown as { view: {

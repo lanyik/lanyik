@@ -8,6 +8,7 @@ import { GAME_CONFIG, MAX_ENEMIES } from "../src/core/GameConfig";
 import { MAX_COMBAT_CHUNKS, type RegionalWorld } from "../src/core/RegionalWorld";
 import { OPEN_TERRAIN } from "../src/core/CombatTerrain";
 import { applyCombatCommand } from "../src/core/CombatCommand";
+import type { Exploration } from "../src/core/Exploration";
 
 const movementAt = (step: number): MovementInput => {
     const angle = step / ticksForSeconds(3);
@@ -20,6 +21,7 @@ describe("CombatSimulation", () => {
         combat.step({ x: 1, z: 0, active: true });
         const before = combat.checkpoint();
         combat.restore({ ...before, skills: { ...before.skills, dashUntil: before.tick + 30, dashX: 1, dashZ: 0 } });
+        (combat as unknown as { exploration: Exploration }).exploration.discover(360, 0);
         applyCombatCommand(combat, { type: "teleport", x: 360, z: 0 });
         const snapshot = combat.getSnapshot(), rendered = combat.getRenderState().player;
         expect(snapshot.player).toMatchObject({ x: 360, z: 0, health: before.player.health, mana: before.player.mana });
@@ -38,6 +40,7 @@ describe("CombatSimulation", () => {
         const combat = new CombatSimulation("blocked-map", { x: 0, z: 0 }, undefined,
             { ...OPEN_TERRAIN, isClear: (x, _z, radius) => x + radius < 50 });
         const before = combat.getSnapshot();
+        (combat as unknown as { exploration: Exploration }).exploration.discover(60, 0);
         combat.teleport(60, 0);
         expect(combat.getSnapshot()).toBe(before);
         expect(combat.drainNotices().map(notice => notice.message)).toContain("目标位置无法落脚，请选择平坦陆地");

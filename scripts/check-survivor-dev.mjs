@@ -18,6 +18,9 @@ try {
         return { status: snapshot.status, error: snapshot.error };
     });
     assert.equal(initial.status, "ready", initial.error);
+    await page.getByRole("button", { name: "出战荒野", exact: false }).click();
+    await page.locator('.survivor[data-state="ready"][data-location="wilds"]').waitFor({ timeout: 45_000 });
+    await page.waitForFunction(() => !window.survivorApplication.session.getSnapshot().travelling);
     await page.evaluate(async () => {
         const session = window.survivorApplication.session;
         session.dispatch({ type: "toggle-pause" });
@@ -49,8 +52,8 @@ try {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.keyboard.press("KeyK");
     await page.locator(".skills-window").waitFor();
-    assert.equal(await page.locator(".skill-catalog article").count(), 5);
-    assert.equal(await page.locator('.skill-catalog [data-item-icon="skill"]').count(), 5);
+    assert.equal(await page.locator(".skill-catalog article").count(), 8);
+    assert.equal(await page.locator('.skill-catalog [data-item-icon="skill"]').count(), 8);
     await page.locator('[data-skill="frost"] .skill-icon-trigger').dragTo(page.locator('.skill-loadout [data-skill-slot="0"]'));
     await page.waitForFunction(() => document.querySelector('.skill-loadout [data-skill-slot="0"] [data-item-icon="skill"]')?.getAttribute("data-item-value") === "frost");
     await page.locator(".skill-management").evaluate(element => { element.scrollTop = element.scrollHeight; });

@@ -1,5 +1,6 @@
 import type { CombatRenderState, MovementInput } from "../core/CombatState";
 import type { WorkerActivitySnapshot } from "three-hex-map";
+import type { WorldLocation } from "../core/Homestead";
 
 export interface CombatStart {
     readonly x: number;
@@ -8,7 +9,7 @@ export interface CombatStart {
 
 export interface CombatView {
     readonly workerActivity: readonly WorkerActivitySnapshot[];
-    load(seed: string, position?: CombatStart): Promise<CombatStart>;
+    load(seed: string, position?: CombatStart, location?: WorldLocation): Promise<CombatStart>;
     /** Clear the previous run before loading or creating its replacement simulation. */
     reset(): void;
     readMovement(): MovementInput;

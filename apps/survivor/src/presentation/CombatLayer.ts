@@ -42,6 +42,8 @@ import { DamageNumbers } from "./DamageNumbers";
 import { BoundaryMist } from "./BoundaryMist";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "../core/EnemyDefinitions";
 import { ACTOR_FADE_END, actorVisibility } from "./ActorVisibility";
+import { HomesteadModels } from "./HomesteadModels";
+import type { WorldLocation } from "../core/Homestead";
 const RARITY_COLORS = RARITIES.map(rarity => new Color(GAME_CONFIG.quality[rarity].color));
 const CHEST_COLORS = [new Color(0xb87838), new Color(0xd7e0ed), new Color(0xffc34b), new Color(0x70f5ed), new Color(0xff79dc)] as const;
 const WHITE = new Color(0xffffff);
@@ -91,6 +93,8 @@ export class CombatLayer implements WorldRenderLayer {
     private actors: ActorModels | undefined;
     private effects: SkillEffects | undefined;
     private readonly mist = new BoundaryMist();
+    private readonly homestead = new HomesteadModels();
+    private location: WorldLocation = "wilds";
     private actorLoading: Promise<void> | undefined;
     private assetAbort: AbortController | undefined;
     private disposed = false;
@@ -142,6 +146,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.buildPlayer();
         this.groundProjection.root.add(this.enemyEffects.warnings, this.telegraphs, this.chargeWarnings, this.groundPlayer, this.lootEffects.halo);
         this.root.add(this.enemyEffects.root, this.projectiles, this.experience, this.lootEffects.beam, this.player, this.mist.mesh);
+        this.root.add(this.homestead.root); this.homestead.root.visible = false;
         try { resources.acquireRequired("combat-render-pool", {}, true, [
             ...collectObject3DResourceAllocations([this.root, this.groundProjection.root]),
             { identity: this.groundProjection.target.texture, cost: {
@@ -204,6 +209,7 @@ export class CombatLayer implements WorldRenderLayer {
         host.addObject(this.root);
     }
 
+    public setLocation(location: WorldLocation): void { this.location = location; }
     public update(state: CombatRenderState, alpha: number, timestampMs: number): void {
         if (!this.host || !this.actors || !this.lootModels) return;
         this.root.visible = this.groundProjection.root.visible = true;
@@ -212,6 +218,8 @@ export class CombatLayer implements WorldRenderLayer {
         const playerX = state.player.previousX + (state.player.x - state.player.previousX) * blend;
         const playerZ = state.player.previousZ + (state.player.z - state.player.previousZ) * blend;
         this.renderOrigin.set(playerX, playerZ);
+        this.homestead.root.visible = this.location === "homestead";
+        this.homestead.root.position.set(-playerX, 0, -playerZ);
         this.root.position.set(playerX * this.host.tileSize, 0, playerZ * this.host.tileSize);
         this.player.position.set(0, this.height(playerX, playerZ), 0);
         this.groundPlayer.position.set(0, 0, 0);
@@ -229,6 +237,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.enemyEffects.begin(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ);
         this.damageNumbers!.update(state.combatText, state.player.animationTime, this.effectHeight, playerX, playerZ);
         this.mist.update(0, this.player.position.y, 0, state.player.animationTime, playerX, playerZ);
+        this.mist.mesh.visible = this.location === "wilds";
 
         for (const pool of this.actors.enemies) for (const mesh of pool) mesh.count = 0;
         this.telegraphs.count = this.chargeWarnings.count = 0;
@@ -379,6 +388,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.lootEffects.dispose();
         this.groundProjection.dispose();
         this.mist.dispose();
+        this.homestead.dispose();
         this.actorFill.dispose();
         for (const mesh of [this.projectiles, this.telegraphs, this.chargeWarnings, this.experience]) mesh.dispose();
         for (const geometry of Object.values(this.geometries)) geometry.dispose();

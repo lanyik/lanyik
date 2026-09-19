@@ -4,7 +4,7 @@ import { generateOrb } from "../../src/core/Orbs";
 import { DeterministicRandom } from "../../src/core/DeterministicRandom";
 import { createStarterEquipment } from "../../src/core/Equipment";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
-import { combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
+import { enterWilds, combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
 
 test("item icons alone show details, Alt pins one tooltip, and potion stacks use their own bag", async ({ page }, testInfo) => {
     // Desktop and narrow interaction checks run with software WebGL in CI too.
@@ -12,6 +12,7 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const items = [createConsumable(9000, "common", "health", 2), createConsumable(9001, "common", "health", 3),
@@ -72,6 +73,7 @@ test("a new run resets item selection and the selected orb socket before IDs are
     test.setTimeout(90_000);
     await inspectCombatWorker(page); await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const equipment = { ...createStarterEquipment(), id: 2 };

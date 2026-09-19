@@ -76,6 +76,7 @@ docs/
 | 要做的事 | 主要设计 → 需要联动的设计 | 代码起点 |
 |---|---|---|
 | 技能树、Buff、被动、伤害效果 | [战斗架构](game/combat-architecture.md) → [技能与效果](game/skills-and-effects.md)、[战斗与成长](game/combat-and-progression.md)；范围与顺序见[开发重点](game/development-priorities.md) | [StatusSystem](../apps/survivor/src/core/StatusSystem.ts)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[CombatResolution](../apps/survivor/src/core/CombatResolution.ts) |
+| 探索迷雾、地图传送、家园往返 | [探索与家园](game/exploration-and-homestead.md) → [角色存档](game/character-saves.md)、[界面设计](game/interface-design.md) | [Exploration](../apps/survivor/src/core/Exploration.ts)、[Homestead](../apps/survivor/src/core/Homestead.ts)、[CombatSession](../apps/survivor/src/app/CombatSession.ts) |
 | 装备、套装、连携与构筑 | [物品合同](game/items.md) → [打造与灵境](game/crafting-and-spirit.md)、[战斗架构](game/combat-architecture.md) | [Equipment](../apps/survivor/src/core/Equipment.ts)、[Crafting](../apps/survivor/src/core/Crafting.ts)；套装/连携尚未完整实现 |
 | 怪物行为、攻击节奏与难度 | [模拟与 AI](game/simulation-and-ai.md) → [数值平衡](game/combat-balance.md)、[技能与效果](game/skills-and-effects.md) | [EnemyBehavior](../apps/survivor/src/core/EnemyBehavior.ts)、[EnemyDefinitions](../apps/survivor/src/core/EnemyDefinitions.ts)、[EnemyActions](../apps/survivor/src/core/EnemyActions.ts) |
 | 任务、剧情、据点长期进度 | [开发重点](game/development-priorities.md) → [战斗架构](game/combat-architecture.md)、[角色存档](game/character-saves.md) | 现有接点：[CombatEvents](../apps/survivor/src/core/CombatEvents.ts)、[CharacterCheckpoint](../apps/survivor/src/core/CharacterCheckpoint.ts)；任务/剧情系统尚未实现 |
@@ -121,6 +122,9 @@ flowchart TB
     loop --> item["物品与装备<br/>items.md"]
     item --> craft["打造与灵境<br/>crafting-and-spirit.md"]
     craft --> save["角色存档<br/>character-saves.md"]
+    app --> explore["探索与家园<br/>exploration-and-homestead.md"]
+    explore --> save
+    explore -. 权限与边界 .-> terrain
     ai --> terrain["通行与遭遇<br/>terrain-navigation.md"]
     app --> visual["视觉总览<br/>visual-modernization.md"]
     visual --> actor["角色与动作<br/>actor-assets.md"]
@@ -147,6 +151,7 @@ flowchart TB
 | [items.md](game/items.md) | 装备生成与比较、物品身份、背包/穿戴/入包事务、分类回收、图标与地面表现 | [InventoryItem](../apps/survivor/src/core/InventoryItem.ts)、[Inventory](../apps/survivor/src/core/Inventory.ts)、[EquipmentEvaluation](../apps/survivor/src/core/EquipmentEvaluation.ts)、[Recycling](../apps/survivor/src/core/Recycling.ts) |
 | [crafting-and-spirit.md](game/crafting-and-spirit.md) | 词条打造、宝珠精炼/共鸣、打造事务与确认窗、永久灵境成长 | [Crafting](../apps/survivor/src/core/Crafting.ts)、[Orbs](../apps/survivor/src/core/Orbs.ts)、[SpiritRealm](../apps/survivor/src/core/SpiritRealm.ts) |
 | [character-saves.md](game/character-saves.md) | 角色检查点、自动/手动槽、灵境独立存储及读档重建边界 | [CharacterCheckpoint](../apps/survivor/src/core/CharacterCheckpoint.ts)、[CharacterRepository](../apps/survivor/src/app/CharacterRepository.ts)、[SpiritRepository](../apps/survivor/src/worker/SpiritRepository.ts) |
+| [exploration-and-homestead.md](game/exploration-and-homestead.md) | 迷雾探索、等级揭示、传送权限、64×64 安全家园与往返 | [Exploration](../apps/survivor/src/core/Exploration.ts)、[Homestead](../apps/survivor/src/core/Homestead.ts)、[HomesteadMap](../apps/survivor/src/adapters/HomesteadMap.ts) |
 | [terrain-navigation.md](game/terrain-navigation.md) | 坡度、水体、树干、滑移、攻击遮挡、营地落点与可达性 | [CombatTerrain](../apps/survivor/src/core/CombatTerrain.ts)、[SurfaceMotion](../apps/survivor/src/core/SurfaceMotion.ts)、[EncounterNavigation](../apps/survivor/src/core/EncounterNavigation.ts) |
 | [interface-design.md](game/interface-design.md) | HUD 与页面职责、背包/技能交互、快捷键、窄屏布局 | [presentation](../apps/survivor/src/presentation/)、[app.css](../apps/survivor/src/presentation/app.css) |
 | [ui-performance.md](game/ui-performance.md) | 快照分支复用、虚拟网格、UI 实测方法与局限 | [ShareSnapshot](../apps/survivor/src/app/ShareSnapshot.ts)、[VirtualItemGrid](../apps/survivor/src/presentation/VirtualItemGrid.tsx)、[UI 基准](../scripts/benchmark-survivor-ui.mjs) |

@@ -5,7 +5,7 @@ import { createConsumable, type InventoryItem } from "../../src/core/InventoryIt
 import { createOrb } from "../../src/core/Orbs";
 import { createAffixItem } from "../../src/core/AffixItem";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
-import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
 
 async function inventory(page: Parameters<typeof combatWorker>[0], items: InventoryItem[]) {
     await combatWorker(page).evaluate(items => {
@@ -29,6 +29,7 @@ test("home previews seeds before graphics starts; manual and auto saves roundtri
     await expect(page.locator(".world-preview")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await page.screenshot({ path: info.outputPath("start-screen.png") });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
     const items = [{ ...createStarterEquipment(), id: 22 }, createOrb(23, "rare", "bounty"), createConsumable(24, "legendary", "mana-percent", 7), createAffixItem(25, { stat: "damage", value: 20, rarity: "rare" })];
@@ -59,6 +60,7 @@ test("home previews seeds before graphics starts; manual and auto saves roundtri
 test("Shift toggles bag and forge locks; a single level-batch preview protects locks and grids stay bounded", async ({ page }, info) => {
     test.setTimeout(100_000); await inspectCombatWorker(page); await page.goto("/");
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
     const base = createStarterEquipment();

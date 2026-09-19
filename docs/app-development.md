@@ -4,7 +4,7 @@
 
 本页维护会话、主线程集成、状态发布、暂停、生命周期和诊断；玩法、物品与布局规则由下方领域合同维护。
 
-当前 `apps/survivor` 已实现 Worker 战斗模拟、有界 SoA ECS、六种怪物行为树与 Boss 狂暴阶段、近战/远程/冲锋/治疗、六边形地域、四圈驻留生态、角色/背包独立界面、五选四技能及升级、六槽宝珠和寻宝共鸣、词条打造/继承，以及浏览器持久化灵境。
+当前 `apps/survivor` 已实现 Worker 战斗模拟、有界 SoA ECS、六种怪物行为树与 Boss 狂暴阶段、近战/远程/冲锋/治疗、六边形地域、四圈驻留生态、角色/背包独立界面、八选四技能及升级、六槽宝珠和寻宝共鸣、词条打造/继承，以及浏览器持久化灵境。
 现在从开始界面进入：种子世界预览、继续游戏、自动/手动角色存读档见[角色存档合同](./game/character-saves.md)。`bootstrap` 在点击开始前不创建图形和战斗资源。
 地域、奖励和成长数值见[战斗、成长与寻宝合同](./game/combat-and-progression.md)，装备、背包与回收见[物品合同](game/items.md)，模型来源、处理与资源生命周期见
 [角色资产合同](./game/actor-assets.md)，玩家体验见[游戏想法](../游戏想法.md)。
@@ -21,6 +21,7 @@ ECS 接入时机、技术取舍、实体身份、系统顺序与怪物行为见[
 核心不导入 React、Three.js、DOM、Worker 或地图内部模块；地形流送不拥有战斗事实。
 
 新增角色存档由 `core/CharacterCheckpoint.ts` 定义和校验，`SkillSystem`/`DeterministicRandom` 导出与恢复自身状态，Worker 批次在前序操作后生成角色记录。
+`Exploration` 由模拟独占写入，独立 revision 快照只在变化时发送。家园与荒野共享角色检查点，规则见[探索与家园](game/exploration-and-homestead.md)；`CombatSession.travel` 先通过 Worker 检查点屏障并提交自动存档，再替换 WorldSource 与战斗 Worker，保存失败保留当前世界，加载结果按世代隔离。
 `app/CharacterRepository.ts` 负责固定 IndexedDB 槽与世界版本；`StartScreen`/`SessionMenu` 负责种子预览和存读档操作，`WorldPreview.worker.ts` 执行一次性地图栅格生成。
 主线程 UI 消费只读快照；快照分支复用、虚拟列表和测量方法见[UI 开销](game/ui-performance.md)。
 
@@ -78,6 +79,7 @@ React 只读取冻结的低频快照和提交命令，不直接修改战斗；�
 
 出生搜索使用与 ProceduralWorldSource 相同水体配置的同步 resolver，在最多 14 圈内寻找 5×5 干燥地面。
 找不到则明确失败。`HexMap.loadWorld()` 调用开始即拥有 source；调用前未发布的 source 由适配器清理。
+新角色首次进入家园，但仍为荒野计算独立出生原点。`HexCombatView.load` 按 location 选择家园 `StaticWorldSource` 或荒野 `ProceduralWorldSource`，生产 Worker 同步选择 `HomesteadTerrain` 或程序化地形。原点不随家园坐标改变；往返后恢复已有暂停状态，加载重试沿用目标检查点。
 逻辑战斗坐标单位为 tileSize=1，表现层根节点按实际 tileSize 缩放，镜头跟随插值位置和地表高度。
 角色、掉落、宝箱和效果事实保留双精度逻辑坐标；写实例矩阵前减去插值玩家位置，根节点以双精度放回逻辑世界。
 角色出生锚、距离淡出与技能投影源使用同一局部原点，避免地图浮动原点已移动而实例缓冲仍保存巨大 Float32 坐标。
@@ -157,7 +159,7 @@ Vite 保持 React、Three.js、世界运行时的明确分组，生成文件不�
 `RuntimeLog.test.ts` 验证跨页保留、条数/字符预算、存储拒绝/配额/损坏；`Bootstrap.test.ts` 验证异常接线及监听清理。
 `inventory-shortcuts.spec.ts` 在真实 Worker 页面检查 Shift+W、连续锁定、Shift+空格长按、解锁自动售出时的浮窗卸载，并通过真实未捕获错误、刷新、下载验证日志保留。
 
-交付正在运行的开发地址前，执行 `npm run check:app:dev`，检查 5173 的实际页面、地形小地图采样完成、五技能 type/value 图标、拖拽装配、着色器错误与窄屏滚动后的关闭按钮，以及未打包模拟 Worker 中三类物品的生成与入包。
+交付正在运行的开发地址前，执行 `npm run check:app:dev`，检查 5173 的实际页面、家园出战、地形小地图采样完成、八技能 type/value 图标、拖拽装配、着色器错误与窄屏滚动后的关闭按钮，以及未打包模拟 Worker 中三类物品的生成与入包。
 该检查复用正在运行的服务，不替换 Worker 或预先重建服务，能够发现开发服务返回旧模块而磁盘源码已更新的情况。
 检查样本中只有装备传入物品等级；宝珠生成使用默认最低品质，药剂以品质、配方和堆叠数量创建，与无等级物品合同保持一致。
 物品公共字段或跨 Worker 合同重构后，重启开发服务并刷新页面，再通过该检查；生产构建通过或 HTTP 200 不能替代开发地址验收。

@@ -3,6 +3,7 @@ import type { RegionMapBinding, RegionMapControls, MapDestination } from "../app
 import type { CombatSnapshot } from "../core/CombatState";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { REGION_RADIUS, RegionalWorld, type RegionInfo } from "../core/RegionalWorld";
+import { Exploration, type ExplorationSnapshot } from "../core/Exploration";
 
 /** Inverse even-column offset layout, interpolated between tile centres. */
 export function overviewPoint(x: number, z: number): { x: number; y: number } {
@@ -22,36 +23,50 @@ export class HexRegionMap implements RegionMapBinding {
     private regions: RegionalWorld | undefined;
     private visibleRegions: readonly RegionInfo[] = [];
     private regionWindow = "";
+    private exploration = new Exploration();
+    private discoveryRevision = -1;
+    private selectedTile: Readonly<Point> | undefined;
+    private fogSignature = "";
+    private fogRects: number[] = [];
 
-    constructor(map: HexMap, canvas: HTMLCanvasElement, controls: RegionMapControls, onError: (error: Error) => void) {
+    constructor(map: HexMap, canvas: HTMLCanvasElement, private readonly controls: RegionMapControls, onError: (error: Error) => void) {
         const policy = GAME_CONFIG.presentation.minimap;
         this.minimap = new WorldMinimap({ map, element: canvas, keyboard: false,
             infiniteTileSpan: policy.tileSpan, rasterSize: policy.rasterSize, cacheEntries: policy.cacheEntries,
             onExpandedChange: controls.onExpandedChange,
-            onDestinationChange: tile => controls.onDestinationChange(tile ? this.destination(tile) : undefined),
+            onDestinationChange: tile => { this.selectedTile = tile; controls.onDestinationChange(tile ? this.destination(tile) : undefined); },
             onNavigate: tile => controls.onNavigate(this.destination(tile)),
             drawOverlay: this.drawOverlay, onError });
     }
 
-    public update(combat: CombatSnapshot): void {
+    public update(combat: CombatSnapshot, discovery: ExplorationSnapshot): void {
         const previous = this.combat;
         this.combat = combat;
+        const knowledgeChanged = this.discoveryRevision !== discovery.revision || previous?.player.level !== combat.player.level;
+        if (this.discoveryRevision !== discovery.revision) {
+            this.exploration = new Exploration(discovery); this.discoveryRevision = discovery.revision;
+        }
         if (!previous || previous.world.seed !== combat.world.seed || previous.world.origin.x !== combat.world.origin.x
             || previous.world.origin.z !== combat.world.origin.z) {
             this.regions = new RegionalWorld(combat.world.seed, combat.world.origin); this.regionWindow = "";
         }
-        if (!this.regionWindow || !previous || previous.player.x !== combat.player.x || previous.player.z !== combat.player.z
+        if (knowledgeChanged && this.selectedTile) this.controls.onDestinationChange(this.destination(this.selectedTile));
+        if (knowledgeChanged || !this.regionWindow || !previous || previous.player.x !== combat.player.x || previous.player.z !== combat.player.z
             || previous.player.heading !== combat.player.heading
             || previous.region.x !== combat.region.x || previous.region.z !== combat.region.z) this.minimap.redraw();
     }
     public setExpanded(expanded: boolean): void { this.minimap.setExpanded(expanded); }
     public recenter(): void { this.minimap.recenter(); }
-    public navigate(): void { if (!this.combat?.gameOver) this.minimap.navigateToDestination(); }
+    public navigate(): void {
+        if (this.combat && !this.combat.gameOver && this.selectedTile && this.destination(this.selectedTile).accessible) this.minimap.navigateToDestination();
+    }
     public dispose(): void { this.minimap.dispose(); this.combat = undefined; }
 
     private destination(tile: Readonly<Point>): MapDestination {
         const point = getHexCenter(tile.x, tile.y, 1);
-        return { x: point.x, z: point.y, region: this.regions!.regionAt(point.x, point.y) };
+        const region = this.regions!.regionAt(point.x, point.y);
+        return { x: point.x, z: point.y, region, accessible: this.combat!.world.location === "homestead"
+            || this.exploration.has(point.x, point.y) || region.level < this.combat!.player.level };
     }
 
     private drawOverlay = (context: CanvasRenderingContext2D, { content, extent, destination }: WorldMinimapOverlayFrame): void => {
@@ -74,7 +89,7 @@ export class HexRegionMap implements RegionMapBinding {
             this.regionWindow = signature;
         }
         // Overlapping washes leave the sampled river and relief colours legible.
-        for (const region of this.visibleRegions) {
+        for (const region of combat.world.location === "homestead" ? [] : this.visibleRegions) {
             if (region.difficulty === "normal") continue;
             const p = project(region.centerX, region.centerZ), horror = region.difficulty === "horror";
             const radiusX = REGION_RADIUS / 1.5 * scaleX, radiusY = REGION_RADIUS / Math.sqrt(3) * scaleY;
@@ -88,7 +103,8 @@ export class HexRegionMap implements RegionMapBinding {
             wash.addColorStop(1, `rgba(${color}, 0)`);
             context.fillStyle = wash; context.fillRect(-1.2, -1.2, 2.4, 2.4); context.restore();
         }
-        for (const region of this.visibleRegions) {
+        for (const region of combat.world.location === "homestead" ? [] : this.visibleRegions) {
+            if (!this.exploration.has(region.centerX, region.centerZ) && region.level >= combat.player.level) continue;
             if (region.difficulty !== "horror" && (!this.minimap.isExpanded || region.difficulty !== "hard")) continue;
             const p = project(region.centerX, region.centerZ);
             const playerDistance = Math.hypot(region.centerX - combat.player.x, region.centerZ - combat.player.z);
@@ -102,6 +118,7 @@ export class HexRegionMap implements RegionMapBinding {
             if (this.minimap.isExpanded) context.fillText(`Lv.${region.level}`, p.x, p.y + 7);
             context.shadowBlur = 0;
         }
+        if (combat.world.location === "wilds") this.drawFog(context, { content, extent });
         const player = project(combat.player.x, combat.player.z);
         context.beginPath(); context.arc(player.x, player.y, 9, 0, Math.PI * 2);
         context.fillStyle = "#fff2bf22"; context.fill();
@@ -121,4 +138,33 @@ export class HexRegionMap implements RegionMapBinding {
             context.moveTo(x, y - 13); context.lineTo(x, y - 5); context.moveTo(x, y + 5); context.lineTo(x, y + 13); context.stroke();
         }
     };
+
+    private drawFog(context: CanvasRenderingContext2D, { content, extent }: WorldMinimapOverlayFrame): void {
+        const level = this.combat!.player.level, resolution = 128;
+        const signature = `${extent.originX},${extent.originY},${extent.tileSpanX},${extent.tileSpanY},${level},${this.discoveryRevision}`;
+        if (signature !== this.fogSignature) {
+            const rectangles: number[] = [];
+            let region: RegionInfo | undefined;
+            for (let row = 0; row < resolution; row++) {
+                let run = -1;
+                for (let column = 0; column <= resolution; column++) {
+                    const tx = extent.originX + (column + .5) / resolution * extent.tileSpanX - .5;
+                    const left = Math.floor(tx), fraction = tx - left;
+                    const shift = (left % 2 === 0 ? 1 - fraction : fraction) * .5;
+                    const x = tx * 1.5, z = (extent.originY + (row + .5) / resolution * extent.tileSpanY - .5 + shift) * Math.sqrt(3);
+                    let known = column === resolution || this.exploration.has(x, z);
+                    if (!known && level > 1) { region = this.regions!.regionAt(x, z, region); known = region.level < level; }
+                    if (!known && run < 0) run = column;
+                    else if (known && run >= 0) { rectangles.push(run / resolution, row / resolution, (column - run) / resolution, 1 / resolution); run = -1; }
+                }
+            }
+            this.fogRects = rectangles; this.fogSignature = signature;
+        }
+        const shade = context.createLinearGradient(0, content.y, 0, content.y + content.height);
+        shade.addColorStop(0, "#172732"); shade.addColorStop(1, "#09141e");
+        context.fillStyle = shade; context.beginPath();
+        for (let i = 0; i < this.fogRects.length; i += 4) context.rect(content.x + this.fogRects[i] * content.width,
+            content.y + this.fogRects[i + 1] * content.height, this.fogRects[i + 2] * content.width, this.fogRects[i + 3] * content.height);
+        context.fill();
+    }
 }

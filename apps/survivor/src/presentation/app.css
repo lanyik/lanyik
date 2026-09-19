@@ -87,6 +87,9 @@ canvas { display: block; }
 .worker-load-meter b { position: relative; font-weight: 500; }
 .worker-load-note { margin-top: 6px; }
 .region-map-panel { position: absolute; top: 20px; right: 24px; width: 240px; padding: 14px; }
+.journey-controls { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--edge); font-size: 10px; color: var(--muted); }
+.journey-controls button { padding: 5px 8px; font-size: 11px; flex-shrink: 0; }
+@media (max-width: 760px) { .journey-controls > span { display: none; } .journey-controls { justify-content: flex-start; } }
 .region-map-panel.expanded { top: 50%; left: 50%; right: auto; transform: translate(-50%, -50%); width: min(760px, calc(100vw - 32px), calc(100dvh - 300px)); max-height: calc(100dvh - 24px); overflow-y: auto; z-index: 14; background: var(--surface); box-shadow: 0 20px 80px #000b; }
 .region-map-panel header, .region-map-panel footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .region-map-panel header strong { font-size: 17px; }

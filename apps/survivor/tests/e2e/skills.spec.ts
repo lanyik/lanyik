@@ -6,7 +6,7 @@ import type { CombatWorld } from "../../src/core/CombatWorld";
 import type { RegionalWorld } from "../../src/core/RegionalWorld";
 import type { CombatRenderState } from "../../src/core/CombatState";
 import type { EnemyKind } from "../../src/core/EnemyDefinitions";
-import { advanceCombat, combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
+import { enterWilds, advanceCombat, combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
 
 test("six monster roles share pools; skill effects, ranks and loadout work through the real Worker", async ({ page }, testInfo) => {
     test.setTimeout(180_000);
@@ -19,6 +19,7 @@ test("six monster roles share pools; skill effects, ranks and loadout work throu
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     expect(atlas).toHaveLength(1);

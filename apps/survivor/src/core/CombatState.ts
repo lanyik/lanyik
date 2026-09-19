@@ -13,6 +13,7 @@ import type { RecyclingRules } from "./Recycling";
 import type { ItemType } from "./ItemDefinition";
 import type { SpiritRealm } from "./SpiritRealm";
 import type { OrbResonance } from "./Orbs";
+import type { WorldLocation } from "./Homestead";
 
 export interface MovementInput {
     readonly x: number;
@@ -51,7 +52,7 @@ export interface PlayerSnapshot {
 }
 
 export interface CombatSnapshot {
-    readonly world: Readonly<{ seed: string; origin: Readonly<{ x: number; z: number }> }>;
+    readonly world: Readonly<{ seed: string; origin: Readonly<{ x: number; z: number }>; location: WorldLocation }>;
     readonly revision: number;
     readonly tick: number;
     readonly elapsedMs: number;

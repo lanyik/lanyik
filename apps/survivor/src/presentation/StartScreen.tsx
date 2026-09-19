@@ -9,7 +9,7 @@ import "./menus.css";
 
 export function SaveSummary({ save }: { save: CharacterSave }) {
     const p = save.checkpoint.player;
-    return <><strong>Lv.{p.level} · 击杀 {save.checkpoint.kills}</strong><span>{save.checkpoint.seed}</span>
+    return <><strong>Lv.{p.level} · 击杀 {save.checkpoint.kills} · {save.checkpoint.location === "homestead" ? "家园" : "荒野"}</strong><span>{save.checkpoint.seed}</span>
         <small>金币 {p.gold.toLocaleString("zh-CN")} · 背包 {p.inventory.length} 格</small><time>{new Date(save.savedAt).toLocaleString("zh-CN")}</time></>;
 }
 
@@ -46,7 +46,7 @@ export function StartScreen({ repository, start, error, blocked = false, log }: 
     };
     const latest = entries.flatMap(entry => entry.save ? [entry.save] : []).sort((a, b) => b.savedAt - a.savedAt)[0];
     return <main className="survivor start-screen" data-state="menu"><div className="start-shell">
-        <header className="start-brand"><UiIcon name="rift" /><div><span className="eyebrow">RIFT / 荒原</span><h1>踏入未知，带回力量。</h1><p>选择一片荒原，开始新的探索，或继续你的旅程。</p></div></header>
+        <header className="start-brand"><UiIcon name="rift" /><div><span className="eyebrow">RIFT / 荒原</span><h1>踏入未知，带回力量。</h1><p>从家园整装出发，探索迷雾中的荒野，带着收获归来。</p></div></header>
         <div className="start-columns"><section className="world-setup"><header><h2>新的世界</h2><small>无限地域 · 同种子生成相同地形</small></header>
             <div className="world-preview" data-state={preview}><canvas ref={canvas} width="192" height="192" aria-label="世界大致预览" />
                 {preview !== "ready" && <span>{preview === "loading" ? "正在描绘世界…" : previewError || "请输入世界种子"}</span>}<b>北 ↑</b></div>

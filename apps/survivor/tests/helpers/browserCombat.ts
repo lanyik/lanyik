@@ -1,7 +1,14 @@
 import { MAX_STEP_BATCH } from "../../src/worker/CombatProtocol";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+
+export async function enterWilds(page: Page): Promise<void> {
+    await expect(page.locator(".survivor[data-state=ready]")).toHaveAttribute("data-location", "homestead", { timeout: 45_000 });
+    await page.getByRole("button", { name: "出战荒野", exact: false }).click();
+    await expect(page.locator(".survivor[data-state=ready]")).toHaveAttribute("data-location", "wilds", { timeout: 45_000 });
+    await expect(page.locator(".state-overlay.loading")).toHaveCount(0);
+}
 
 export async function inspectCombatWorker(page: Page): Promise<void> {
     const bundle = await build({ entryPoints: [fileURLToPath(new URL("./InspectableCombat.worker.ts", import.meta.url))],

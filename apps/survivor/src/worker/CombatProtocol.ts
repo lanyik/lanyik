@@ -4,12 +4,15 @@ import type { RenderPacket } from "./RenderFrame";
 import type { WorkerActivitySnapshot } from "three-hex-map";
 import { GAME_CONFIG, MAX_CATCH_UP_TICKS } from "../core/GameConfig";
 import type { CharacterCheckpoint } from "../core/CharacterCheckpoint";
+import type { ExplorationSnapshot } from "../core/Exploration";
+import type { WorldLocation } from "../core/Homestead";
 
 export const MAX_STEP_BATCH = MAX_CATCH_UP_TICKS;
 export const MAX_COMMAND_BATCH = GAME_CONFIG.workers.maxCommands;
 export const WORKER_TIMEOUT_MS = GAME_CONFIG.workers.timeoutMs;
 
 export interface CombatAdvance {
+    readonly travel?: WorldLocation;
     readonly checkpoint?: boolean;
     readonly steps: number;
     readonly input: MovementInput;
@@ -28,6 +31,7 @@ export interface CombatWorkerStats {
     readonly frameBytes: number;
 }
 export interface CombatUpdate {
+    readonly exploration?: ExplorationSnapshot;
     readonly checkpoint?: CharacterCheckpoint;
     readonly checkpointError?: string;
     readonly tick: number;
@@ -38,7 +42,7 @@ export interface CombatUpdate {
     readonly stats: CombatWorkerStats;
 }
 export type CombatRequest =
-    | { readonly type: "init"; readonly id: number; readonly seed: string; readonly start: { readonly x: number; readonly z: number }; readonly ports: MessagePort[]; readonly checkpoint?: CharacterCheckpoint }
+    | { readonly type: "init"; readonly id: number; readonly seed: string; readonly start: { readonly x: number; readonly z: number }; readonly location?: WorldLocation; readonly ports: MessagePort[]; readonly checkpoint?: CharacterCheckpoint }
     | { readonly type: "advance"; readonly id: number; readonly batch: CombatAdvance; readonly recycle?: ArrayBuffer };
 export type CombatResponse =
     | { readonly type: "state"; readonly id: number; readonly update: CombatUpdate }

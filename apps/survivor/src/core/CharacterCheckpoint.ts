@@ -6,9 +6,14 @@ import { RARITIES } from "./Loot";
 import { SKILL_IDS } from "./Skills";
 import type { SkillCheckpoint } from "./SkillSystem";
 import { validateSpiritRealm } from "./SpiritRealm";
+import { validateExploration, type ExplorationSnapshot } from "./Exploration";
+import type { WorldLocation } from "./Homestead";
 
 export interface CharacterCheckpoint {
-    readonly version: 2;
+    readonly version: 3;
+    readonly location: WorldLocation;
+    readonly wildsPosition: { readonly x: number; readonly z: number };
+    readonly exploration: ExplorationSnapshot;
     readonly seed: string;
     readonly origin: { readonly x: number; readonly z: number };
     readonly tick: number;
@@ -45,7 +50,10 @@ function assertItem(item: InventoryItem): void {
 
 /** Reject invalid/currently unsupported saves before changing a running character. No migration. */
 export function validateCharacterCheckpoint(value: CharacterCheckpoint): CharacterCheckpoint {
-    if (!value || value.version !== 2) throw new Error("角色存档版本与当前游戏不一致");
+    if (!value || value.version !== 3) throw new Error("角色存档版本与当前游戏不一致");
+    if (!["wilds", "homestead"].includes(value.location) || !value.wildsPosition
+        || !Number.isFinite(value.wildsPosition.x) || !Number.isFinite(value.wildsPosition.z)) throw new Error("角色世界位置无效");
+    validateExploration(value.exploration);
     const p = value.player, s = value.skills;
     if (typeof value.seed !== "string" || !value.seed.trim() || value.seed.length > 128 || !value.origin
         || !Number.isFinite(value.origin.x) || !Number.isFinite(value.origin.z) || !p || !s

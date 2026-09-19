@@ -3,10 +3,11 @@ import { CombatWorkerHost } from "../../src/worker/CombatWorkerHost";
 import type { CombatRequest } from "../../src/worker/CombatProtocol";
 import { IndexedDBSpiritRepository } from "../../src/worker/SpiritRepository";
 import { ProceduralCombatTerrain } from "../../src/adapters/ProceduralCombatTerrain";
+import { HomesteadTerrain } from "../../src/core/Homestead";
 
 /** Browser fixture entry. Production workers never expose their simulation. */
-const host = new CombatWorkerHost((message, transfer) => self.postMessage(message, { transfer }), new IndexedDBSpiritRepository(), (seed, start, realm) => {
-    const simulation = new CombatSimulation(seed, start, realm, new ProceduralCombatTerrain(seed));
+const host = new CombatWorkerHost((message, transfer) => self.postMessage(message, { transfer }), new IndexedDBSpiritRepository(), (seed, start, realm, location) => {
+    const simulation = new CombatSimulation(seed, start, realm, location === "homestead" ? new HomesteadTerrain() : new ProceduralCombatTerrain(seed), location);
     (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation = simulation;
     return simulation;
 });

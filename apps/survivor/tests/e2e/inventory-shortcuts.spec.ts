@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { createStarterEquipment, EMPTY_BONUSES, equipmentScore, type Equipment } from "../../src/core/Equipment";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
-import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
 
 test("Shift locking stays safe with W, repeats and auto-sale; diagnostics survive reload and export", async ({ page }, info) => {
     test.setTimeout(120_000);
@@ -11,6 +11,7 @@ test("Shift locking stays safe with W, repeats and auto-sale; diagnostics surviv
     page.on("pageerror", error => errors.push(error.message)); page.on("crash", () => crashes.push("crashed"));
     await inspectCombatWorker(page); await page.goto("/");
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await pauseCombat(page);
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);

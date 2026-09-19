@@ -4,7 +4,7 @@ import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { CombatWorld } from "../../src/core/CombatWorld";
 import type { RegionalWorld } from "../../src/core/RegionalWorld";
 import type { CombatRenderState } from "../../src/core/CombatState";
-import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 
 test("a rendered shot follows its authoritative height and stops at a real forest trunk", async ({ page }, info) => {
@@ -13,6 +13,7 @@ test("a rendered shot follows its authoritative height and stops at a real fores
     page.on("console", message => { if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text()); });
     await inspectCombatWorker(page); await page.goto("/");
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
     const fixture = await combatWorker(page).evaluate(() => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;

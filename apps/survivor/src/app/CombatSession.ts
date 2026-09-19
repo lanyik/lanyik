@@ -15,6 +15,8 @@ import { shareSnapshot } from "./ShareSnapshot";
 import { validateCharacterCheckpoint, type CharacterCheckpoint } from "../core/CharacterCheckpoint";
 import type { CharacterRepository, CharacterSave, SaveSlot } from "./CharacterRepository";
 import type { RuntimeLog } from "./RuntimeLog";
+import type { ExplorationSnapshot } from "../core/Exploration";
+import type { WorldLocation } from "../core/Homestead";
 
 type SessionStatus = "loading" | "ready" | "failed" | "closed";
 
@@ -23,6 +25,9 @@ interface VisibleNotice extends CombatNotice {
 }
 
 export interface SessionSnapshot {
+    readonly travelling: boolean;
+    readonly travelError?: string;
+    readonly exploration?: ExplorationSnapshot;
     readonly saveStatus: Readonly<{ busy: boolean; savedAt?: number; error?: string }>;
     readonly generation: number;
     readonly performance: RuntimePerformanceSnapshot | undefined;
@@ -75,6 +80,10 @@ export class CombatSession {
     private error: string | undefined;
     private client: CombatTransport | undefined;
     private combat: CombatSnapshot | undefined;
+    private exploration: ExplorationSnapshot | undefined;
+    private location: WorldLocation = "wilds";
+    private travelling = false;
+    private travelError: string | undefined;
     private renderState: CombatRenderState | undefined;
     private gameOver = false;
     private inFlight: Promise<void> | undefined;
@@ -90,7 +99,7 @@ export class CombatSession {
     private snapshot: SessionSnapshot;
     private loadRevision = 0;
     private closePromise: Promise<void> | undefined;
-    private checkpointRequest: { resolve: (value: CharacterCheckpoint) => void; reject: (reason: unknown) => void } | undefined;
+    private checkpointRequest: { resolve: (value: CharacterCheckpoint) => void; reject: (reason: unknown) => void; travel?: WorldLocation } | undefined;
     private saving: Promise<CharacterSave> | undefined;
     private saveStatus: SessionSnapshot["saveStatus"] = Object.freeze({ busy: false });
     private lastCheckpoint: CharacterCheckpoint | undefined;
@@ -107,13 +116,13 @@ export class CombatSession {
     public getSnapshot = (): SessionSnapshot => this.snapshot;
     public get isPaused(): boolean { return this.paused; }
 
-    public start(seed = this.seed): Promise<void> { return this.launch(seed, true); }
+    public start(seed = this.seed, location: WorldLocation = "wilds"): Promise<void> { return this.launch(seed, true, undefined, location); }
     public retry(): Promise<void> { return this.launch(this.seed, true, this.lastCheckpoint); }
     public load(checkpoint: CharacterCheckpoint): Promise<void> { validateCharacterCheckpoint(checkpoint); return this.launch(checkpoint.seed, true, checkpoint); }
     public listSaves() { if (!this.saves) return Promise.reject(new Error("未配置角色存档")); return this.saves.list(); }
     public save(slot: SaveSlot): Promise<CharacterSave> {
         if (this.saving) return Promise.reject(new Error("正在保存，请稍候"));
-        if (!this.saves || this.status !== "ready" || this.gameOver) return Promise.reject(new Error("当前角色无法保存"));
+        if (!this.saves || this.status !== "ready" || this.gameOver || this.travelling) return Promise.reject(new Error("当前角色无法保存"));
         this.saveStatus = Object.freeze({ ...this.saveStatus, busy: true, error: undefined }); this.publish();
         const checkpoint = new Promise<CharacterCheckpoint>((resolve, reject) => { this.checkpointRequest = { resolve, reject }; });
         this.pendingSnapshot = true; this.flush();
@@ -124,16 +133,49 @@ export class CombatSession {
         return this.saving;
     }
 
+    public async travel(destination: WorldLocation): Promise<void> {
+        if (this.status !== "ready" || this.gameOver || this.hidden || this.travelling || this.saving || destination === this.location) return;
+        let revision = this.loadRevision;
+        const paused = this.paused;
+        this.travelling = true; this.travelError = undefined;
+        this.view.clearMovement(); this.input = { x: 0, z: 0, active: false }; this.syncClock(); this.publish();
+        try {
+            const checkpoint = new Promise<CharacterCheckpoint>((resolve, reject) => { this.checkpointRequest = { resolve, reject, travel: destination }; });
+            this.pendingSnapshot = true; this.flush();
+            const state = await checkpoint;
+            if (revision !== this.loadRevision || this.status !== "ready") return;
+            // Commit a recoverable character before releasing the old world or authority.
+            if (this.saves) {
+                const saved = await this.saves.save("auto", state);
+                if (revision !== this.loadRevision) return;
+                this.saveStatus = Object.freeze({ busy: false, savedAt: saved.savedAt });
+            }
+            if (revision !== this.loadRevision) return;
+            const loading = this.launch(state.seed, true, state, destination, true);
+            revision = this.loadRevision;
+            await loading;
+            if (revision === this.loadRevision && this.status === "ready") { this.paused = paused; this.pauseAcknowledged = paused; }
+        } catch (reason) {
+            if (revision === this.loadRevision) this.travelError = reason instanceof Error ? reason.message : String(reason);
+        } finally {
+            if (revision === this.loadRevision) {
+                this.travelling = false; this.clock.reset(); this.syncClock(); this.publish();
+            }
+        }
+    }
+
     public get diagnostics() { return { ...this.client?.stats, pendingSteps: this.pendingSteps, pendingCommands: this.pendingCommands.length,
         droppedSteps: this.droppedSteps, clockClampedMs: this.clockClampedMs }; }
     public get settled(): Promise<void> { return this.drain(); }
     private async drain(): Promise<void> { while (this.inFlight) await this.inFlight; }
 
-    private async launch(seed: string, reloadWorld: boolean, checkpoint?: CharacterCheckpoint): Promise<void> {
+    private async launch(seed: string, reloadWorld: boolean, checkpoint?: CharacterCheckpoint, location = checkpoint?.location ?? this.location, travelling = false): Promise<void> {
         if (this.status === "closed") return;
         const revision = ++this.loadRevision;
         this.status = "loading";
+        this.travelling = travelling; this.travelError = undefined;
         this.lastCheckpoint = checkpoint;
+        this.location = location;
         this.checkpointRequest?.reject(new Error("角色已切换，保存取消")); this.checkpointRequest = undefined;
         this.resetPerformance();
         this.seed = seed.trim() || "rift-ember-1";
@@ -141,7 +183,7 @@ export class CombatSession {
         this.paused = false;
         this.pauseAcknowledged = false; this.pendingSnapshot = false;
         this.client?.dispose(); this.client = undefined;
-        this.combat = undefined; this.renderState = undefined; this.gameOver = false;
+        this.combat = undefined; this.exploration = undefined; this.renderState = undefined; this.gameOver = false;
         this.inFlight = undefined; this.pendingSteps = 0; this.pendingCommands = []; this.droppedSteps = 0;
         this.clockClampedMs = 0;
         this.visibleNotices = [];
@@ -152,13 +194,13 @@ export class CombatSession {
         this.publish();
         try {
             this.view.reset();
-            const start = reloadWorld ? await this.view.load(this.seed, checkpoint?.player) : this.startPosition;
+            const start = reloadWorld ? await this.view.load(this.seed, checkpoint?.player, location) : this.startPosition;
             if (revision !== this.loadRevision) return;
             if (!start) throw new Error("Combat start position is missing");
             this.startPosition = checkpoint?.origin ?? start;
             const client = this.createTransport(error => { if (revision === this.loadRevision) this.fail(error); });
             this.client = client;
-            const update = await client.start(this.seed, this.startPosition, checkpoint);
+            const update = await client.start(this.seed, this.startPosition, checkpoint, location);
             if (revision !== this.loadRevision) { client.dispose(); return; }
             this.accept(update);
             this.status = "ready";
@@ -179,7 +221,7 @@ export class CombatSession {
         if (restarted) { this.clock.reset(); this.resetPerformance(); }
         const sample = this.clock.sample(timestampMs);
         this.clockClampedMs += sample.clampedMs;
-        const input = this.view.readMovement();
+        const input = this.travelling ? { x: 0, z: 0, active: false } : this.view.readMovement();
         if (!this.paused && !this.hidden && !this.gameOver && (input.x !== this.input.x || input.z !== this.input.z || input.active !== this.input.active)) {
             this.inputFeedback.change(performance.now());
         }
@@ -250,6 +292,7 @@ export class CombatSession {
     }
 
     private accept(update: CombatUpdate): void {
+        if (update.exploration) this.exploration = freezeSnapshot(update.exploration);
         this.frameReceivedAt = performance.now();
         this.renderState = new RenderFrame(update.render.buffer).read(update.render);
         this.gameOver = update.gameOver;
@@ -272,7 +315,7 @@ export class CombatSession {
         const checkpoint = this.checkpointRequest; this.checkpointRequest = undefined;
         const inputSample = this.inputFeedback.sent();
         this.pendingSteps = 0; this.pendingCommands = []; this.pendingSnapshot = false;
-        this.inFlight = client.advance({ steps, commands, input: this.input, checkpoint: Boolean(checkpoint) }).then(update => {
+        this.inFlight = client.advance({ steps, commands, input: this.input, checkpoint: Boolean(checkpoint), travel: checkpoint?.travel }).then(update => {
             if (revision !== this.loadRevision) { checkpoint?.reject(new Error("角色已切换，保存取消")); return; }
             if (checkpoint) { if (update.checkpoint) checkpoint.resolve(update.checkpoint); else checkpoint.reject(new Error(update.checkpointError ?? "角色已倒下，保留原存档")); }
             const started = performance.now();
@@ -280,7 +323,7 @@ export class CombatSession {
             this.framePerformance.simulation(update.stats);
             if (steps > 0 && !this.paused && !this.hidden && !this.gameOver) this.inputFeedback.accept(inputSample);
             if (this.paused && steps === 0 && !this.pendingSnapshot && this.pendingCommands.length === 0) this.pauseAcknowledged = true;
-            if (update.snapshot || update.notices.length > 0) this.publish();
+            if (update.snapshot || update.exploration || update.notices.length > 0) this.publish();
             this.framePerformance.message(performance.now() - started + client.stats.receiveMs);
         }).catch(reason => { checkpoint?.reject(reason); if (revision === this.loadRevision) this.fail(reason); }).finally(() => {
             if (revision !== this.loadRevision) return;
@@ -290,7 +333,7 @@ export class CombatSession {
     }
 
     public dispatch(command: SessionCommand): void {
-        if (this.status !== "ready" || !this.client) return;
+        if (this.status !== "ready" || !this.client || this.travelling) return;
         if (["set-equipment-lock", "set-auto-recycle", "sort-inventory", "equip", "craft"].includes(command.type)) {
             this.runtimeLog?.record("inventory-command", JSON.stringify({ seed: this.seed, tick: this.combat?.tick, command }));
         }
@@ -336,6 +379,7 @@ export class CombatSession {
         this.runtimeLog?.error("session-failed", reason);
         this.loadRevision += 1;
         this.status = "failed";
+        this.travelling = false;
         this.checkpointRequest?.reject(reason); this.checkpointRequest = undefined;
         this.resetPerformance();
         this.error = reason instanceof Error ? reason.message : String(reason);
@@ -350,6 +394,7 @@ export class CombatSession {
         if (this.closePromise) return this.closePromise;
         this.loadRevision += 1;
         this.status = "closed";
+        this.travelling = false;
         this.checkpointRequest?.reject(new Error("角色已关闭，保存取消")); this.checkpointRequest = undefined;
         this.resetPerformance();
         this.clock.setRunning(false);
@@ -363,7 +408,7 @@ export class CombatSession {
     }
 
     private syncClock(): void {
-        const running = this.status === "ready" && !this.paused && !this.hidden && !this.gameOver;
+        const running = this.status === "ready" && !this.paused && !this.hidden && !this.gameOver && !this.travelling;
         this.clock.setRunning(running);
         if (!running) this.pendingSteps = 0;
     }
@@ -379,6 +424,7 @@ export class CombatSession {
         }
         if (combat) upgrades.sort((a, b) => compareEquipment(b, combat.player).delta - compareEquipment(a, combat.player).delta || a.id - b.id);
         return Object.freeze({
+            exploration: this.exploration, travelling: this.travelling, travelError: this.travelError,
             saveStatus: this.saveStatus,
             generation: this.loadRevision,
             performance: this.performanceSnapshot,

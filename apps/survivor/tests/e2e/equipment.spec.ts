@@ -7,7 +7,7 @@ import { BASE_LOOT_PROFILE } from "../../src/core/Loot";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { InventoryItem } from "../../src/core/InventoryItem";
 import type { CombatRenderState } from "../../src/core/CombatState";
-import { inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
 import type { HexMap } from "three-hex-map";
 import { ENEMY_DEFINITIONS } from "../../src/core/EnemyDefinitions";
 import { GAME_CONFIG } from "../../src/core/GameConfig";
@@ -25,6 +25,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const rendered = await page.evaluate(({ models, activeExitDistance, fadeStart, fadeEnd }) => {

@@ -6,7 +6,7 @@ import type { CombatWorld } from "../../src/core/CombatWorld";
 import type { RegionalWorld } from "../../src/core/RegionalWorld";
 import type { InstancedMesh } from "three";
 import type { CombatRenderState } from "../../src/core/CombatState";
-import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 
 test("renders non-looping cast poses, telegraphs and hostile projectiles from fixed ticks", async ({ page }, testInfo) => {
     const errors: string[] = [];
@@ -17,6 +17,7 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
     await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     await combatWorker(page).evaluate(() => {

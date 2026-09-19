@@ -7,7 +7,7 @@ import { EMPTY_SPIRIT_REALM } from "../../src/core/SpiritRealm";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { InventoryItem } from "../../src/core/InventoryItem";
 import type { CombatWorld } from "../../src/core/CombatWorld";
-import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 
 test("crafting confirms destructive changes, supports affix dragging and persists spirit growth across reload and restart", async ({ page }, testInfo) => {
@@ -17,6 +17,7 @@ test("crafting confirms destructive changes, supports affix dragging and persist
     page.on("console", message => { if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text()); });
     await inspectCombatWorker(page); await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
     const gear = (id: number, name: string, damage: number): Equipment => ({ ...withEquipmentAffixes(createStarterEquipment(), [
@@ -82,6 +83,7 @@ test("crafting confirms destructive changes, supports affix dragging and persist
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page); await page.keyboard.press("KeyL");
     await expect(spirit).toContainText("灵境 · 1 阶");

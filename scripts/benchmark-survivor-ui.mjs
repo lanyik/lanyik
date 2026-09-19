@@ -12,6 +12,9 @@ try {
     await page.waitForFunction(() => ["menu", "ready", "failed"].includes(document.querySelector(".survivor")?.getAttribute("data-state")));
     if (await page.locator('.survivor[data-state="menu"]').count()) await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await page.locator('.survivor[data-state="ready"]').waitFor({ timeout: 45_000 });
+    await page.getByRole("button", { name: "出战荒野", exact: false }).click();
+    await page.locator('.survivor[data-state="ready"][data-location="wilds"]').waitFor({ timeout: 45_000 });
+    await page.waitForFunction(() => !window.survivorApplication.session.getSnapshot().travelling);
     await page.evaluate(async () => { const s = window.survivorApplication.session; s.dispatch({ type: "toggle-pause" }); await s.settled; });
     const worker = page.workers().find(worker => /\/Combat\.worker-/.test(worker.url()));
     await worker.evaluate(() => {

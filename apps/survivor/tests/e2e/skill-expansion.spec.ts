@@ -8,7 +8,7 @@ import type { CombatRenderState } from "../../src/core/CombatState";
 import { EffectKind } from "../../src/core/CombatEffects";
 import { ActorAction } from "../../src/core/CombatWorld";
 import { EnemyKind } from "../../src/core/EnemyDefinitions";
-import { inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
+import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat, advanceCombat } from "../helpers/browserCombat";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 
 test("new skill choreography and boss attacks cross the real Worker boundary and freeze while paused", async ({ page }, info) => {
@@ -18,6 +18,7 @@ test("new skill choreography and boss attacks cross the real Worker boundary and
     page.on("console", message => { if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text()); });
     await inspectCombatWorker(page); await page.goto("/");
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await pauseCombat(page);
     await combatWorker(page).evaluate(() => {

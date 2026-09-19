@@ -39,7 +39,7 @@ export function bootstrap(options: SurvivorOptions = {}): { readonly session: Co
     };
     const autoSave = () => {
         const active = session, state = active?.getSnapshot();
-        if (state?.status === "ready" && !state.combat?.gameOver && !state.saveStatus.busy) void active!.save("auto").catch(() => { /* The session exposes the write error in the UI. */ });
+        if (state?.status === "ready" && !state.combat?.gameOver && !state.travelling && !state.saveStatus.busy) void active!.save("auto").catch(() => { /* The session exposes the write error in the UI. */ });
     };
     const visibilityChanged = () => { runtimeLog.record("visibility", document.hidden ? "hidden" : "visible"); session?.setHidden(document.hidden); if (document.hidden) autoSave(); };
     const launch = async (seed: string, checkpoint?: CharacterCheckpoint) => {
@@ -63,7 +63,7 @@ export function bootstrap(options: SurvivorOptions = {}): { readonly session: Co
             disconnectPerformance = active.observeLongFrames();
             root.render(<StrictMode><App session={active} attachRegionMap={view.attachRegionMap} onHome={home} log={runtimeLog} /></StrictMode>);
             visibilityChanged();
-            if (checkpoint) await active.load(checkpoint); else await active.start(seed);
+            if (checkpoint) await active.load(checkpoint); else await active.start(seed, "homestead");
             if (!closing && session === active) autoSave();
         } catch (reason) {
             runtimeLog.error("launch-failed", reason);

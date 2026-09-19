@@ -1,7 +1,7 @@
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
 import { getHexCenter, type HexMap, type WorldMinimap } from "three-hex-map";
-import { pauseCombat } from "../helpers/browserCombat";
+import { enterWilds, pauseCombat, inspectCombatWorker, combatWorker, advanceCombat } from "../helpers/browserCombat";
 import { ProceduralCombatTerrain } from "../../src/adapters/ProceduralCombatTerrain";
 
 test("world map reuses terrain pages and restores inspection, target selection and authoritative travel", async ({ page }, testInfo) => {
@@ -12,10 +12,18 @@ test("world map reuses terrain pages and restores inspection, target selection a
         if (isBrowserConsoleFailure(message.type(), message.text())) errors.push(message.text());
     });
     await page.setViewportSize({ width: 1280, height: 800 });
+    await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await pauseCombat(page);
+    // This regression inspects distant map controls; fog rules have their own locked/level-unlock scenario.
+    await combatWorker(page).evaluate(() => {
+        const simulation = (self as unknown as { fixtureSimulation: { level: number; markChanged(): void } }).fixtureSimulation;
+        simulation.level = 1000; simulation.markChanged();
+    });
+    await advanceCombat(page);
     const canvas = page.getByTestId("terrain-minimap"), panel = page.getByTestId("region-status");
     await expect(canvas).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await expect(panel.locator("polygon")).toHaveCount(0);

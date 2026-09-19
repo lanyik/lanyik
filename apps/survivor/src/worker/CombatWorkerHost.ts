@@ -8,9 +8,10 @@ import type { SpiritRealm } from "../core/SpiritRealm";
 import type { SpiritRepository } from "./SpiritRepository";
 import { ProceduralCombatTerrain } from "../adapters/ProceduralCombatTerrain";
 import type { CharacterCheckpoint } from "../core/CharacterCheckpoint";
+import { HomesteadTerrain, type WorldLocation } from "../core/Homestead";
 const SNAPSHOT_TICKS = ticksPerUpdate(GAME_CONFIG.timing.snapshotHz);
 
-type SimulationFactory = (seed: string, start: { x: number; z: number }, realm: SpiritRealm) => CombatSimulation;
+type SimulationFactory = (seed: string, start: { x: number; z: number }, realm: SpiritRealm, location: WorldLocation) => CombatSimulation;
 
 /** Owns all authoritative state. Async query work completes before any next command or tick. */
 export class CombatWorkerHost {
@@ -19,13 +20,15 @@ export class CombatWorkerHost {
     private frame: RenderFrame | undefined;
     private sequence = 0;
     private lastSnapshotTick = -Infinity;
+    private lastExplorationRevision = -1;
     private busy = false;
     private closed = false;
     private savedRevision = 0;
 
     constructor(private readonly send: (message: CombatResponse, transfers: Transferable[]) => void,
         private readonly progress: SpiritRepository,
-        private readonly createSimulation: SimulationFactory = (seed, start, realm) => new CombatSimulation(seed, start, realm, new ProceduralCombatTerrain(seed))) {}
+        private readonly createSimulation: SimulationFactory = (seed, start, realm, location) => new CombatSimulation(seed, start, realm,
+            location === "homestead" ? new HomesteadTerrain() : new ProceduralCombatTerrain(seed), location)) {}
 
     public async receive(request: CombatRequest): Promise<void> {
         if (this.closed) return;
@@ -44,7 +47,7 @@ export class CombatWorkerHost {
                 persistenceMs += performance.now() - loading;
                 if (this.closed) return;
                 this.savedRevision = realm.revision;
-                this.simulation = this.createSimulation(request.seed, request.start, realm);
+                this.simulation = this.createSimulation(request.seed, request.start, realm, request.checkpoint?.location ?? request.location ?? "wilds");
                 if (request.checkpoint) this.simulation.restore(request.checkpoint);
                 // One frame remains here while the other is owned by the presentation thread.
                 this.frame = new RenderFrame();
@@ -83,10 +86,13 @@ export class CombatWorkerHost {
             const batchMs = performance.now() - started, queryWaitMs = pool.waitMs - waitBefore;
             let checkpoint: CharacterCheckpoint | undefined, checkpointError: string | undefined;
             if (request.type === "advance" && request.batch.checkpoint) {
-                try { checkpoint = simulation.checkpoint(); } catch (error) { checkpointError = error instanceof Error ? error.message : String(error); }
+                try { checkpoint = simulation.checkpoint(request.batch.travel); } catch (error) { checkpointError = error instanceof Error ? error.message : String(error); }
             }
+            const discovery = simulation.explorationSnapshot;
+            const exploration = discovery.revision !== this.lastExplorationRevision ? discovery : undefined;
+            this.lastExplorationRevision = discovery.revision;
             const update: CombatUpdate = { tick: simulation.tick, gameOver: simulation.gameOver, render, snapshot, notices,
-                checkpoint, checkpointError,
+                checkpoint, checkpointError, exploration,
                 stats: { queries: pool.workerActivity, queryWorkers: pool.size, parallelBatches: pool.parallelBatches, localBatches: pool.localBatches,
                     steps, simulationMs, batchMs, executeMs: Math.max(0, batchMs - queryWaitMs - persistenceMs), queryWaitMs,
                     frameBytes: RenderFrame.bytes } };

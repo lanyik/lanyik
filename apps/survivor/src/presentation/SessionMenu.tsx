@@ -26,9 +26,9 @@ export function SessionMenu({ session, snapshot, close, home, log }: { session: 
         setBusy(true); setPending(undefined); setError(undefined);
         try { await action(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); }
     };
-    const blocked = busy || snapshot.saveStatus.busy;
+    const blocked = busy || snapshot.saveStatus.busy || snapshot.travelling;
     return <aside className="session-menu window" role="dialog" aria-label="游戏与存档"><header><div><span className="eyebrow">JOURNEY / 旅程</span><h2>游戏与存档</h2></div><button aria-label="关闭存档界面" onClick={close} disabled={blocked}><UiIcon name="close" /></button></header>
-        <p className="save-note">已暂停战斗。保存角色、背包、装备、技能、金币与位置；自动存档每 60 秒更新。</p>
+        <p className="save-note">已暂停战斗。保存角色、物品、技能、家园/荒野位置与探索迷雾；自动存档每 60 秒更新。</p>
         <div className="save-slots">{entries.map(entry => <article key={entry.slot} className="save-card"><header><b>{SAVE_NAMES[entry.slot]}</b></header>
             {entry.save ? <SaveSummary save={entry.save} /> : <p>{entry.error ?? "空存档槽"}</p>}
             {entry.slot !== "auto" && <button disabled={blocked || snapshot.combat?.gameOver} onClick={() => entry.save || entry.error ? setPending({ slot: entry.slot }) : void run(() => session.save(entry.slot))}>保存到{SAVE_NAMES[entry.slot]}</button>}
