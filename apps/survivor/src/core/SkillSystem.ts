@@ -120,7 +120,7 @@ export class SkillSystem {
         if (id === "meteor" || id === "vortex" || id === "blades") {
             if (this.ongoing.has(id)) return false;
             const target = id === "blades" ? -1 : this.nearest(x, z, SKILL_RULES[id].range);
-            if (id !== "blades" && target < 0) return false;
+            if (id !== "blades" && target < 0 && automatic) return false;
             if (id === "blades" && automatic) {
                 const enemies = this.entities.queryNearby(Component.Enemy, x, z, values.radius + SKILL_RULES.blades.width, true);
                 let eligible = false;
@@ -133,7 +133,10 @@ export class SkillSystem {
             }
             const duration = id === "meteor" ? SKILL_RULES.meteor.delay : SKILL_RULES[id].duration;
             const nextAt = tick + ticksForSeconds(id === "meteor" ? duration : SKILL_RULES[id].interval);
-            const cx = target < 0 ? x : p.x[target], cz = target < 0 ? z : p.z[target];
+            // Manual ground casts land ahead when no enemy can be targeted; auto casts still require a target.
+            const ahead = id === "blades" ? 0 : Math.min(4, SKILL_RULES[id].range);
+            const cx = target < 0 ? x + Math.sin(p.heading[player]) * ahead : p.x[target];
+            const cz = target < 0 ? z + Math.cos(p.heading[player]) * ahead : p.z[target];
             this.ongoing.set(id, { stats: { ...stats }, damage: values.damage, radius: values.radius, x: cx, z: cz,
                 endsAt: tick + ticksForSeconds(duration), nextAt });
             effects.add(id === "meteor" ? EffectKind.Meteor : id === "vortex" ? EffectKind.Vortex : EffectKind.Blades,
@@ -170,7 +173,12 @@ export class SkillSystem {
                 effects.add(EffectKind.Lightning, tick, fromX, fromZ, .45, .55, p.x[target], p.z[target]);
                 fromX = p.x[target]; fromZ = p.z[target]; from = target;
             }
-            if (!hits) return false;
+            if (!hits) {
+                if (automatic) return false;
+                effects.add(EffectKind.Lightning, tick, x, z, .45, .55,
+                    x + Math.sin(p.heading[player]) * SKILL_RULES.chain.firstRange,
+                    z + Math.cos(p.heading[player]) * SKILL_RULES.chain.firstRange);
+            }
         } else {
             let hits = 0;
             const enemies = this.entities.queryNearby(Component.Enemy, x, z, values.radius, true, true);

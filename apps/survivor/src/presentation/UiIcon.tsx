@@ -1,4 +1,7 @@
 const PATHS = {
+    travel: "M3 17a4 4 0 1 0 8 0 4 4 0 0 0-8 0Zm10-10a4 4 0 1 0 8 0 4 4 0 0 0-8 0ZM7 13V7h6m4 4v6h-6",
+    home: "m2 11 10-9 10 9M5 9v13h14V9M9 22v-8h6v8M7 8h10",
+    mountains: "m1 21 8-16 6 11 3-7 5 12ZM6 11l3 2 3-2m4 3 2 1 2-1",
     system: "M4 3h13l3 3v15H4ZM8 3v6h8V3M8 21v-8h8v8",
     rift: "m12 2 8 10-8 10-8-10Zm0 5-4 5 4 5 4-5Z",
     character: "M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM4 21v-3a8 8 0 0 1 16 0v3",

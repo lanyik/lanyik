@@ -166,5 +166,21 @@ export class HexRegionMap implements RegionMapBinding {
         for (let i = 0; i < this.fogRects.length; i += 4) context.rect(content.x + this.fogRects[i] * content.width,
             content.y + this.fogRects[i + 1] * content.height, this.fogRects[i + 2] * content.width, this.fogRects[i + 3] * content.height);
         context.fill();
+        // Opaque cover first, then world-anchored cloud billows clipped to unknown cells.
+        // No terrain/region labels can show through and no additional canvas or animation loop is needed.
+        context.save(); context.clip();
+        const span = Math.max(16, 2 ** Math.floor(Math.log2(Math.max(extent.tileSpanX, extent.tileSpanY) / 5)));
+        for (let x = Math.floor(extent.originX / span) - 1; x <= Math.ceil((extent.originX + extent.tileSpanX) / span); x++) {
+            for (let y = Math.floor(extent.originY / span) - 1; y <= Math.ceil((extent.originY + extent.tileSpanY) / span); y++) {
+                const hash = Math.sin(x * 127.1 + y * 311.7) * 43758.5453, fraction = hash - Math.floor(hash);
+                const px = content.x + ((x + fraction) * span - extent.originX) / extent.tileSpanX * content.width;
+                const py = content.y + ((y + 1 - fraction) * span - extent.originY) / extent.tileSpanY * content.height;
+                const radius = span / extent.tileSpanX * content.width * (1 + fraction * .6);
+                const cloud = context.createRadialGradient(px, py, 0, px, py, radius);
+                cloud.addColorStop(0, "#65858e42"); cloud.addColorStop(.45, "#3f606d28"); cloud.addColorStop(1, "#20374300");
+                context.fillStyle = cloud; context.fillRect(px - radius, py - radius, radius * 2, radius * 2);
+            }
+        }
+        context.restore();
     }
 }

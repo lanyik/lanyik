@@ -12,6 +12,8 @@ try {
     await page.waitForFunction(() => ["menu", "ready", "failed"].includes(document.querySelector(".survivor")?.getAttribute("data-state")));
     if (await page.locator('.survivor[data-state="menu"]').count()) await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await page.locator('.survivor[data-state="ready"]').waitFor({ timeout: 45_000 });
+    await page.keyboard.press("KeyH");
+    await page.getByRole("button", { name: "目的地：荒野", exact: true }).click();
     await page.getByRole("button", { name: "出战荒野", exact: false }).click();
     await page.locator('.survivor[data-state="ready"][data-location="wilds"]').waitFor({ timeout: 45_000 });
     await page.waitForFunction(() => !window.survivorApplication.session.getSnapshot().travelling);

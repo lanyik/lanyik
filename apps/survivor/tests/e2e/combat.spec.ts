@@ -79,6 +79,8 @@ test("plays with baked actors, independent character/bag windows and complete ke
     const character = page.getByRole("dialog", { name: "角色", exact: true });
     const characterBounds = (await character.boundingBox())!;
     const bagBounds = (await bag.boundingBox())!;
+    const desktopDock = (await page.locator(".combat-dock").boundingBox())!;
+    expect(desktopDock.x + desktopDock.width).toBeLessThan((await page.locator(".interface-menu").boundingBox())!.x);
     expect(characterBounds.x + characterBounds.width).toBeLessThan(bagBounds.x);
     expect(bagBounds.x + bagBounds.width).toBeLessThanOrEqual(page.viewportSize()!.width);
     const characterMenu = page.getByRole("navigation", { name: "界面快捷键" }).getByRole("button", { name: /角色/ });
@@ -151,6 +153,8 @@ test("plays with baked actors, independent character/bag windows and complete ke
     await page.keyboard.press("KeyM"); await expect(page.getByTestId("region-status")).toHaveClass(/expanded/);
     await page.keyboard.press("Escape"); await expect(page.getByTestId("region-status")).not.toHaveClass(/expanded/);
     await page.keyboard.press("KeyK"); await expect(page.getByRole("dialog", { name: "技能", exact: true })).toBeVisible();
+    const skillsDock = (await page.locator(".combat-dock").boundingBox())!;
+    expect(skillsDock.x + skillsDock.width).toBeLessThan((await page.locator(".interface-menu").boundingBox())!.x);
     await page.keyboard.press("Escape");
     await page.keyboard.press("KeyI"); await expect(bag).toBeVisible();
     await page.keyboard.press("Escape"); await page.keyboard.press("Escape");
@@ -158,7 +162,7 @@ test("plays with baked actors, independent character/bag windows and complete ke
     expect(errors).toEqual([]);
 });
 
-for (const file of ["actors/RiftSpider.glb", "actors/RiftSpider-normal.png", "effects/skills.png"]) test(`reports failed combat resource ${file} and reloads after recovery`, async ({ page }) => {
+for (const file of ["actors/RiftSpider.glb", "actors/RiftSpider-normal.png", "effects/skills.png", "homestead/models.json"]) test(`reports failed combat resource ${file} and reloads after recovery`, async ({ page }) => {
     const model = `**/${file}`;
     await page.route(model, route => route.fulfill({ status: 503, body: "actor unavailable" }));
     await page.goto("/", { waitUntil: "domcontentloaded" });

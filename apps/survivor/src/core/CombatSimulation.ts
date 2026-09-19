@@ -170,8 +170,8 @@ export class CombatSimulation {
         this.stats = this.calculateStats();
         this.health = this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
         this.mana = this.stats.maxMana;
-        this.exploration.discover(start.x, start.z);
         if (location === "wilds") {
+            this.exploration.discover(start.x, start.z);
             this.world.synchronize(start.x, start.z);
             this.world.updateAccess(start.x, start.z);
             this.spawnEnemies(); this.refreshChests();
@@ -217,6 +217,7 @@ export class CombatSimulation {
         for (const slot of enemies) this.entities.remove(slot);
         for (const chunk of this.world.chunks.values()) chunk.spawned.fill(0);
         if (this.location === "wilds") {
+            this.exploration.discover(p.x, p.z);
             this.currentRegion = this.world.regionAt(p.x, p.z); this.nearbyRegions = this.world.nearbyRegions(this.currentRegion);
             this.world.synchronize(p.x, p.z); this.world.resetAccess(); this.world.updateAccess(p.x, p.z);
             this.spawnEnemies(); this.refreshChests();
@@ -235,6 +236,7 @@ export class CombatSimulation {
         if (!this.entities.terrain.isClear(x, z, GAME_CONFIG.combat.playerRadius)) {
             this.pushNotice("info", "目标位置无法落脚，请选择平坦陆地"); return;
         }
+        if (this.location === "wilds") this.exploration.discover(x, z);
         this.playerX = this.previousPlayerX = x; this.playerZ = this.previousPlayerZ = z;
         this.movementX = this.movementZ = 0;
         this.skills.cancelTravel();
@@ -266,7 +268,11 @@ export class CombatSimulation {
         this.potionCooldown = Math.max(0, this.potionCooldown - STEP_SECONDS);
         this.entities.effects.advance(this.tickValue); this.entities.combatText.advance(this.tickValue);
         if (!this.skills.advance(this.tickValue)) this.movePlayer(input);
-        if (this.location === "homestead") return executor ? Promise.resolve() : undefined;
+        if (this.location === "homestead") {
+            this.skills.advanceOngoing(this.tickValue, this.random, this.settleOngoing);
+            if (this.tickValue % REGENERATION_TICKS === 0) this.mana = Math.min(this.stats.maxMana, this.mana + this.stats.manaRegen);
+            return executor ? Promise.resolve() : undefined;
+        }
         if (this.playerX !== this.previousPlayerX || this.playerZ !== this.previousPlayerZ) this.exploration.discover(this.playerX, this.playerZ);
         const shifted = this.world.synchronize(this.playerX, this.playerZ);
         if (shifted) this.reconcileRegions();
@@ -547,7 +553,6 @@ export class CombatSimulation {
     }
 
     public castSkill(id: SkillId): void {
-        if (this.location === "homestead") return;
         if (this.gameOverValue) return;
         if (this.skills.cast(id, this.tickValue, this.stats, this.level, this.random)) { this.resolveImpacts(); this.markChanged(); }
     }

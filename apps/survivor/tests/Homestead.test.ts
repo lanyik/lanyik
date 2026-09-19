@@ -6,6 +6,8 @@ import { CombatSession } from "../src/app/CombatSession";
 import type { CombatView } from "../src/app/CombatView";
 import type { CharacterRepository } from "../src/app/CharacterRepository";
 import { LoopbackCombatTransport } from "./helpers/LoopbackCombatTransport";
+import { SKILLS } from "../src/core/Skills";
+import { EffectKind } from "../src/core/CombatEffects";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -23,7 +25,8 @@ test("home is a finite safe map with solid buildings and boundaries", () => {
     const snapshot = combat.getSnapshot();
     expect(snapshot.world.location).toBe("homestead");
     expect(snapshot.livingEnemies).toBe(0); expect(snapshot.nearbyRegions).toEqual([]);
-    expect(snapshot.player).toMatchObject({ x: before.x, z: before.z, health: before.health, mana: before.mana });
+    expect(snapshot.player).toMatchObject({ x: before.x, z: before.z, health: before.health, mana: before.mana - SKILLS.frost.mana });
+    expect(snapshot.player.skills.remaining.frost).toBeGreaterThan(0);
     combat.dispose();
 });
 
@@ -45,6 +48,28 @@ test("roundtrip rests at home and preserves wilderness position, growth, equipme
     expect(returned.getSnapshot().player).toMatchObject({ x: 8, z: 0, gold: 1234, equipment: checkpoint.player.equipment });
     expect(returned.explorationSnapshot).toEqual(checkpoint.exploration);
     for (const simulation of [wilds, home, returned]) simulation.dispose();
+});
+
+test.each(["chain", "meteor", "vortex", "blades", "pulse", "frost", "ward", "dash"] as const)("home permits manual %s with costs, cooldowns and complete effect lifetime", skill => {
+    const combat = new CombatSimulation("home-practice", { x: 0, z: 0 }, undefined, new HomesteadTerrain(), "homestead");
+    const state = combat.checkpoint(); combat.restore({ ...state, player: { ...state.player, level: 10 } });
+    combat.equipSkill(skill, 0);
+    const before = combat.getSnapshot().player, discovery = combat.explorationSnapshot;
+    combat.castSkill(skill);
+    expect(combat.getSnapshot().player.mana).toBe(before.mana - SKILLS[skill].mana);
+    expect(combat.getSnapshot().player.skills.remaining[skill]).toBeGreaterThan(0);
+    expect(combat.getRenderState().effects.count).toBeGreaterThan(0);
+    let impact = false;
+    for (let tick = 0; tick < 960; tick++) {
+        combat.step({ x: 0, z: 0, active: false });
+        const effects = combat.getRenderState().effects;
+        if (Array.from(effects.kind.subarray(0, effects.count)).includes(EffectKind.MeteorImpact)) impact = true;
+    }
+    if (skill === "meteor") expect(impact).toBe(true);
+    expect(combat.getRenderState().effects.count).toBe(0);
+    expect(combat.getSnapshot().livingEnemies).toBe(0);
+    expect(combat.explorationSnapshot).toBe(discovery);
+    combat.dispose();
 });
 
 function sessionFixture(repository?: CharacterRepository) {

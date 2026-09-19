@@ -264,6 +264,7 @@ flowchart TB
 | [scripts/vendor/README.md](../scripts/vendor/README.md) | EZ-Tree 离线生成器固定版本与复现方式；[上游许可](../scripts/vendor/ez-tree-LICENSE.txt) |
 | [texture-attribution.md](../apps/survivor/assets/environment/texture-attribution.md) | 环境资源保留的上游纹理归属记录，不是游戏当前全部加载纹理清单 |
 | [技能素材来源](../apps/survivor/assets/effects/sources.json)、[Kenney 原始许可](../apps/survivor/assets/effects/kenney-LICENSE.txt) | 六张粒子输入的下载地址、包/文件哈希和 CC0 许可；构建及消费者归[技能与效果](game/skills-and-effects.md) |
+| [家园模型来源](../apps/survivor/assets/homestead/sources.json)、[Quaternius 原始许可](../apps/survivor/assets/homestead/License.txt) | 成品旅店、铁匠铺、住宅、水井的原始 OBJ/MTL 与逐文件哈希；离线合并和碰撞尺寸归[环境资产](game/environment-assets.md) |
 | [actor-assets.md](game/actor-assets.md)、[environment-assets.md](game/environment-assets.md) | 当前采用的输入、处理流程与许可边界；源文件在[游戏 assets](../apps/survivor/assets/) |
 
 <a id="maintenance"></a>

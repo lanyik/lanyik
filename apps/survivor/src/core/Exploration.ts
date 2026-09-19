@@ -1,6 +1,7 @@
 import type { RegionalWorld } from "./RegionalWorld";
+import { WORLD_VIEW } from "./WorldView";
 
-export const EXPLORATION = Object.freeze({ cellSize: 4, pageEdge: 16, radius: 10, maxPages: 4096 });
+export const EXPLORATION = Object.freeze({ cellSize: 4, pageEdge: 16, radius: WORLD_VIEW.terrainFogEnd, maxPages: 4096 });
 interface ExplorationPage { readonly x: number; readonly z: number; readonly rows: readonly number[] }
 export interface ExplorationSnapshot { readonly revision: number; readonly pages: readonly ExplorationPage[] }
 
@@ -42,15 +43,16 @@ export class Exploration {
     public allows(x: number, z: number, level: number, world: RegionalWorld): boolean {
         return this.has(x, z) || world.regionAt(x, z).level < level;
     }
-    /** Call only at spawn or after real movement. Teleporting must not chain-reveal new destinations. */
+    /** Reveal everything the 3D view can show; exploration never controls 3D rendering. */
     public discover(x: number, z: number): void {
         const size = EXPLORATION.cellSize, edge = EXPLORATION.pageEdge;
         const cx = Math.floor(x / size), cz = Math.floor(z / size);
         if (cx === this.lastX && cz === this.lastZ) return;
         const changes = new Map<string, { x: number; z: number; rows: number[] }>();
-        const reach = Math.ceil(EXPLORATION.radius / size);
+        // Quantized centres can differ from the actual viewer and target by one cell diagonal.
+        const radius = EXPLORATION.radius + Math.SQRT2 * size, reach = Math.ceil(radius / size);
         for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) {
-            if (Math.hypot(dx * size, dz * size) > EXPLORATION.radius) continue;
+            if (Math.hypot(dx * size, dz * size) > radius) continue;
             const gx = cx + dx, gz = cz + dz, px = Math.floor(gx / edge), pz = Math.floor(gz / edge), key = `${px},${pz}`;
             const row = gz - pz * edge, bit = 1 << (gx - px * edge);
             const original = changes.get(key) ?? this.pages.get(key);

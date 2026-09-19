@@ -18,6 +18,8 @@ try {
         return { status: snapshot.status, error: snapshot.error };
     });
     assert.equal(initial.status, "ready", initial.error);
+    await page.keyboard.press("KeyH");
+    await page.getByRole("button", { name: "目的地：荒野", exact: true }).click();
     await page.getByRole("button", { name: "出战荒野", exact: false }).click();
     await page.locator('.survivor[data-state="ready"][data-location="wilds"]').waitFor({ timeout: 45_000 });
     await page.waitForFunction(() => !window.survivorApplication.session.getSnapshot().travelling);

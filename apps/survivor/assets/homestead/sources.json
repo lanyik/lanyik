@@ -1,0 +1,83 @@
+[
+  {
+    "file": "Inn.obj",
+    "bytes": 618121,
+    "sha256": "efd1ce867f270314cbcb96cd8f15b91e7637fd8cec8ebb38991c60676c1874d3",
+    "download": "https://drive.usercontent.google.com/download?id=13HmHBXonvbar6lTxnvrMbZ8tLxsfJhNm&export=download",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.com/packs/medievalvillage.html"
+  },
+  {
+    "file": "Inn.mtl",
+    "bytes": 1325,
+    "sha256": "2843be8a4b1ae66e36e398e5677f47e62fb97003e3af74fbcbf7f32c39aa2f5a",
+    "download": "https://drive.usercontent.google.com/download?id=1V48tv_Cs-6_n0clqp1DUWP8VAUJ43ZEU&export=download",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.com/packs/medievalvillage.html"
+  },
+  {
+    "file": "Blacksmith.obj",
+    "bytes": 561976,
+    "sha256": "49b3ca2b02664239d6810b8816081db53b7d779558b94b12d2bf9a6421faa68a",
+    "download": "https://drive.usercontent.google.com/download?id=10lGo0u5vqUBiAHuQC3DxXw1zsB031nV2&export=download",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.com/packs/medievalvillage.html"
+  },
+  {
+    "file": "Blacksmith.mtl",
+    "bytes": 1514,
+    "sha256": "eee6042ef6e520ab7a4af10a11478a848c4aa6de637d7e5a73035d5c22625ffe",
+    "download": "https://drive.usercontent.google.com/download?id=1RGQU_a227iRe4X1b3huOqcYWpP8CWLVz&export=download",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.com/packs/medievalvillage.html"
+  },
+  {
+    "file": "House_1.obj",
+    "bytes": 422122,
+    "sha256": "3b9287272ad4bb51a269d3e39720ddccbf634cd223d29f5c0ac0356834b1a22e",
+    "download": "https://drive.usercontent.google.com/download?id=1OB6G1HEHmNjprwJvho7HiHOE7_RDdZPH&export=download",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.com/packs/medievalvillage.html"
+  },
+  {
+    "file": "House_1.mtl",
+    "bytes": 1685,
+    "sha256": "c3241e56d572963003ebac7efa40c89e39d6e50d9d6de7274038904ba5316f8b",
+    "download": "https://drive.usercontent.google.com/download?id=1GwVJmNEK7ql1zUeCZMPqOUarJ74XvIaW&export=download",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.com/packs/medievalvillage.html"
+  },
+  {
+    "file": "Well.obj",
+    "bytes": 119628,
+    "sha256": "6b3dfba58f273a9859fb0733914951385e0bcdf1624a64a1095e815f25c4d359",
+    "download": "https://drive.usercontent.google.com/download?id=1WvIYKeSNeK5TuCdKdoHEjLpTWhy1Ccks&export=download",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.com/packs/medievalvillage.html"
+  },
+  {
+    "file": "Well.mtl",
+    "bytes": 959,
+    "sha256": "dec96f6825d9a3551f64ce9502acdcf0317609c562a20aee9f56d932120895e0",
+    "download": "https://drive.usercontent.google.com/download?id=1gxjNIUoglw3TCXubV7svoNB9gbsvq5cM&export=download",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.com/packs/medievalvillage.html"
+  },
+  {
+    "file": "License.txt",
+    "bytes": 364,
+    "sha256": "83d8959f9fc56353ed571fbe2dc52e4bcd64508e2399501cd45ac2ce3df0bf8c",
+    "download": "https://drive.usercontent.google.com/download?id=1LR9tv4lpj1lS5ndYkWMWxZLHaAKjCNDk&export=download",
+    "author": "Quaternius",
+    "license": "CC0-1.0",
+    "source": "https://quaternius.com/packs/medievalvillage.html"
+  }
+]

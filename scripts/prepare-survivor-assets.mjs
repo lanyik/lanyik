@@ -7,6 +7,7 @@ import { prepareSurvivorEffects } from "./lib/survivor-effects.mjs";
 import { prepareSurvivorLoot } from "./lib/survivor-loot.mjs";
 import { prepareSurvivorEnvironment } from "./lib/survivor-environment.mjs";
 import { prepareSurvivorCreatures } from "./lib/survivor-creatures.mjs";
+import { prepareSurvivorHomestead } from "./lib/survivor-homestead.mjs";
 
 const root = await realpath(fileURLToPath(new URL("../", import.meta.url)));
 const expectedApplication = resolve(root, "apps/survivor");
@@ -32,4 +33,5 @@ for (const file of ["outfits-LICENSE.txt", "base-characters-LICENSE.txt", "anima
 await cp(resolve(application, "assets/actors/sources.json"), resolve(output, "actors/sources.json"));
 await prepareSurvivorEffects(resolve(application, "assets/effects"), resolve(output, "effects"));
 await prepareSurvivorLoot(resolve(application, "assets/loot"), resolve(output, "loot"));
-console.log("Prepared survivor terrain, forest, actor, loot and skill effect assets");
+await prepareSurvivorHomestead(resolve(application, "assets/homestead"), resolve(output, "homestead"), resolve(application, "src/core/HomesteadModels.generated.ts"));
+console.log("Prepared survivor terrain, forest, actor, loot, homestead and skill effect assets");

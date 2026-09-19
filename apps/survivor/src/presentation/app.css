@@ -87,9 +87,6 @@ canvas { display: block; }
 .worker-load-meter b { position: relative; font-weight: 500; }
 .worker-load-note { margin-top: 6px; }
 .region-map-panel { position: absolute; top: 20px; right: 24px; width: 240px; padding: 14px; }
-.journey-controls { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--edge); font-size: 10px; color: var(--muted); }
-.journey-controls button { padding: 5px 8px; font-size: 11px; flex-shrink: 0; }
-@media (max-width: 760px) { .journey-controls > span { display: none; } .journey-controls { justify-content: flex-start; } }
 .region-map-panel.expanded { top: 50%; left: 50%; right: auto; transform: translate(-50%, -50%); width: min(760px, calc(100vw - 32px), calc(100dvh - 300px)); max-height: calc(100dvh - 24px); overflow-y: auto; z-index: 14; background: var(--surface); box-shadow: 0 20px 80px #000b; }
 .region-map-panel header, .region-map-panel footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .region-map-panel header strong { font-size: 17px; }
@@ -388,12 +385,37 @@ canvas { display: block; }
 .skill-drag-ghost { position: fixed; left: 0; top: 0; z-index: 110; display: flex; align-items: center; gap: 10px; padding: 7px 12px 7px 7px; background: #101a24f5; border: 1px solid #bba16f; border-radius: 8px; box-shadow: 0 10px 30px #0008; pointer-events: none; font-size: 12px; }
 .skill-drag-ghost .skill-art { --icon-size: 42px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.interface-menu { position: absolute; right: 24px; bottom: 18px; padding: 7px; width: 157px; }
-.interface-menu button { display: flex; width: 100%; gap: 10px; background: transparent; border-color: transparent; padding: 7px 8px; font-size: 12px; }
+.interface-menu { position: absolute; right: 24px; bottom: 18px; padding: 6px; width: 310px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; }
+.interface-menu button { position: relative; display: flex; flex-direction: column; width: 100%; gap: 4px; background: transparent; border-color: transparent; padding: 7px 3px; font-size: 11px; }
+.interface-menu kbd { position: absolute; top: 2px; right: 2px; min-width: 13px; height: 14px; padding: 0 2px; font-size: 8px; }
+.interface-menu button:last-child { grid-column: span 2; }
 .interface-menu button > .ui-icon { color: #a1b3ad; width: 17px; height: 17px; }
-.interface-menu button > span { text-align: left; flex: 1; }
+.interface-menu button > span { text-align: center; }
 .interface-menu button.active { background: #39392d; border-color: #766848; }
 .interface-menu button.active .ui-icon { color: var(--gold); }
+.world-travel { position: absolute; z-index: 24; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(840px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; background: #101d26; border-color: #84754f; box-shadow: 0 24px 100px #000c; }
+.world-travel .window-heading { background: linear-gradient(120deg, #293c44, #15232f); }
+.travel-intro { color: #b6c6c6; margin: 0; padding: 16px 26px; font-size: 12px; }
+.travel-chart { position: relative; height: clamp(190px, 33dvh, 320px); margin: 0 22px; border: 1px solid #627e803d; background: radial-gradient(ellipse at 45% 50%, #284453, #152c3b); overflow: hidden; }
+.travel-cartography { position: absolute; inset: 0; width: 100%; height: 100%; }
+.chart-contour { fill: #52798322; stroke: #82a4a64a; stroke-width: 1; }
+.chart-island { fill: #58645a; stroke: #b6b78c; stroke-width: 1.5; }
+.wild-island { fill: #485d57; }
+.chart-river { fill: none; stroke: #8eb6bd; stroke-width: 3; opacity: .55; }
+.chart-mountains { fill: none; stroke: #c1c7a4; stroke-width: 2; opacity: .45; }
+.chart-route { fill: none; stroke: #e6c880; stroke-width: 1.5; stroke-dasharray: 5 8; opacity: .6; }
+.chart-compass { fill: #8eaeb2; stroke: #8eaeb2; stroke-width: 1; opacity: .7; font: 11px serif; text-anchor: middle; }
+.travel-node { position: absolute; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; gap: 6px; align-items: center; min-width: 100px; padding: 12px; border: 0; background: transparent; box-shadow: none; color: #e0e7d7; }
+.travel-node.homestead { left: 25%; }.travel-node.wilds { left: 75%; }
+.travel-node:hover, .travel-node:focus-visible { background: #10212b80; }
+.travel-node-emblem { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; border: 1px solid #a8b9a8; background: #17282cf2; box-shadow: 0 0 0 5px #172c3266; }
+.travel-node-emblem .ui-icon { width: 28px; height: 28px; }
+.travel-node.selected .travel-node-emblem { border-color: #efcf80; color: #f6dda3; box-shadow: 0 0 0 5px #dbb86a26, 0 0 24px #efcf8030; }
+.travel-node strong { font-size: 16px; text-shadow: 0 2px 5px #000; }.travel-node small { font-size: 10px; color: #c6d0bf; }
+.travel-details { min-height: 120px; padding: 20px 26px 12px; }.travel-details h3 { font-size: 21px; margin: 7px 0; color: #ead6a6; }.travel-details p { font-size: 12px; line-height: 1.8; color: #b4c1c5; margin: 0; }
+.travel-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 26px; border-top: 1px solid #5d777540; background: #0e1822; }.travel-actions > span { font-size: 12px; color: #9eafb1; }.travel-actions button { padding: 10px 22px; background: #4b442e; border-color: #99845a; color: #ffe1a5; }
+.travel-error { position: absolute; z-index: 25; top: 25%; left: 50%; transform: translateX(-50%); padding: 12px 20px; color: #ffbaad; }
+@media (max-width: 700px) { .travel-chart { margin-inline: 12px; }.travel-intro, .travel-details { padding: 12px 16px; }.travel-actions { padding: 12px 16px; }.travel-node { min-width: 80px; padding: 8px; }.travel-node-emblem { width: 44px; height: 44px; }.travel-actions button { padding: 9px 12px; } }
 .interface-menu i { display: inline-block; font-size: 10px; font-style: normal; margin-left: 7px; color: #10191c; padding: 0 4px; background: var(--gold); border-radius: 3px; }
 .boss-status { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 310px; padding: 12px 16px; border-color: #a96670; }
 .boss-status > strong { color: #f0c2b6; font-size: 14px; }
@@ -474,13 +496,10 @@ canvas { display: block; }
 
 /* Compact desktop and narrow windows keep every action reachable. */
 @media (min-width: 1180px) {
-    .survivor:has(.panel-workspace) .combat-dock { display: grid; grid-template-columns: 2fr 3fr; column-gap: 12px; width: min(830px, calc(100vw - 410px)); }
+    .survivor:has(.panel-workspace, .skills-window) .combat-dock { left: 24px; transform: none; width: min(830px, calc(100vw - 370px)); }
+    .survivor:has(.panel-workspace) .combat-dock { display: grid; grid-template-columns: 2fr 3fr; column-gap: 12px; }
     .survivor:has(.panel-workspace) .status-bar { grid-column: 1 / -1; margin-bottom: 8px; }
     .survivor:has(.panel-workspace) .skill-slots { margin-top: 0; align-self: center; }
-    .survivor:has(.panel-workspace) .interface-menu { display: grid; grid-template-columns: repeat(2, 1fr); width: 200px; }
-    .survivor:has(.panel-workspace) .interface-menu button { padding: 5px 8px; gap: 5px; font-size: 11px; }
-    .survivor:has(.panel-workspace) .interface-menu button:last-child { grid-column: auto; }
-    .survivor:has(.panel-workspace) .interface-menu .ui-icon { display: none; }
 }
 @media (max-height: 800px) and (min-width: 701px) {
     .run-stats { width: 345px; display: flex; flex-wrap: wrap; align-items: center; }
@@ -513,10 +532,12 @@ canvas { display: block; }
     .boss-status { top: 85px; width: 260px; }
     .bag-shortcuts { display: none; }
 }
-@media (min-width: 701px) and (max-width: 900px) {
-    .interface-menu { width: 110px; right: 12px; }
-    .interface-menu button { gap: 6px; padding-inline: 4px; }
-    .interface-menu button > .ui-icon { display: none; }
+@media (min-width: 701px) and (max-width: 1179px) {
+    .interface-menu { width: 480px; right: 12px; grid-template-columns: repeat(9, 1fr); }
+    .interface-menu button:last-child { grid-column: auto; }
+    .combat-dock { bottom: 86px; }
+    .panel-workspace { bottom: 318px; }
+    .skills-window { bottom: 202px; }
 }
 @media (max-width: 700px) {
     .survivor { font-size: 12px; }
@@ -594,7 +615,8 @@ canvas { display: block; }
     .skill-slot { height: 76px; padding: 3px; font-size: 10px; }
     .skill-symbol { width: 21px; height: 21px; }
     .skill-slot small { font-size: 9px; }
-    .interface-menu { bottom: 12px; right: 12px; left: 12px; width: auto; display: grid; grid-template-columns: repeat(8, 1fr); padding: 4px; }
+    .interface-menu { bottom: 12px; right: 12px; left: 12px; width: auto; display: grid; grid-template-columns: repeat(9, 1fr); padding: 4px; }
+    .interface-menu button:last-child { grid-column: auto; }
     .interface-menu button { position: relative; flex-direction: column; gap: 2px; padding: 5px 1px; font-size: 10px; }
     .interface-menu button > span { flex: none; text-align: center; }
     .interface-menu kbd { position: absolute; top: 2px; right: 3px; min-width: 13px; height: 14px; font-size: 8px; padding: 0 2px; }

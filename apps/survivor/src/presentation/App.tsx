@@ -23,12 +23,15 @@ import { recycleRef } from "../core/Recycling";
 import { SessionMenu } from "./SessionMenu";
 import type { RuntimeLog } from "../app/RuntimeLog";
 import { RuntimeLogExport } from "./RuntimeLogExport";
+import { WorldTravelPanel } from "./WorldTravelPanel";
+import type { WorldLocation } from "../core/Homestead";
 import "./app.css";
 import "./menus.css";
 
 const MENUS = [{ id: "character", name: "角色", key: "C", code: "KeyC" }, { id: "inventory", name: "背包", key: "B", code: "KeyB" },
     { id: "map", name: "地图", key: "M", code: "KeyM" }, { id: "skills", name: "技能", key: "K", code: "KeyK" },
-    { id: "craft", name: "打造", key: "J", code: "KeyJ" }, { id: "spirit", name: "灵境", key: "L", code: "KeyL" }, { id: "system", name: "存档", key: "O", code: "KeyO" }] as const;
+    { id: "craft", name: "打造", key: "J", code: "KeyJ" }, { id: "spirit", name: "灵境", key: "L", code: "KeyL" },
+    { id: "travel", name: "传送", key: "H", code: "KeyH" }, { id: "system", name: "存档", key: "O", code: "KeyO" }] as const;
 type Menu = typeof MENUS[number]["id"];
 function formatTime(ms: number): string {
     const seconds = Math.floor(ms / 1000);
@@ -44,7 +47,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
     readonly session: CombatSession; readonly snapshot: SessionSnapshot; readonly attachRegionMap: AttachRegionMap;
     readonly onHome: () => Promise<void>; readonly log: RuntimeLog;
 }) {
-    const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false, craft: false, spirit: false, system: false });
+    const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false, craft: false, spirit: false, system: false, travel: false });
     const resumeAfterMenu = useRef(false);
     const [craftItemId, setCraftItemId] = useState<number>();
     const [recycling, setRecycling] = useState<CraftOperation>();
@@ -55,22 +58,24 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
     const atHome = combat?.world.location === "homestead";
     const player = combat?.player;
     const toggle = (menu: Menu) => {
-        if (menu === "system") {
-            if (panels.system) { close("system"); return; }
+        if (menu === "system" || menu === "travel") {
+            if (panels[menu]) { close(menu); return; }
+            if (panels.system || panels.travel) return;
             resumeAfterMenu.current = !session.isPaused && !combat?.gameOver;
             if (resumeAfterMenu.current) session.dispatch({ type: "toggle-pause" });
-        } else if (panels.system) return;
+        } else if (panels.system || panels.travel) return;
         if (menu === "inventory" && !panels.inventory) session.dispatch({ type: "sort-inventory" });
         if (menu === "character" || menu === "inventory") setFrontPanel(menu);
         setPanels(current => ({ ...current,
             ...(menu === "map" ? { character: false, inventory: false, skills: false } : { map: false }),
-            ...(menu === "craft" || menu === "spirit" || menu === "system" ? { character: false, inventory: false, skills: false, craft: false, spirit: false } : { craft: false, spirit: false }), [menu]: !current[menu] }));
+            ...(menu === "craft" || menu === "spirit" || menu === "system" || menu === "travel" ? { character: false, inventory: false, skills: false, craft: false, spirit: false } : { craft: false, spirit: false }), [menu]: !current[menu] }));
     };
     const close = (menu: Menu) => {
-        if (menu === "system" && resumeAfterMenu.current && session.isPaused) session.dispatch({ type: "toggle-pause" });
-        if (menu === "system") resumeAfterMenu.current = false;
+        if ((menu === "system" || menu === "travel") && resumeAfterMenu.current && session.isPaused) session.dispatch({ type: "toggle-pause" });
+        if (menu === "system" || menu === "travel") resumeAfterMenu.current = false;
         setPanels(current => ({ ...current, [menu]: false }));
     };
+    const travel = (destination: WorldLocation) => { close("travel"); void session.travel(destination); };
     const recycle = (item: InventoryItem) => { if (!(item.type === "equipment" && item.locked)) setRecycling({ kind: "recycle", item: recycleRef(item) }); };
     const useItem = (item: InventoryItem) => {
         if (item.type === "equipment") session.dispatch({ type: "equip", itemId: item.id });
@@ -84,11 +89,11 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                 || target instanceof HTMLElement && (target.isContentEditable || !!target.closest("input:not([type=checkbox]), textarea, select"))) return;
             const menu = MENUS.find(item => item.code === event.code)?.id ?? (event.code === "KeyI" ? "inventory" : undefined);
             if (panels.system && event.code !== "Escape" && menu !== "system") return;
+            if (panels.travel && event.code !== "Escape" && menu !== "travel") return;
             if (menu) toggle(menu);
-            else if (event.code === "KeyH") void session.travel(atHome ? "wilds" : "homestead");
             else if (event.code === "KeyP") session.dispatch({ type: "toggle-pause" });
             else if (event.code === "Escape") {
-                const open = (["system", "craft", "spirit", "inventory", "character", "skills", "map"] as const).find(id => panels[id]);
+                const open = (["system", "travel", "craft", "spirit", "inventory", "character", "skills", "map"] as const).find(id => panels[id]);
                 if (open) close(open); else session.dispatch({ type: "toggle-pause" });
             } else if (/^Digit[1-9]$/.test(event.code) && Number(event.code.slice(-1)) <= GAME_CONFIG.skills.slots && player) session.dispatch({ type: "cast-skill", skill: player.skills.loadout[Number(event.code.slice(-1)) - 1] });
             else if (event.code === "KeyQ") session.dispatch({ type: "use-consumable", effect: "health" });
@@ -107,7 +112,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
         };
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
-    }, [panels, selectedId, player, combat?.gameOver, snapshot.status, snapshot.travelling, atHome, session]);
+    }, [panels, selectedId, player, combat?.gameOver, snapshot.status, snapshot.travelling, session]);
 
     const ready = snapshot.status === "ready" && combat && player;
     const potionSlots = (["health", "mana"] as const).map(effect => ({ effect,
@@ -119,10 +124,6 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
             <section className="run-stats panel" aria-label="战斗记录"><header className="run-brand"><UiIcon name="rift" /><strong>{atHome ? "家园" : "荒原"}<span>RIFT</span></strong><span className={`run-state${snapshot.paused ? " paused" : ""}`}>{combat.gameOver ? "狩猎结束" : snapshot.paused ? "已暂停" : atHome ? "安全休整" : "探索中"}</span></header>
                 <div className="run-metrics"><div><span>生存时间</span><strong data-testid="elapsed-time" data-tick={combat.tick}>{formatTime(combat.elapsedMs)}</strong></div>
                     <div><span>击杀</span><b data-testid="kill-count">{combat.kills}</b></div><div><span>区域怪物</span><b data-testid="enemy-count">{combat.livingEnemies}</b></div></div>
-                <div className="journey-controls"><span>{atHome ? "灯火营地 · 64 × 64" : "步行探索可驱散迷雾"}</span>
-                    <button disabled={combat.gameOver || snapshot.travelling || snapshot.saveStatus.busy}
-                        onClick={() => void session.travel(atHome ? "wilds" : "homestead")}>{atHome ? "出战荒野" : "回到家园"}<kbd>H</kbd></button></div>
-                {snapshot.travelError && <p className="menu-error" role="alert">{snapshot.travelError}</p>}
                 <details className="runtime-diagnostics"><summary>性能诊断<span>帧率 / 线程</span></summary>
                     <WorkerLoadPanel workers={snapshot.workerLoads} performance={snapshot.performance} />
                 </details>
@@ -164,21 +165,23 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                         <div className="bar mana-bar" aria-label="法力"><span style={{ width: `${player.mana / player.stats.maxMana * 100}%` }} /><b><em>法力</em>{Math.floor(player.mana)} / {player.stats.maxMana}</b></div>
                         <div className="experience-track" aria-label="经验"><div className="experience-label"><span>经验</span><b>{Math.floor(player.experience)} / {player.experienceToLevel}</b></div><div className="bar experience-bar"><span style={{ width: `${player.experience / player.experienceToLevel * 100}%` }} /></div></div></div></div>
                 <div className="skill-slots">
-                    {player.skills.loadout.map((id, index) => <SkillSlot key={index} index={index} player={player} blocked={atHome || combat.gameOver || snapshot.paused} cast={() => session.dispatch({ type: "cast-skill", skill: id })} />)}
+                    {player.skills.loadout.map((id, index) => <SkillSlot key={index} index={index} player={player} blocked={combat.gameOver || snapshot.paused} cast={() => session.dispatch({ type: "cast-skill", skill: id })} />)}
                     {potionSlots.map(({ effect, item, count }, index) => <div key={effect} className={`skill-slot ${effect}-skill`}>
                         <kbd>{index === 0 ? "Q" : "E"}</kbd><ItemTooltip item={item} player={player}><button className="item-icon-trigger" aria-label={effect === "health" ? "使用生命药剂" : "使用法力药剂"}
                         disabled={combat.gameOver || snapshot.paused || player.potionRemaining > 0 || !item || !canUseConsumable(item, player)}
                         onClick={() => session.dispatch({ type: "use-consumable", effect })}><ItemIcon item={item} type="consumable" value={effect} className="skill-symbol" /></button></ItemTooltip><span>{effect === "health" ? "生命药剂" : "法力药剂"}</span><small>{player.potionRemaining > 0 ? `${player.potionRemaining.toFixed(1)}s` : `× ${count}`}</small></div>)}
                 </div>
             </section>
-            <nav className="interface-menu panel" aria-label="界面快捷键">{MENUS.map(menu => <button key={menu.id} className={panels[menu.id] ? "active" : ""} aria-expanded={panels[menu.id]} onClick={() => toggle(menu.id)}>
+            <nav className="interface-menu panel" aria-label="界面快捷键">{MENUS.map(menu => <button key={menu.id} className={panels[menu.id] ? "active" : ""} aria-expanded={panels[menu.id]} disabled={snapshot.travelling || menu.id === "travel" && combat.gameOver} onClick={() => toggle(menu.id)}>
                 <UiIcon name={menu.id} /><span>{menu.name}{menu.id === "character" && player.unspentAttributePoints > 0 && <i>{player.unspentAttributePoints}</i>}{menu.id === "skills" && player.skills.points > 0 && <i>{player.skills.points}</i>}</span><kbd>{menu.key}</kbd></button>)}
-                <button onClick={() => session.dispatch({ type: "toggle-pause" })}><UiIcon name={snapshot.paused ? "play" : "pause"} /><span>{snapshot.paused ? "继续" : "暂停"}</span><kbd>P</kbd></button></nav>
+                <button disabled={panels.travel || panels.system || snapshot.travelling} onClick={() => session.dispatch({ type: "toggle-pause" })}><UiIcon name={snapshot.paused ? "play" : "pause"} /><span>{snapshot.paused ? "继续" : "暂停"}</span><kbd>P</kbd></button></nav>
             <div className="notices" aria-live="polite">{snapshot.notices.map(notice => <div className={`notice ${notice.tone}`} key={notice.id}>{notice.message}</div>)}</div>
             {snapshot.upgrades[0] && !combat.gameOver && !Object.values(panels).some(Boolean) && <UpgradePrompt item={snapshot.upgrades[0]} player={player} count={snapshot.upgrades.length}
                 onEquip={() => session.dispatch({ type: "equip", itemId: snapshot.upgrades[0].id })}
                 onDismiss={() => session.dispatch({ type: "dismiss-upgrade", itemId: snapshot.upgrades[0].id })} />}
-            {snapshot.paused && !combat.gameOver && !panels.system && <div className="pause-banner"><span>战斗暂停</span><button onClick={() => session.dispatch({ type: "toggle-pause" })}>继续<kbd>P</kbd></button></div>}
+            {panels.travel && <WorldTravelPanel location={combat.world.location} busy={snapshot.travelling || snapshot.saveStatus.busy || combat.gameOver} close={() => close("travel")} travel={travel} />}
+            {snapshot.travelError && <p className="travel-error panel" role="alert">{snapshot.travelError}</p>}
+            {snapshot.paused && !combat.gameOver && !panels.system && !panels.travel && <div className="pause-banner"><span>战斗暂停</span><button onClick={() => session.dispatch({ type: "toggle-pause" })}>继续<kbd>P</kbd></button></div>}
             {combat.gameOver && !panels.system && <div className="state-overlay death"><div><small>本次狩猎结束</small><h1>你已倒下</h1><p>坚持 {formatTime(combat.elapsedMs)} · 击杀 {combat.kills} · 达到 {player.level} 级</p><button onClick={() => session.dispatch({ type: "restart" })}>再次踏入荒原<kbd>R</kbd></button><button onClick={() => toggle("system")}>读取存档</button><button onClick={() => void onHome()}>返回主界面</button></div></div>}
         </>}
         {(snapshot.status === "loading" || snapshot.travelling) && <div className="state-overlay loading" role="status"><div className="loading-rune" /><div><small>RIFT / 旅程</small><h1>{snapshot.travelling ? "正在前往目的地" : "世界正在苏醒"}</h1><p>准备地域与角色资源…</p></div></div>}

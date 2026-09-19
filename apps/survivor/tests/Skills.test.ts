@@ -61,7 +61,7 @@ test("chain lightning picks distinct nearest targets with stable ties and bounde
     expect(e.effects.buffer.endX[0]).toBe(2);
     while (e.enemies.count) e.remove(e.enemies.slots[0]);
     const mana = e.vitals.mana[e.player];
-    expect(skills.cast("chain", 1000, flat, 1, random)).toBe(false);
+    expect(skills.cast("chain", 1000, flat, 1, random, true)).toBe(false);
     expect(e.vitals.mana[e.player]).toBe(mana);
 });
 
@@ -190,11 +190,11 @@ test("all three ongoing skills share a full population without overflowing the p
     expect(skills.cast("blades", 480, stats, 3, random)).toBe(true);
 });
 
-test("new targeted skills reject empty casts and pulse gains independent 50 percent damage against chilled enemies", () => {
+test("automatic targeted skills reject empty casts and pulse gains independent 50 percent damage against chilled enemies", () => {
     const { skills, e, stats, random, spawn } = arena();
     skills.equip("meteor", 0, 3); skills.equip("vortex", 1, 3);
     const mana = e.vitals.mana[e.player];
-    for (const id of ["meteor", "vortex"] as const) expect(skills.cast(id, 0, stats, 3, random)).toBe(false);
+    for (const id of ["meteor", "vortex"] as const) expect(skills.cast(id, 0, stats, 3, random, true)).toBe(false);
     expect(e.vitals.mana[e.player]).toBe(mana);
     skills.equip("pulse", 0, 3); skills.equip("frost", 1, 3);
     spawn(2, 0); vi.spyOn(random, "next").mockReturnValue(.5);

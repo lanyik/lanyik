@@ -4,7 +4,11 @@
 
 对应 `scripts/lib/survivor-environment.mjs`、`src/objects/Forest.ts`、`TerrainMesh.ts`、`TerrainArrayTexture.ts`、`terrainMaterial.ts` 和 `SunLight.ts`。源文件及哈希固定于 `assets/environment/sources.json`。
 
-家园三栋营地建筑由应用 `HomesteadModels` 使用共享 Box/Cone 几何和四份标准材质现场构造，属于仓库原创代码布景，无外部资产输入或离线构建产物。尺寸与碰撞共用 `HOMESTEAD.buildings`，由 `CombatLayer` 的资源账户统一登记和释放；仅家园显示。家园地图和玩法边界见[探索与家园](exploration-and-homestead.md)。
+家园使用 [Quaternius Medieval Village](https://quaternius.com/packs/medievalvillage.html) 的 CC0 成品模型：Inn、Blacksmith、House_1、Well。原始 OBJ、MTL、作者许可原文和逐文件下载地址、字节数、SHA-256 保存在 [homestead 来源清单](../../apps/survivor/assets/homestead/sources.json)。不再用 Box/Cone 拼房屋。
+
+`scripts/lib/survivor-homestead.mjs` 由资产准备脚本调用，校验所有输入，去除 Blender 导出的独立辅助线（避免 OBJLoader 把完整物体识别为线），保留建筑三角形及线性 MTL Kd 颜色，合并为每模型一份带顶点色的索引几何。统一居中并落地，按最大水平跨度分别归一化到 8/7/6/2 游戏单位；包围盒写入 `HomesteadModels.generated.ts`，供碰撞与布景共享，渲染几何写入 `.assets/homestead/models.json`，许可及来源清单随包发布。运行时无 OBJ/MTL 解析器、额外纹理或外网请求，四份几何共用一份 Standard 材质。
+
+`HomesteadSea` 用共享平面生成宽 600 游戏单位的外围海面和两层沿海云雾，波纹/云团由 shader 计算，共三次绘制，无贴图、渲染目标或独立帧循环。海面与云雾通过现有 fog chunks 接入天空距离雾，海雾只在地图外缘出现，与战争迷雾无关。家园资产由 `CombatLayer` 的资源账户统一登记和释放；仅家园显示。地图和玩法边界见[探索与家园](exploration-and-homestead.md)。
 
 ## 比例与实例化
 

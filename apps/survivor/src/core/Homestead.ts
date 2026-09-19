@@ -1,14 +1,16 @@
 import type { CombatTerrain } from "./CombatTerrain";
 import { SurfaceMotion, type SurfaceContact } from "./SurfaceMotion";
+import { HOMESTEAD_MODELS } from "./HomesteadModels.generated";
 
 export type WorldLocation = "wilds" | "homestead";
 export const HOMESTEAD = Object.freeze({ width: 64, height: 64,
     spawn: Object.freeze({ x: 48, z: 32.5 * Math.sqrt(3) }),
     minX: 1.5, maxX: 93, minZ: Math.sqrt(3), maxZ: 62 * Math.sqrt(3),
     buildings: Object.freeze([
-        Object.freeze({ x: 48, z: 47, width: 7, depth: 5, height: 3.5 }),
-        Object.freeze({ x: 38, z: 56, width: 5, depth: 5, height: 2.6 }),
-        Object.freeze({ x: 58, z: 56, width: 5, depth: 5, height: 2.6 })
+        Object.freeze({ model: "Inn" as const, x: 48, z: 44, ...HOMESTEAD_MODELS.Inn }),
+        Object.freeze({ model: "House_1" as const, x: 35, z: 53, ...HOMESTEAD_MODELS.House_1 }),
+        Object.freeze({ model: "Blacksmith" as const, x: 61, z: 51, ...HOMESTEAD_MODELS.Blacksmith }),
+        Object.freeze({ model: "Well" as const, x: 53, z: 59, ...HOMESTEAD_MODELS.Well })
     ]) });
 
 /** Flat, enclosed safe grounds. Gameplay bounds sit one tile inside the finite map's jagged shoreline. */

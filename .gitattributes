@@ -9,6 +9,10 @@ apps/survivor/assets/effects/*-LICENSE.txt -text -whitespace
 apps/survivor/assets/loot/License.txt -text -whitespace
 # The loot source manifest hashes the publisher's original OBJ bytes as well.
 apps/survivor/assets/loot/*.obj -text -whitespace
+# Homestead source hashes and publisher attribution must survive every checkout unchanged.
+apps/survivor/assets/homestead/*.obj -text -whitespace
+apps/survivor/assets/homestead/*.mtl -text -whitespace
+apps/survivor/assets/homestead/License.txt -text -whitespace
 # Environment manifests preserve publisher license and preset bytes.
 apps/survivor/assets/environment/*-LICENSE.txt -text -whitespace
 apps/survivor/assets/environment/*_medium.json -text -whitespace

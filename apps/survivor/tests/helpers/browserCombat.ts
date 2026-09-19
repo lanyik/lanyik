@@ -5,6 +5,8 @@ import { expect, type Page } from "@playwright/test";
 
 export async function enterWilds(page: Page): Promise<void> {
     await expect(page.locator(".survivor[data-state=ready]")).toHaveAttribute("data-location", "homestead", { timeout: 45_000 });
+    await page.keyboard.press("KeyH");
+    await page.getByRole("button", { name: "目的地：荒野", exact: true }).click();
     await page.getByRole("button", { name: "出战荒野", exact: false }).click();
     await expect(page.locator(".survivor[data-state=ready]")).toHaveAttribute("data-location", "wilds", { timeout: 45_000 });
     await expect(page.locator(".state-overlay.loading")).toHaveCount(0);

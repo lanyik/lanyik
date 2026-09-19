@@ -93,7 +93,7 @@ export class CombatLayer implements WorldRenderLayer {
     private actors: ActorModels | undefined;
     private effects: SkillEffects | undefined;
     private readonly mist = new BoundaryMist();
-    private readonly homestead = new HomesteadModels();
+    private homestead: HomesteadModels | undefined;
     private location: WorldLocation = "wilds";
     private actorLoading: Promise<void> | undefined;
     private assetAbort: AbortController | undefined;
@@ -146,7 +146,6 @@ export class CombatLayer implements WorldRenderLayer {
         this.buildPlayer();
         this.groundProjection.root.add(this.enemyEffects.warnings, this.telegraphs, this.chargeWarnings, this.groundPlayer, this.lootEffects.halo);
         this.root.add(this.enemyEffects.root, this.projectiles, this.experience, this.lootEffects.beam, this.player, this.mist.mesh);
-        this.root.add(this.homestead.root); this.homestead.root.visible = false;
         try { resources.acquireRequired("combat-render-pool", {}, true, [
             ...collectObject3DResourceAllocations([this.root, this.groundProjection.root]),
             { identity: this.groundProjection.target.texture, cost: {
@@ -167,25 +166,28 @@ export class CombatLayer implements WorldRenderLayer {
             const pending = Promise.allSettled([
                 ActorModels.load(MAX_ENEMIES, this.viewCenter, controller.signal).catch(reject),
                 SkillEffects.load(controller.signal).catch(reject),
-                LootModels.load(this.viewCenter, controller.signal).catch(reject)
+                LootModels.load(this.viewCenter, controller.signal).catch(reject),
+                HomesteadModels.load(controller.signal).catch(reject)
             ]).then(results => {
-                const [actorResult, effectResult, lootResult] = results;
-                if (actorResult.status === "rejected" || effectResult.status === "rejected" || lootResult.status === "rejected" || this.disposed || controller.signal.aborted) {
+                const [actorResult, effectResult, lootResult, homeResult] = results;
+                if (actorResult.status === "rejected" || effectResult.status === "rejected" || lootResult.status === "rejected" || homeResult.status === "rejected" || this.disposed || controller.signal.aborted) {
                     if (actorResult.status === "fulfilled") actorResult.value.dispose();
                     if (effectResult.status === "fulfilled") effectResult.value.dispose();
                     if (lootResult.status === "fulfilled") lootResult.value.dispose();
-                    throw actorResult.status === "rejected" ? actorResult.reason : effectResult.status === "rejected" ? effectResult.reason : lootResult.status === "rejected" ? lootResult.reason : controller.signal.reason;
+                    if (homeResult.status === "fulfilled") homeResult.value.dispose();
+                    throw actorResult.status === "rejected" ? actorResult.reason : effectResult.status === "rejected" ? effectResult.reason : lootResult.status === "rejected" ? lootResult.reason : homeResult.status === "rejected" ? homeResult.reason : controller.signal.reason;
                 }
                 const actors = actorResult.value, effects = effectResult.value, models = lootResult.value;
                 let numbers: DamageNumbers | undefined;
                 try {
                     numbers = new DamageNumbers(document.createElement("canvas"));
                     this.resources.acquireRequired("combat-actor-models", {}, true, [
-                        ...collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward, models.root, numbers.mesh]),
+                        ...collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward, models.root, numbers.mesh, homeResult.value.root]),
                         ...[...actors.poseBuffers, ...numbers.buffers].map(array => ({ identity: array.buffer, cost: { cpuBytes: array.byteLength } }))
                     ]);
                     this.damageNumbers = numbers; this.root.add(numbers.mesh);
-                } catch (error) { numbers?.dispose(); actors.dispose(); effects.dispose(); models.dispose(); throw error; }
+                } catch (error) { numbers?.dispose(); actors.dispose(); effects.dispose(); models.dispose(); homeResult.value.dispose(); throw error; }
+                this.homestead = homeResult.value; this.root.add(this.homestead.root); this.homestead.root.visible = false;
                 this.actors = actors;
                 this.effects = effects;
                 this.lootModels = models;
@@ -211,7 +213,7 @@ export class CombatLayer implements WorldRenderLayer {
 
     public setLocation(location: WorldLocation): void { this.location = location; }
     public update(state: CombatRenderState, alpha: number, timestampMs: number): void {
-        if (!this.host || !this.actors || !this.lootModels) return;
+        if (!this.host || !this.actors || !this.lootModels || !this.homestead) return;
         this.root.visible = this.groundProjection.root.visible = true;
         const { position, enemy, vitals, action, projectile, item, ids, enemies, projectiles, experience, loot, experienceValue, status } = state.entities;
         const blend = Math.max(0, Math.min(1, alpha));
@@ -220,6 +222,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.renderOrigin.set(playerX, playerZ);
         this.homestead.root.visible = this.location === "homestead";
         this.homestead.root.position.set(-playerX, 0, -playerZ);
+        if (this.location === "homestead") this.homestead.update(state.player.animationTime);
         this.root.position.set(playerX * this.host.tileSize, 0, playerZ * this.host.tileSize);
         this.player.position.set(0, this.height(playerX, playerZ), 0);
         this.groundPlayer.position.set(0, 0, 0);
@@ -388,7 +391,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.lootEffects.dispose();
         this.groundProjection.dispose();
         this.mist.dispose();
-        this.homestead.dispose();
+        this.homestead?.dispose();
         this.actorFill.dispose();
         for (const mesh of [this.projectiles, this.telegraphs, this.chargeWarnings, this.experience]) mesh.dispose();
         for (const geometry of Object.values(this.geometries)) geometry.dispose();
