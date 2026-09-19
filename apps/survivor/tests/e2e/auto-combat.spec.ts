@@ -52,7 +52,7 @@ test("Z toggles Worker automation, respects manual input and autocast, and stops
     expect(errors).toEqual([]);
 });
 
-test("Z equips loot and orbs, retires obsolete gear, and saves manual versus automatic protection", async ({ page }) => {
+test("Z equips without extra locks, retires obsolete gear, and saves single-toggle protection", async ({ page }) => {
     test.setTimeout(180_000);
     const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
     await inspectCombatWorker(page); await page.goto("/");
@@ -72,7 +72,7 @@ test("Z equips loot and orbs, retires obsolete gear, and saves manual versus aut
     await expect.poll(async () => (await player()).equipment.weapon?.id).toBe(900);
     expect((await player()).orbs.slice(0, 2).map(orb => orb?.id)).toEqual([901, 902]);
     await page.keyboard.press("KeyC"); await page.locator('.equipment-slot[data-slot="weapon"]').click();
-    await page.getByRole("button", { name: "锁定保留", exact: true }).click();
+    await page.getByRole("button", { name: "锁定装备", exact: true }).click();
     await expect.poll(async () => (await player()).equipment.weapon?.autoEquipped).toBe(false);
     await page.keyboard.press("KeyC");
     const pickup = async (item: InventoryItem) => {
@@ -86,7 +86,11 @@ test("Z equips loot and orbs, retires obsolete gear, and saves manual versus aut
     await pickup(gear(903, 60, 30)); await pickup(gear(904, 80, 31));
     await page.keyboard.press("KeyB");
     const reserve = page.locator('[data-item-id="903"]');
-    await expect(reserve.locator(".cell-lock-badge")).toHaveText("自动锁定");
+    await expect(reserve.locator(".cell-lock-badge")).toHaveCount(0);
+    await reserve.click({ modifiers: ["Shift"] });
+    await expect(reserve.locator(".cell-lock-badge")).toHaveText("已锁定");
+    await reserve.click({ modifiers: ["Shift"] });
+    await expect(reserve.locator(".cell-lock-badge")).toHaveCount(0);
     await reserve.click({ modifiers: ["Shift"] });
     await expect(reserve.locator(".cell-lock-badge")).toHaveText("已锁定");
     await page.keyboard.press("KeyB");
@@ -99,7 +103,7 @@ test("Z equips loot and orbs, retires obsolete gear, and saves manual versus aut
     await page.evaluate(async () => { const session = window.survivorApplication!.session; await session.settled; await session.save("manual-1"); });
     await page.reload(); await page.getByRole("button", { name: "读取手动存档 1", exact: true }).click();
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45000 });
-    expect((await player()).equipment.weapon).toMatchObject({ id: 905, locked: true, autoEquipped: true });
+    expect((await player()).equipment.weapon).toMatchObject({ id: 905, locked: false, autoEquipped: true });
     expect((await player()).inventory.find(item => item.id === 903)).toMatchObject({ locked: true, autoEquipped: false });
     expect(await page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat!.autoCombat.enabled)).toBe(false);
     expect(errors).toEqual([]);

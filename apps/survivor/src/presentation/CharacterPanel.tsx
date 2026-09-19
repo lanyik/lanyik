@@ -9,6 +9,7 @@ import { WindowHeader } from "./WindowChrome";
 import { UiIcon } from "./UiIcon";
 import { OrbSockets } from "./OrbDrag";
 import { ItemTooltip } from "./ItemTooltip";
+import { RepeatButton } from "./RepeatButton";
 
 const ATTRIBUTE_INFO: Readonly<Record<AttributeId, { name: string; detail: string }>> = {
     might: { name: "力量", detail: "基础攻击" }, vitality: { name: "体魄", detail: "基础生命、防御、回复" },
@@ -46,7 +47,7 @@ export function CharacterPanel({ player, disabled, dispatch, onClose }: {
                 <OrbSockets player={player} disabled={disabled} onInspect={setInspectedId} onRemove={socket => dispatch({ type: "remove-orb", socket })} />
                 <p className="orb-resonance-summary">共鸣：{player.orbResonance.pairs.length} 类配对 · {player.orbResonance.diversity} 种类型<br />金币 +{player.orbResonance.goldBonus * 100}% · 打造消耗 −{player.orbResonance.craftDiscount * 100}%</p>
                 <div className="equipment-inspector">{inspected ? <><ItemDetails item={inspected} />
-                    {inspected.type === "equipment" && <>{inspected.autoEquipped && <button disabled={disabled} onClick={() => dispatch({ type: "set-equipment-lock", itemId: inspected.id, locked: true })}>锁定保留</button>}
+                    {inspected.type === "equipment" && <><button disabled={disabled} onClick={() => dispatch({ type: "set-equipment-lock", itemId: inspected.id, locked: !inspected.locked })}>{inspected.locked ? "解锁装备" : "锁定装备"}</button>
                         <button disabled={disabled} onClick={() => { dispatch({ type: "unequip", slot: inspected.value }); setInspectedId(undefined); }}>卸下装备</button></>}
                     {inspected.type === "orb" && <button disabled={disabled} onClick={() => { dispatch({ type: "remove-orb", socket: player.orbs.findIndex(orb => orb?.id === inspected.id) }); setInspectedId(undefined); }}>取下宝珠</button>}
                 </> : <div className="empty-inspector"><UiIcon name="shield" /><strong>查看装备详情</strong><span>选择装备或宝珠，查看属性与词条</span></div>}</div>
@@ -56,7 +57,7 @@ export function CharacterPanel({ player, disabled, dispatch, onClose }: {
             </div><div className="section-heading"><h3>基础属性</h3><span className={`attribute-points${player.unspentAttributePoints > 0 ? " available" : ""}`}>{player.unspentAttributePoints} 点可分配</span></div>
                 <div className="attribute-list">{ATTRIBUTE_IDS.map(id => <div className="attribute-row" key={id}>
                     <span>{ATTRIBUTE_INFO[id].name}<Hint label={ATTRIBUTE_INFO[id].name}>{ATTRIBUTE_INFO[id].detail}。包含灵境永久 +{player.spiritRealm.attributes[id]}；加点不改变掉落分布或战斗概率。</Hint><small>{ATTRIBUTE_INFO[id].detail}</small></span>
-                    <strong>{player.attributes[id]}</strong><button aria-label={`提升${ATTRIBUTE_INFO[id].name}`} disabled={disabled || !player.unspentAttributePoints} onClick={() => dispatch({ type: "allocate", attribute: id })}>+</button>
+                    <strong>{player.attributes[id]}</strong><RepeatButton aria-label={`提升${ATTRIBUTE_INFO[id].name}`} title="点击加 1 点，长按连续加点" disabled={disabled || !player.unspentAttributePoints} onRepeat={() => dispatch({ type: "allocate", attribute: id })}>+</RepeatButton>
                 </div>)}</div>
                 <div className="loot-summary"><span>装备爆率 <Hint label="装备爆率"><strong>寻宝分布</strong>
                     <p>普通怪 {(player.lootProfile.normalDropChance * 100).toFixed(1)}% · 精英 {(player.lootProfile.eliteDropChance * 100).toFixed(1)}%</p>

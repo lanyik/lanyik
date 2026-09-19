@@ -26,6 +26,16 @@ function arena(terrain = OPEN_TERRAIN) {
 }
 
 describe("player auto combat", () => {
+    test("a safe stationary cast suspends pursuit, but an incoming bolt still preempts it", () => {
+        const a = arena(); a.spawn(12, 0); a.controller.setEnabled(true);
+        expect(a.update(1).active).toBe(true); expect(a.controller.canStopToCast).toBe(true);
+        expect(a.controller.update(rest, 13, stats, 0, 0, true).active).toBe(false);
+        a.e.spawnProjectile(0, Faction.Enemy, -3, 0, 5, 0, 1, 2, { height: .8 });
+        expect(a.controller.update(rest, 25, stats, 0, 0, true).active).toBe(true);
+        expect(a.controller.activity).toBe("evade"); expect(a.controller.canStopToCast).toBe(false);
+        const manual = { x: 1, z: 0, active: true };
+        expect(a.controller.update(manual, 26, stats, 0, 0, true)).toBe(manual);
+    });
     test("shared tree definitions keep controllers' movement and running state independent", () => {
         const first = arena(), second = arena(); first.spawn(12, 0); second.spawn(-12, 0);
         first.controller.setEnabled(true); second.controller.setEnabled(true);

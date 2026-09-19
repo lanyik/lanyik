@@ -30,6 +30,36 @@ function arena() {
     return { simulation, fixture, e, skills, stats, random, spawn, learnFrost, release };
 }
 
+test("automatic casting prioritizes protection and stationary spells ahead of mobile fillers", () => {
+    const { skills, e, stats, random, spawn, release } = arena();
+    skills.equip("meteor", 5, 3); skills.equip("ward", 4, 3); spawn(2, 0);
+    e.vitals.mana[e.player] = 1000;
+    expect(skills.castAutomatic(0, stats, 3, random, true)).toBe(true);
+    expect(skills.snapshot(0).action?.skill).toBe("meteor");
+    release(110); e.vitals.health[e.player] = stats.maxHealth * .4;
+    expect(skills.castAutomatic(110, stats, 3, random, false)).toBe(true);
+    expect(skills.snapshot(110).action?.skill).toBe("ward");
+    release(170);
+    expect(skills.castAutomatic(170, stats, 3, random, false)).toBe(true);
+    expect(skills.snapshot(170).action?.skill).toBe("pulse");
+});
+
+test("autopilot stops pursuit to finish a heavy cast while manual movement still takes over", () => {
+    const { simulation, fixture, skills, e, spawn } = arena();
+    fixture.gainExperience(experienceForLevel(1)); skills.equip("meteor", 5, 2);
+    const target = spawn(6, 0); e.vitals.health[target] = 10000; e.vitals.mana[e.player] = 1000;
+    fixture.autoCast = true; simulation.toggleAutoCombat();
+    for (let i = 0; i < 12; i++) simulation.step({ x: 0, z: 0, active: false });
+    expect(skills.snapshot(simulation.tick).action?.skill).toBe("meteor");
+    const x = e.position.x[e.player], z = e.position.z[e.player];
+    for (let i = 0; i < 60; i++) simulation.step({ x: 0, z: 0, active: false });
+    expect(e.effects.buffer.kind.slice(0, e.effects.buffer.count)).toContain(EffectKind.Meteor);
+    expect(Math.hypot(e.position.x[e.player] - x, e.position.z[e.player] - z)).toBeLessThan(1);
+    simulation.step({ x: -1, z: 0, active: true });
+    expect(simulation.getSnapshot().autoCombat.activity).toBe("manual");
+    simulation.dispose();
+});
+
 test("one point per earned level, atomic build revisions, six slots and cooldowns survive rearrangement", () => {
     const { simulation, fixture, skills, stats, random } = arena();
     expect(skills.equip("ward", 0, 1)).toBe(false);

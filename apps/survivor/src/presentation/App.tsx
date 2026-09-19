@@ -170,7 +170,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                     {snapshot.paused && <span className="dock-pause">战斗暂停</span>}
                     {player.skills.ward > 0 && <span>结界 {Math.ceil(player.skills.ward)}</span>}
                     <button aria-pressed={combat.autoCombat.enabled} disabled={combat.gameOver || atHome}
-                        title="生命不高于 40% 自动用药；自动换装、嵌珠并出售明显落后的自动锁定白蓝紫装；WASD 接管移动；死亡停止"
+                        title="生命不高于 40% 自动用药；自动换装、嵌珠并出售明显落后的未锁定挂机旧装；WASD 接管移动；死亡停止"
                         onClick={() => session.dispatch({ type: "toggle-auto-combat" })}><i className={combat.autoCombat.enabled ? "enabled" : ""} />自动战斗 {combat.autoCombat.enabled ? "开" : "关"}<kbd>Z</kbd></button>
                     <button aria-pressed={player.autoCast} onClick={() => session.dispatch({ type: "toggle-autocast" })}><i className={player.autoCast ? "enabled" : ""} />自动施法 {player.autoCast ? "开" : "关"}<kbd>F</kbd></button></div>
                 <div className="vitals"><div className="level-medallion"><small>等级</small><strong data-testid="player-level">{player.level}</strong></div>

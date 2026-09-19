@@ -28,6 +28,7 @@ test("windows keep help, actions and navigation reachable across desktop, narrow
             expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
             expect(bounds.y + bounds.height).toBeLessThan(nav.y);
             expect(await panel.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+            if (entry.key === "K") expect((await panel.locator(".constellation-scroll").boundingBox())!.height).toBeGreaterThan(100);
             const footer = panel.locator(".action-footer");
             if (await footer.count()) {
                 await expect(footer).toBeVisible();

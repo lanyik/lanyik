@@ -49,7 +49,7 @@ export class SkillSystem {
     }
     public snapshot(tick: number): SkillSnapshot {
         const pending = this.pending, winding = pending && tick < pending.releaseAt;
-        return Object.freeze({ points: this.points, loadout: Object.freeze([...this.loadout]), build: this.build.snapshot(), modifiers: this.build.modifiers,
+        return Object.freeze({ points: this.points, refundBlocked: this.busy(tick) || this.ongoing.size > 0 || this.frost.ongoing, loadout: Object.freeze([...this.loadout]), build: this.build.snapshot(), modifiers: this.build.modifiers,
             ranks: Object.freeze(Object.fromEntries(SKILL_IDS.map(id => [id, this.build.rank(id)])) as Record<SkillId, number>),
             remaining: Object.freeze(Object.fromEntries(SKILL_IDS.map((id, i) => [id, Math.max(0, this.readyAt[i] - tick) / GAME_CONFIG.timing.simulationHz])) as Record<SkillId, number>),
             ward: this.ward, wardRemaining: Math.max(0, this.wardUntil - tick) / GAME_CONFIG.timing.simulationHz, dashing: this.dashing(tick),
@@ -139,6 +139,15 @@ export class SkillSystem {
             }
         }
         return target;
+    }
+    public castAutomatic(tick: number, stats: DerivedStats, level: number, random: DeterministicRandom, stationary: boolean): boolean {
+        if (this.busy(tick)) return false;
+        // Emergency protection, then stationary spells, then mobile fillers. Slot order breaks ties.
+        for (let priority = 0; priority < 3; priority++) for (const id of this.loadout) {
+            if (!id || (id === "ward" ? 0 : mobileCast(id) ? 2 : 1) !== priority || !stationary && !mobileCast(id)) continue;
+            if (this.cast(id, tick, stats, level, random, true)) return true;
+        }
+        return false;
     }
     public cast(id: SkillId, tick: number, stats: DerivedStats, level: number, random: DeterministicRandom, automatic = false): boolean {
         const i = skillIndex(id), definition = SKILLS[id], { player, position: p, vitals: v, status } = this.entities;

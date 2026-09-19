@@ -1,0 +1,198 @@
+{
+  "date": "2026-09-20",
+  "baselineCommit": "de65bbd",
+  "scope": "Skill tree interaction, single equipment lock and safe stationary automatic casting",
+  "node": {
+    "context": {
+      "node": "v22.16.0",
+      "platform": "win32",
+      "arch": "x64",
+      "cpu": "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+      "simulationHz": 120,
+      "activeAiHz": 30,
+      "gc": true,
+      "timing": "one warmup, five samples, simulation only; travel/terrain restore health between ticks while retaining hit settlement; no browser/GPU claim"
+    },
+    "results": {
+      "travel": {
+        "samplesMsPerTick": [
+          0.0935275,
+          0.08779052083333332,
+          0.08957913194444447,
+          0.09300822916666662,
+          0.08914170138888883
+        ],
+        "medianMsPerTick": 0.08957913194444447,
+        "budgetMsPerTick": 0.5,
+        "workload": {
+          "msPerTick": 0.08914170138888883,
+          "ticks": 2880,
+          "enemies": 621,
+          "kills": 21
+        }
+      },
+      "crowded": {
+        "samplesMsPerTick": [
+          0.32652266666666646,
+          0.34116199999999935,
+          0.33992933333333286,
+          0.35070133333333314,
+          0.3370080000000007
+        ],
+        "medianMsPerTick": 0.33992933333333286,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.3370080000000007,
+          "ticks": 300,
+          "enemies": 896,
+          "projectiles": 128
+        }
+      },
+      "iceEffects": {
+        "samplesMsPerTick": [
+          0.043828333333333566,
+          0.028355833333334128,
+          0.04355624999999937,
+          0.026901458333333985,
+          0.04613979166666695
+        ],
+        "medianMsPerTick": 0.04355624999999937,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.04613979166666695,
+          "ticks": 480,
+          "enemies": 896,
+          "initialStatusInstances": 4480,
+          "hits": 14336,
+          "p95TickMs": 0.0008000000002539309,
+          "p99TickMs": 1.5702000000001135,
+          "maxTickMs": 6.521099999999933
+        }
+      },
+      "terrain": {
+        "samplesMsPerTick": [
+          0.30823749999999944,
+          0.31397183333333334,
+          0.3060578333333342,
+          0.3079300000000012,
+          0.31096566666666603
+        ],
+        "medianMsPerTick": 0.30823749999999944,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.31096566666666603,
+          "coldStartMs": 259.7444999999998,
+          "ticks": 600,
+          "chunks": 110
+        }
+      },
+      "autoCombat": {
+        "samplesMsPerTick": [
+          0.26959016666666685,
+          0.26291033333333264,
+          0.253107500000001,
+          0.26495183333333444,
+          0.24876900000000204
+        ],
+        "medianMsPerTick": 0.26291033333333264,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.24876900000000204,
+          "coldStartMs": 253.90099999999893,
+          "ticks": 600,
+          "chunks": 100
+        }
+      },
+      "autoAvoidance": {
+        "samplesMsPerDecision": [
+          1.679072499999999,
+          1.6838891666666618,
+          1.599769166666662,
+          1.69848083333333,
+          1.7273974999999913
+        ],
+        "medianMsPerDecision": 1.6838891666666618,
+        "budgetMsPerDecision": 3,
+        "workload": {
+          "msPerDecision": 1.7273974999999913,
+          "decisions": 120,
+          "enemies": 8,
+          "liveProjectiles": 64,
+          "p95DecisionMs": 2.508299999999508,
+          "maxDecisionMs": 12.649900000000343
+        }
+      },
+      "autoLoadout": {
+        "samplesMsPerDecision": [
+          1.6830274999999952,
+          1.7768891666666604,
+          1.7951466666666571,
+          1.6302116666666735,
+          1.7838949999999991
+        ],
+        "medianMsPerDecision": 1.7768891666666604,
+        "budgetMsPerDecision": 3,
+        "workload": {
+          "msPerDecision": 1.7838949999999991,
+          "decisions": 120,
+          "equipment": 80,
+          "orbs": 48,
+          "unlockedSockets": 6,
+          "p95DecisionMs": 2.8088000000007014,
+          "maxDecisionMs": 3.391299999999319
+        }
+      }
+    }
+  },
+  "ui": {
+    "conditions": {
+      "browser": "Chromium / ANGLE D3D11",
+      "viewport": [
+        1280,
+        720
+      ],
+      "secondsPerSample": 2.5,
+      "authorityPaused": true,
+      "backgroundRendering": true
+    },
+    "samples": {
+      "url": "http://127.0.0.1:4174",
+      "inventoryItems": 80,
+      "closed": {
+        "frames": 151,
+        "p95Ms": 16.800000000000182,
+        "taskMs": 322.02799999999996,
+        "layoutMs": 0.45299999999999996,
+        "styleMs": 0.32500000000000007,
+        "domNodes": 626
+      },
+      "open": {
+        "frames": 147,
+        "p95Ms": 16.799999999999272,
+        "taskMs": 281.46500000000003,
+        "layoutMs": 0,
+        "styleMs": 0.27300000000000024,
+        "domNodes": 1545
+      },
+      "mountedCells": 24,
+      "forge": {
+        "frames": 151,
+        "p95Ms": 16.700000000000728,
+        "taskMs": 272.2439999999999,
+        "layoutMs": 0,
+        "styleMs": 0.6979999999999998,
+        "domNodes": 2213
+      },
+      "mountedForge": 16,
+      "skills": {
+        "frames": 149,
+        "p95Ms": 16.80000000000109,
+        "taskMs": 263.8000000000001,
+        "layoutMs": 0,
+        "styleMs": 0.501999999999999,
+        "domNodes": 3117
+      },
+      "mountedSkillNodes": 34
+    }
+  }
+}

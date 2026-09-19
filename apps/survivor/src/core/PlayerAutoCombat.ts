@@ -26,6 +26,7 @@ export class PlayerAutoCombat {
     private readonly movement = { x: 0, z: 0, active: false };
     private readonly evasion = { x: 0, z: 0, active: false };
     private evading = false;
+    private stationarySafe = false;
     private readonly path: AutoCombatPath;
     private readonly threats: AutoCombatThreats;
     private readonly rejectedX = new Float64Array(8);
@@ -59,23 +60,24 @@ export class PlayerAutoCombat {
     }
     public get enabled(): boolean { return this.enabledValue; }
     public get activity(): AutoCombatActivity { return this.evading ? "evade" : this.activityValue; }
+    public get canStopToCast(): boolean { return this.enabledValue && this.tick >= this.manualUntil && this.stationarySafe; }
     private get x(): number { return this.entities.position.x[this.entities.player]; }
     private get z(): number { return this.entities.position.z[this.entities.player]; }
 
     public setEnabled(enabled: boolean): void {
         PlayerAutoCombat.tree.halt(this, 0, this.running);
         this.enabledValue = enabled; this.target = 0; this.enemySlot = -1; this.engaged = this.attackable = false;
-        this.nextDecision = this.manualUntil = 0; this.evading = false;
+        this.nextDecision = this.manualUntil = 0; this.evading = this.stationarySafe = false;
         this.rejectedUntil.fill(0); this.stop(enabled ? "idle" : "off");
     }
 
-    public update(input: MovementInput, tick: number, stats: DerivedStats, velocityX = 0, velocityZ = 0): MovementInput {
+    public update(input: MovementInput, tick: number, stats: DerivedStats, velocityX = 0, velocityZ = 0, holdingCast = false): MovementInput {
         if (!this.enabledValue) return input;
         this.tick = tick; this.stats = stats;
         if (input.active) {
             if (this.activityValue !== "manual") this.nextDecision = 0;
             this.manualUntil = tick + MANUAL_GRACE;
-            this.evading = false;
+            this.evading = this.stationarySafe = false;
             this.target = 0; this.engaged = false; this.stop("manual");
         }
         if (tick >= this.nextDecision) {
@@ -85,6 +87,7 @@ export class PlayerAutoCombat {
             PlayerAutoCombat.tree.tick(this, 0, this.running);
             if (tick >= this.manualUntil) {
                 if (this.activityValue === "chest" || this.activityValue === "seek") this.followPath();
+                if (holdingCast) this.holdCast();
                 this.threats.sense(tick);
                 this.chooseDodge(velocityX, velocityZ);
             }
@@ -93,8 +96,14 @@ export class PlayerAutoCombat {
         if (input.active) return input;
         if (tick < this.manualUntil) return this.movement;
         if (this.evading) return this.evasion;
-        if (this.activityValue === "chest" || this.activityValue === "seek") this.followPath();
+        if (holdingCast) this.holdCast();
+        else if (this.activityValue === "chest" || this.activityValue === "seek") this.followPath();
         return this.movement;
+    }
+
+    private holdCast(): void {
+        this.movement.x = this.movement.z = 0; this.movement.active = false;
+        this.progressAt = this.tick; this.progressX = this.x; this.progressZ = this.z;
     }
 
     private stop(activity: AutoCombatActivity): void {
@@ -191,10 +200,12 @@ export class PlayerAutoCombat {
         const arrival = this.activityValue === "seek" ? this.stats.attackRange * .85 : this.arrival;
         const intendedTravel = this.movement.active ? Math.min(travel, Math.max(0, Math.hypot(this.goalX - this.x, this.goalZ - this.z) - arrival)) : 0;
         const danger = this.threats.risk(this.movement.x, this.movement.z, speed, intendedTravel, vx, vz, 0);
+        const stationary = this.movement.active || danger > 0 ? this.threats.risk(0, 0, speed, 0, vx, vz) : 0;
+        this.stationarySafe = stationary === 0;
         const wasEvading = this.evading; this.evading = danger > 0;
         if (!this.evading) return;
         // Safety overrides pursuit/pickup without discarding their path or imposing a dodge cooldown.
-        let best = this.threats.risk(0, 0, speed, 0, vx, vz), tie = 0;
+        let best = stationary, tie = 0;
         let bestX = 0, bestZ = 0;
         const directions = best > 0 ? 16 : 0;
         for (let direction = 0; direction < directions; direction++) {

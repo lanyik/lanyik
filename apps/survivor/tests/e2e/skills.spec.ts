@@ -10,6 +10,73 @@ import type { SkillSystem } from "../../src/core/SkillSystem";
 import { EffectKind } from "../../src/core/CombatEffects";
 import { enterWilds, advanceCombat, combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
 
+test("tree hover, bounded panning, held point allocation and one-click respec", async ({ page }, info) => {
+    await inspectCombatWorker(page); await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await expect(page.locator(".survivor[data-state=ready]")).toHaveAttribute("data-location", "homestead", { timeout: 45_000 });
+    await pauseCombat(page);
+    await combatWorker(page).evaluate(() => {
+        const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        (sim as unknown as { gainExperience(value: number): void }).gainExperience(1000);
+    });
+    await advanceCombat(page); await page.keyboard.press("KeyK");
+    const panel = page.getByRole("dialog", { name: "技能", exact: true }), points = panel.locator(".skill-points");
+    const initial = Number(await points.getAttribute("data-points")); expect(initial).toBeGreaterThan(3);
+    for (const id of ["icebolt", "icebolt.power", "frost.study", "frost.winter"]) {
+        const node = panel.locator(`[data-node="${id}"]`); await node.hover();
+        await expect(page.getByRole("tooltip")).toContainText(await node.locator(".node-name").innerText());
+        await expect(panel.locator(".constellation-details h3")).toHaveText("冰霜弹");
+    }
+    // Sample rendered SVG segments against every icon/name/rank, including offscreen nodes.
+    const crossings = await panel.evaluate(root => {
+        const map = root.querySelector(".constellation-map")!.getBoundingClientRect();
+        const boxes = Array.from(root.querySelectorAll(".constellation-node, .node-name, .node-rank"), el => ({ name: el.textContent, box: el.getBoundingClientRect() }));
+        const bad: string[] = [];
+        for (const path of root.querySelectorAll<SVGPathElement>("[data-link]")) {
+            for (let distance = 0; distance <= path.getTotalLength(); distance += 4) {
+                const point = path.getPointAtLength(distance), x = point.x + map.left, y = point.y + map.top;
+                if (boxes.some(({ box }) => x > box.left + 1 && x < box.right - 1 && y > box.top + 1 && y < box.bottom - 1)) { bad.push(path.dataset.link!); break; }
+            }
+        }
+        return bad;
+    });
+    expect(crossings).toEqual([]);
+    const scroll = panel.locator(".constellation-scroll");
+    await scroll.evaluate(el => { el.scrollTop = 300; el.scrollLeft = 200; });
+    const box = (await scroll.boundingBox())!, before = await scroll.evaluate(el => ({ x: el.scrollLeft, y: el.scrollTop }));
+    await page.mouse.move(box.x + 25, box.y + 25); await page.mouse.down();
+    await page.mouse.move(box.x + 125, box.y + 125, { steps: 5 }); await page.mouse.up();
+    const after = await scroll.evaluate(el => ({ x: el.scrollLeft, y: el.scrollTop }));
+    expect(after.x).toBeLessThan(before.x); expect(after.y).toBeLessThan(before.y);
+    await panel.locator('[data-node="icebolt"]').click();
+    const plus = panel.getByRole("button", { name: "提升冰霜弹", exact: true });
+    await plus.scrollIntoViewIfNeeded(); await plus.hover(); await page.mouse.down(); await page.waitForTimeout(650); await page.mouse.up();
+    const held = Number(await panel.locator(".node-point-controls > span").innerText()); expect(held).toBeGreaterThanOrEqual(3);
+    await page.waitForTimeout(250); await expect(panel.locator(".node-point-controls > span")).toHaveText(String(held));
+    await panel.getByRole("button", { name: "应用构筑", exact: true }).click();
+    await expect(points).toHaveAttribute("data-points", String(initial - held));
+    await panel.locator('[data-node="icebolt"]').focus(); await page.keyboard.press("Space"); await page.keyboard.press("Digit6");
+    await expect(panel.locator('[data-skill-slot="5"]')).toContainText("冰霜弹");
+    await panel.getByRole("button", { name: "免费洗点", exact: true }).click();
+    await expect(points).toHaveAttribute("data-points", String(initial));
+    await expect(panel.locator('[data-skill-slot="5"]')).toContainText("空槽位");
+    await expect(panel.locator(".node-point-controls > span")).toHaveText("0");
+    await scroll.evaluate(el => { el.scrollTop = 235; el.scrollLeft = 155; });
+    await page.screenshot({ path: info.outputPath("skill-tree-panning.png") });
+    await page.keyboard.press("KeyK"); await page.keyboard.press("KeyC");
+    const character = page.getByRole("dialog", { name: "角色", exact: true }), attribute = character.getByRole("button", { name: "提升力量", exact: true });
+    const allocated = async () => Number(await attribute.locator("..").locator("strong").innerText());
+    const base = await allocated(); await attribute.hover(); await page.mouse.down(); await page.waitForTimeout(650); await page.mouse.up();
+    await expect.poll(allocated).toBeGreaterThanOrEqual(base + 3);
+    const stopped = await allocated(); await page.waitForTimeout(250); expect(await allocated()).toBe(stopped);
+    await attribute.focus(); await page.keyboard.down("Enter"); await page.waitForTimeout(450); await page.keyboard.up("Enter");
+    await expect.poll(allocated).toBeGreaterThan(stopped);
+    // Closing a window while a repeat is held must cancel further authority commands.
+    await attribute.hover(); await page.mouse.down(); await page.waitForTimeout(420); await page.keyboard.press("KeyC"); await page.mouse.up();
+    const value = () => combatWorker(page).evaluate(() => (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation.getSnapshot().player.attributes.might);
+    const closed = await value(); await page.waitForTimeout(250); expect(await value()).toBe(closed);
+});
+
 test("constellation drafts, six slots, drag inputs and casting recovery work through the real Worker", async ({ page }, info) => {
     test.setTimeout(180_000);
     const errors: string[] = [], atlas: string[] = [];

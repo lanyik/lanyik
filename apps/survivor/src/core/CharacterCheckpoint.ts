@@ -43,7 +43,7 @@ function assertItem(item: InventoryItem): void {
         || item.size > GAME_CONFIG.inventory[item.type].stackSize) throw new Error("存档物品无效");
     if (item.type === "equipment") {
         if (!EQUIPMENT_SLOTS.includes(item.value) || !integer(item.itemLevel, 1) || !integer(item.stars) || item.stars > 4 || !integer(item.revision)
-            || typeof item.locked !== "boolean" || typeof item.autoEquipped !== "boolean" || item.autoEquipped && !item.locked
+            || typeof item.locked !== "boolean" || typeof item.autoEquipped !== "boolean"
             || !finite(item.score) || !item.baseBonuses || !item.bonuses
             || BONUS_IDS.some(id => !finite(item.baseBonuses[id]) || !finite(item.bonuses[id]))
             || !Array.isArray(item.affixes) || !item.affixes.length || item.affixes.length > 5

@@ -18,7 +18,7 @@ const branches: readonly [SkillId, string | undefined, number, number, number, n
 ];
 function add(node: SkillNode): void { nodes.push(Object.freeze(node)); }
 for (const [skill, parent, branch, tier, level, investment, names] of branches) {
-    const x = 420 + branch * 220, y = 55 + tier * 200;
+    const x = 620 + branch * 220, y = tier ? 360 + (tier - 1) * 340 : 90;
     add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description, kind: "active", skill,
         parent, parentRank: tier === 3 ? 5 : tier ? 3 : 0, maximum: isUltimate(skill) ? 5 : 10, initial: 0, level, investment, x, y, frost: true });
     for (const [index, modifier] of (["power", "shape", "tempo"] as const).entries()) {
@@ -27,18 +27,19 @@ for (const [skill, parent, branch, tier, level, investment, names] of branches) 
             : skill === "icebolt" ? "每点减少本技能法力消耗 3%。" : skill === "icelance" || skill === "shatter" ? "每点减少本技能基础冷却 2%。"
                 : skill === "icestorm" ? "每点延长冰晶风暴 10%。" : skill === "absolutezero" ? "每点延长所附寒意 10%。" : "每点增加本技能寒意积累 10%。";
         add({ id: `${skill}.${modifier}`, name: names[index], description, kind: "modifier", skill, modifier, parent: skill,
-            parentRank: [1, 3, 5][index], maximum: 5, initial: 0, level: 2, investment: 0, x: x + (index - 1) * 85, y: y + 90, frost: true });
+            parentRank: [1, 3, 5][index], maximum: 5, initial: 0, level: 2, investment: 0,
+            x: tier ? x + branch * 220 : x + (index - 1) * 125, y: tier ? y + (index - 1) * 100 : y + 140, frost: true });
     }
 }
 for (const [i, [id, name, description]] of ([
     ["frost.study", "冰霜研习", "每点增加全部冰霜技能伤害 3%。"], ["frost.economy", "冷静施法", "每点减少全部冰霜技能法力消耗 2%。"],
     ["frost.duration", "冰域掌控", "每点延长本人施加的寒意 5%。"], ["frost.resilience", "寒冰韧性", "每点缩短自身受到的寒意、减速和冻结时间 4%。"]
 ] as const).entries()) add({ id, name, description, kind: "passive", parentRank: 0, maximum: 5, initial: 0, level: 2,
-    investment: [2, 6, 12, 18][i], x: 55, y: 165 + i * 165, frost: true });
+    investment: [2, 6, 12, 18][i], x: 620, y: 420 + i * 165, frost: true });
 add({ id: "frost.shatter", name: "碎冰", description: "每点使冻结目标承受的直接冰伤额外增加 10%；自身寒意积累乘 75%。与永冬互斥。", kind: "mastery", parent: "icestorm", parentRank: 3,
-    maximum: 3, initial: 0, level: 30, investment: 28, x: 340, y: 605, frost: true });
+    maximum: 3, initial: 0, level: 30, investment: 28, x: 475, y: 910, frost: true });
 add({ id: "frost.winter", name: "永冬", description: "每点增加 15% 寒意积累和 10% 冻结时长；直接冰伤乘 85%。与碎冰互斥。", kind: "mastery", parent: "blizzard", parentRank: 3,
-    maximum: 3, initial: 0, level: 30, investment: 28, x: 500, y: 605, frost: true });
+    maximum: 3, initial: 0, level: 30, investment: 28, x: 765, y: 910, frost: true });
 for (const [i, skill] of SKILL_IDS.filter(id => !isFrostSkill(id)).entries()) add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description,
     kind: "active", skill, parentRank: 0, maximum: skill === "dash" ? 1 : 5, initial: 1, level: SKILLS[skill].unlock, investment: 0,
     x: 145 + (i % 3) * 220, y: 120 + Math.floor(i / 3) * 220, frost: false });

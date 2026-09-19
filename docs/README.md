@@ -253,6 +253,7 @@ flowchart TB
 
 | 原始记录 | 测量阶段与当前合同 |
 |---|---|
+| [skill-interaction-refinement.json](game/measurements/skill-interaction-refinement.json) | 星图拖动/悬浮、单层装备锁和安全停步施法调整后的 CPU 门禁及背包/打造/星图浏览器采样 → [技能与效果](game/skills-and-effects.md)、[模拟与 AI](game/simulation-and-ai.md)、[UI 性能](game/ui-performance.md) |
 | [skill-tree-node.json](game/measurements/skill-tree-node.json)、[skill-tree-ui.json](game/measurements/skill-tree-ui.json) | 冰霜树、六类状态、重叠冰场的 CPU 样本与星图界面浏览器采样；含改动前躲避决策参考 → [技能与效果](game/skills-and-effects.md)、[模拟与 AI](game/simulation-and-ai.md)、[UI 性能](game/ui-performance.md) |
 | [combat-architecture-node.json](game/measurements/combat-architecture-node.json)、[combat-architecture-replay.json](game/measurements/combat-architecture-replay.json) | 结算拆分后的 CPU 与固定种子回放 → [战斗架构](game/combat-architecture.md) |
 | [attack-encounters-node.json](game/measurements/attack-encounters-node.json)、[attack-encounters-workers-node.json](game/measurements/attack-encounters-workers-node.json) | 攻击遮挡/遭遇布局阶段的模拟和弹道查询 → [地形通行](game/terrain-navigation.md) |

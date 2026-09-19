@@ -72,7 +72,7 @@ export interface EquipmentAffix {
 }
 export interface Equipment extends ItemDefinition<"equipment", EquipmentSlot, 1> {
     readonly locked: boolean;
-    /** Only the automatic loadout may retire this lock. Manual locking/equipping/crafting clears it. */
+    /** Automatic wear history, not a second lock. Manual locking/equipping/crafting clears it. */
     readonly autoEquipped: boolean;
     readonly revision: number;
     readonly itemLevel: number;

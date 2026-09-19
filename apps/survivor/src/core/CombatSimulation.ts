@@ -38,7 +38,7 @@ import { PlayerAutoCombat } from "./PlayerAutoCombat";
 import type { ProjectileExecutor } from "./ProjectileBatch";
 import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSystems";
 import { SkillSystem } from "./SkillSystem";
-import { mobileCast, type SkillId } from "./Skills";
+import type { SkillId } from "./Skills";
 import { validateCharacterCheckpoint, type CharacterCheckpoint } from "./CharacterCheckpoint";
 import { MAX_PROJECTILES, CONSUMABLE_COOLDOWN } from "./GameConfig";
 import type { CombatRenderState, CombatSnapshot, CombatNotice, PlayerSnapshot, PlayerRenderState, MovementInput, ChestRenderBuffer } from "./CombatState";
@@ -316,7 +316,7 @@ export class CombatSimulation {
         this.entities.status.advance(this.tickValue);
         this.potionCooldown = Math.max(0, this.potionCooldown - STEP_SECONDS);
         this.entities.effects.advance(this.tickValue); this.entities.combatText.advance(this.tickValue);
-        const movement = this.autoCombat.update(input, this.tickValue, this.stats, this.movementX, this.movementZ);
+        const movement = this.autoCombat.update(input, this.tickValue, this.stats, this.movementX, this.movementZ, this.skills.winding(this.tickValue) && !this.skills.mobile);
         this.skills.advanceCasting(this.tickValue, this.random, movement.active && (input.active && !this.skills.mobile || this.autoCombat.activity === "evade"), this.settleOngoing);
         if (this.gameOverValue) return executor ? Promise.resolve() : undefined;
         if (!this.skills.advance(this.tickValue)) {
@@ -336,30 +336,33 @@ export class CombatSimulation {
             this.updateCurrentRegion();
         }
         this.fireWeapon();
-        if (executor) return this.finishAsyncStep(executor);
+        if (executor) return this.finishAsyncStep(executor, input.active);
         advanceProjectiles(this.entities);
-        this.finishStep();
+        this.finishStep(input.active);
     }
 
-    private async finishAsyncStep(executor: ProjectileExecutor): Promise<void> {
+    private async finishAsyncStep(executor: ProjectileExecutor, manualMovement: boolean): Promise<void> {
         this.awaitingQueries = true;
         try {
             await advanceProjectiles(this.entities, executor);
             if (this.closed) throw new Error("Simulation closed during required queries");
-            this.finishStep();
+            this.finishStep(manualMovement);
         } catch (error) {
             this.closed = true;
             throw error;
         } finally { this.awaitingQueries = false; }
     }
 
-    private finishStep(): void {
+    private finishStep(manualMovement: boolean): void {
         this.resolveImpacts();
         if (this.gameOverValue) return;
         this.skills.advanceOngoing(this.tickValue, this.random, this.settleOngoing);
-        if (this.autoCast && !this.skills.busy(this.tickValue) && this.autoCombat.activity !== "evade" && this.tickValue % AUTO_SKILL_TICKS === 0) {
-            for (const id of this.skills.loadout) {
-                if (id && (mobileCast(id) || Math.hypot(this.movementX, this.movementZ) < .05) && this.skills.cast(id, this.tickValue, this.stats, this.level, this.random, true)) { this.resolveImpacts(); break; }
+        if (this.autoCast && !this.skills.busy(this.tickValue) && this.tickValue % AUTO_SKILL_TICKS === 0) {
+            const stop = !manualMovement && this.autoCombat.canStopToCast;
+            if (this.autoCombat.activity !== "evade" || stop) {
+                const stationary = !manualMovement && (stop || Math.hypot(this.movementX, this.movementZ) < .05);
+                this.skills.castAutomatic(this.tickValue, this.stats, this.level, this.random, stationary);
+                this.resolveImpacts();
             }
         }
         this.behavior.update(this.tickValue);
@@ -529,7 +532,7 @@ export class CombatSimulation {
     public setEquipmentLock(itemId: number, locked: boolean): void {
         if (this.gameOverValue) return;
         const index = this.inventory.findIndex(item => item.id === itemId), item = this.inventory[index] ?? Object.values(this.equipped).find(item => item?.id === itemId);
-        if (!item || item.type !== "equipment" || item.locked === locked && !item.autoEquipped) return;
+        if (!item || item.type !== "equipment" || item.locked === locked) return;
         const updated = Object.freeze({ ...item, locked, autoEquipped: false, revision: item.revision + 1 });
         if (index >= 0) this.inventory[index] = updated;
         else this.equipped = { ...this.equipped, [item.value]: updated };

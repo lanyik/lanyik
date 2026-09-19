@@ -19,7 +19,7 @@ function gear(id: number, damage: number, itemLevel = 1, extra: Partial<Equipmen
     return Object.freeze({ ...createStarterEquipment(), id, itemLevel, locked: false, autoEquipped: false,
         baseBonuses: EMPTY_BONUSES, bonuses, affixes: [{ stat: "damage", value: damage, rarity: "common" }] as const, score: equipmentScore(bonuses), ...extra });
 }
-const old = () => gear(2, 10, 1, { locked: true, autoEquipped: true });
+const old = () => gear(2, 10, 1, { locked: false, autoEquipped: true });
 function input(inventory: InventoryItem[], equipment: EquippedItems = { weapon: old() }, orbs: (Orb | undefined)[] = Array(6).fill(undefined), level = 1) {
     return { inventory, equipment, orbs, attributes, level, recycling: EMPTY_RECYCLING };
 }
@@ -36,7 +36,7 @@ test("Z equips upgrades and unlocked orb sockets; stopping and manual replacemen
     const { sim, fixture } = simulation([gear(3, 30), createOrb(4, "rare", "harmony"), createOrb(5, "rare", "harmony")]);
     expect(sim.getSnapshot().player.equipment.weapon?.id).toBe(2);
     sim.toggleAutoCombat();
-    expect(sim.getSnapshot().player.equipment.weapon).toMatchObject({ id: 3, locked: true, autoEquipped: true });
+    expect(sim.getSnapshot().player.equipment.weapon).toMatchObject({ id: 3, locked: false, autoEquipped: true });
     expect(sim.getSnapshot().player.orbs.map(orb => orb?.id)).toEqual([4, 5, undefined, undefined, undefined, undefined]);
     expect(sim.equip(2).ok).toBe(true);
     expect(sim.getSnapshot().player.equipment.weapon).toMatchObject({ id: 2, autoEquipped: false });
@@ -60,9 +60,10 @@ test("battle power wins over raw exploration score, ties keep worn gear, and inp
 });
 
 test.each([
-    ["automatic low quality", { locked: true, autoEquipped: true }, true],
+    ["automatic low quality", { locked: false, autoEquipped: true }, true],
     ["manual protection", { locked: true, autoEquipped: false }, false],
-    ["legendary retention", { rarity: "legendary", locked: true, autoEquipped: true }, false],
+    ["locked automatic history", { locked: true, autoEquipped: true }, false],
+    ["legendary retention", { rarity: "legendary", locked: false, autoEquipped: true }, false],
     ["ordinary backpack reserve", { locked: false, autoEquipped: false }, false]
 ] as const)("obsolete cleanup respects %s", (_name, extra, sold) => {
     const previous = gear(2, 10, 1, extra), { sim } = simulation([gear(3, 100, 30)], { weapon: previous });

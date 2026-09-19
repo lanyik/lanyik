@@ -1,4 +1,4 @@
-import { cloneElement, createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction, type ReactElement, type ReactNode } from "react";
+import { cloneElement, createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { InventoryItem } from "../core/InventoryItem";
 import { compareEquipment, type EquipmentContext } from "../core/EquipmentEvaluation";
@@ -62,9 +62,9 @@ export function ItemTooltip({ item, player, className = "", children }: {
         content={item && <EquipmentDetails item={item} player={player} />}>{children}</IconTooltip>;
 }
 
-export function IconTooltip({ identity, content, comparing = false, className = "", children }: {
+export function IconTooltip({ identity, content, comparing = false, className = "", anchorStyle, children }: {
     readonly identity: number | string | undefined; readonly content: ReactNode; readonly comparing?: boolean;
-    readonly className?: string; readonly children: ReactElement<{ "aria-describedby"?: string }>;
+    readonly className?: string; readonly anchorStyle?: CSSProperties; readonly children: ReactElement<{ "aria-describedby"?: string }>;
 }) {
     const id = useId();
     const context = useContext(TooltipContext);
@@ -124,7 +124,7 @@ export function IconTooltip({ identity, content, comparing = false, className = 
         window.addEventListener("scroll", scroll, true);
         return () => { observer.disconnect(); window.removeEventListener("resize", place); window.removeEventListener("scroll", scroll, true); };
     }, [open, pinned, identity]);
-    return <span ref={anchor} className={`item-tooltip-anchor ${className}`} onPointerEnter={show} onPointerLeave={hide}
+    return <span ref={anchor} style={anchorStyle} className={`item-tooltip-anchor ${className}`} onPointerEnter={show} onPointerLeave={hide}
         onFocus={show} onBlur={hide} onPointerDown={event => { if (event.pointerType === "touch" && identity !== undefined) setActive({ id, pinned: true }); }}>
         {cloneElement(children, { "aria-describedby": open && identity !== undefined ? id : undefined })}
         {open && identity !== undefined && createPortal(<div ref={popup} id={id} role="tooltip" className={`equipment-tooltip${comparing ? " comparing" : ""}`}

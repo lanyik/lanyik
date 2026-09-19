@@ -49,7 +49,7 @@ function bestOrbs(items: readonly InventoryItem[], current: readonly (Orb | unde
 
 function obsolete(item: Equipment, player: EquipmentContext): boolean {
     const current = player.equipment[item.value], quality = RARITIES.indexOf(item.rarity);
-    return item.autoEquipped && !!current && quality <= RARITIES.indexOf("rare") && item.score <= current.score * .6
+    return !item.locked && item.autoEquipped && !!current && quality <= RARITIES.indexOf("rare") && item.score <= current.score * .6
         && (item.itemLevel + 10 <= current.itemLevel || quality + 2 <= RARITIES.indexOf(current.rarity))
         && compareEquipment(item, player).delta < 0;
 }
@@ -85,7 +85,7 @@ export function planAutomaticLoadout(input: LoadoutInput, incoming: readonly Inv
         if (!selected) continue;
         items = items.filter(item => item.id !== selected.id);
         if (equipment[slot]) items.push(equipment[slot]!);
-        equipment = { ...equipment, [slot]: Object.freeze({ ...selected, locked: true,
+        equipment = { ...equipment, [slot]: Object.freeze({ ...selected,
             autoEquipped: selected.autoEquipped || !selected.locked, revision: selected.revision + 1 }) };
         stats = nextStats; equipmentChanges++;
     }

@@ -51,6 +51,7 @@ export const SKILLS: Readonly<Record<SkillId, SkillDefinition>> = Object.freeze(
     absolutezero: Object.freeze({ type: "skill", value: "absolutezero", school: "冰霜", role: "终极控制", name: "绝对零度", description: "释放极寒领域，尝试冻结周围敌人并附加寒意；无法绕过控制抵抗或首领免疫。", color: "#b6fff5", mana: 42, cooldown: 32, unlock: 45, automatic: true })
 });
 export interface SkillSnapshot {
+    readonly refundBlocked: boolean;
     readonly points: number;
     readonly loadout: readonly (SkillId | null)[];
     readonly ranks: Readonly<Record<SkillId, number>>;
