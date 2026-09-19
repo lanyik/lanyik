@@ -205,6 +205,21 @@ export class CombatSimulation {
     }
     public dispose(): void { this.closed = true; this.entities.terrain.dispose(); }
 
+    public teleport(x: number, z: number): void {
+        validatePosition(x, z);
+        if (this.closed || this.awaitingQueries) throw new Error("Simulation is closed or awaiting required queries");
+        if (this.gameOverValue) return;
+        if (!this.entities.terrain.isClear(x, z, GAME_CONFIG.combat.playerRadius)) {
+            this.pushNotice("info", "目标位置无法落脚，请选择平坦陆地"); return;
+        }
+        this.playerX = this.previousPlayerX = x; this.playerZ = this.previousPlayerZ = z;
+        this.movementX = this.movementZ = 0;
+        this.skills.cancelTravel();
+        if (this.world.synchronize(x, z)) this.reconcileRegions();
+        this.world.updateAccess(x, z);
+        this.spawnEnemies(); this.refreshChests(); this.updateCurrentRegion(); this.markChanged();
+    }
+
     public step(input: MovementInput): void;
     public step(input: MovementInput, executor: ProjectileExecutor): Promise<void>;
     public step(input: MovementInput, executor?: ProjectileExecutor): void | Promise<void> {
@@ -316,6 +331,7 @@ export class CombatSimulation {
             }
         }
         return this.cachedSnapshot = Object.freeze({
+            world: Object.freeze({ seed: String(this.seed), origin: Object.freeze({ ...this.start }) }),
             revision: this.revision,
             tick: this.tickValue,
             elapsedMs: this.tickValue / GAME_CONFIG.timing.simulationHz * 1000,

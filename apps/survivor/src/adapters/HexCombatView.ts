@@ -156,11 +156,12 @@ export class HexCombatView implements CombatView {
     public readMovement(): MovementInput { return this.input.read(this.map.getCamera()); }
     public get workerActivity() { return this.map.workerActivity; }
 
-    public attachRegionMap: AttachRegionMap = canvas => {
-        const minimap = new HexRegionMap(this.map, canvas, this.onError);
+    public attachRegionMap: AttachRegionMap = (canvas, controls) => {
+        const minimap = new HexRegionMap(this.map, canvas, controls, this.onError);
         this.regionMaps.add(minimap);
         return {
             update: combat => minimap.update(combat), setExpanded: expanded => minimap.setExpanded(expanded),
+            recenter: () => minimap.recenter(), navigate: () => minimap.navigate(),
             dispose: () => { minimap.dispose(); this.regionMaps.delete(minimap); }
         };
     };

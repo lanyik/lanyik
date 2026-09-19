@@ -735,14 +735,22 @@ residency.
 
 Hosts can supply `drawOverlay(context, frame)` to replace the built-in camera,
 destination and coordinate overlay. `WorldMinimapOverlayFrame` exposes the
-content rectangle in CSS pixels and the exact logical tile extent; drawing is
+content rectangle in CSS pixels, the exact logical tile extent, and the selected
+destination (when present); drawing is
 clipped and Canvas state is restored after the callback. `redraw()` only paints
 the current cache and overlay, without rebuilding demand or invalidating pages.
 `interactive: false` installs no pointer/wheel/keyboard navigation handlers;
 the host controls expansion through `setExpanded()`. Both sizes then follow the
 camera, never select a teleport destination, and reset the viewport on world
-replacement. This lets the Survivor HUD add regional difficulty without
-duplicating the raster pipeline or competing with its application shortcuts.
+replacement. `keyboard: false` independently disables the built-in global
+shortcuts while retaining pointer inspection and selection. Hosts can route
+their own shortcuts/buttons to `recenter()` and `navigateToDestination()`;
+recenter preserves zoom. Supplying `onNavigate` replaces camera movement with
+host-owned navigation, then collapses the map via `onExpandedChange`. Without
+that callback the control moves the camera directly. Navigation is ignored
+after disposal, during world replacement, or without an expanded destination.
+Survivor uses this input boundary to preserve its application shortcuts and
+commit player travel through its simulation Worker, while reusing the raster.
 
 The overview payload is a bounded RGBA raster plus its logical tile extent.
 Pixels sample the authoritative `WorldSurfaceResolver`, so seed, topology,

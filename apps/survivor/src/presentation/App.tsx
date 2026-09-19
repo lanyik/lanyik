@@ -62,6 +62,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
         if (menu === "inventory" && !panels.inventory) session.dispatch({ type: "sort-inventory" });
         if (menu === "character" || menu === "inventory") setFrontPanel(menu);
         setPanels(current => ({ ...current,
+            ...(menu === "map" ? { character: false, inventory: false, skills: false } : { map: false }),
             ...(menu === "craft" || menu === "spirit" || menu === "system" ? { character: false, inventory: false, skills: false, craft: false, spirit: false } : { craft: false, spirit: false }), [menu]: !current[menu] }));
     };
     const close = (menu: Menu) => {
@@ -120,7 +121,9 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                     <WorkerLoadPanel workers={snapshot.workerLoads} performance={snapshot.performance} />
                 </details>
             </section>
-            <RegionMap combat={combat} expanded={panels.map} onToggle={() => toggle("map")} attach={attachRegionMap} />
+            <RegionMap combat={combat} expanded={panels.map} onToggle={() => toggle("map")}
+                onExpandedChange={expanded => { if (panels.map !== expanded) toggle("map"); }}
+                onNavigate={destination => session.dispatch({ type: "teleport", x: destination.x, z: destination.z })} attach={attachRegionMap} />
             {combat.boss && <section className="boss-status panel"><strong>{combat.boss.name}{combat.boss.enraged ? " · 狂暴" : ""}</strong><small>距离 {Math.round(Math.hypot(combat.boss.x - player.x, combat.boss.z - player.z))}</small>
                 <div className="bar health-bar"><span style={{ width: `${combat.boss.health / combat.boss.maxHealth * 100}%` }} /><b>{Math.ceil(combat.boss.health)} / {Math.ceil(combat.boss.maxHealth)}</b></div></section>}
             {(panels.character || panels.inventory) && <div ref={workspace} className={`panel-workspace${panels.character && panels.inventory ? " paired" : ""}`} data-front={frontPanel}>

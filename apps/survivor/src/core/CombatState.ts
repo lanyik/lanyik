@@ -51,6 +51,7 @@ export interface PlayerSnapshot {
 }
 
 export interface CombatSnapshot {
+    readonly world: Readonly<{ seed: string; origin: Readonly<{ x: number; z: number }> }>;
     readonly revision: number;
     readonly tick: number;
     readonly elapsedMs: number;

@@ -20907,11 +20907,11 @@ ${HEADER}
         } else if (event.code === "KeyT" && this.expanded) {
           if (event.repeat) return;
           event.preventDefault();
-          this.teleportToDestination();
+          this.navigateToDestination();
         } else if (event.code === "Space" && this.expanded) {
           if (event.repeat) return;
           event.preventDefault();
-          this.recenterViewport();
+          this.recenter();
         } else if (event.code === "Escape" && this.expanded) {
           event.preventDefault();
           this.setExpanded(false);
@@ -20989,7 +20989,7 @@ ${HEADER}
         this.canvas.addEventListener("contextmenu", this.handleContextMenu);
         this.canvas.addEventListener("click", this.handleClick);
         this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
-        window.addEventListener("keydown", this.handleKeyDown);
+        if (options.keyboard !== false) window.addEventListener("keydown", this.handleKeyDown);
       }
       this.map.on("loadstart", this.handleWorldLoadStart);
       this.map.on("load", this.handleWorldLoad);
@@ -21663,7 +21663,7 @@ ${HEADER}
           context.rect(rect.x, rect.y, rect.width, rect.height);
           context.clip();
           try {
-            this.drawOverlay(context, { content: rect, extent });
+            this.drawOverlay(context, { content: rect, extent, destination: this.destination });
           } finally {
             context.restore();
           }
@@ -21831,20 +21831,20 @@ ${HEADER}
       }
       return tile;
     }
-    teleportToDestination() {
-      if (this.worldLoading || !this.expanded || !this.destination) return;
+    navigateToDestination() {
+      if (this.disposed || this.worldLoading || !this.expanded || !this.destination) return;
       const destination = { ...this.destination };
-      this.map.setCameraTargetTile(destination.x, destination.y);
-      this.onNavigate?.(destination);
+      if (this.onNavigate) this.onNavigate(destination);
+      else this.map.setCameraTargetTile(destination.x, destination.y);
       this.setExpanded(false);
     }
     stopZoomAnimation() {
       this.targetZoomFactor = this.zoomFactor;
       this.zoomAnchor = void 0;
     }
-    recenterViewport() {
+    recenter() {
       const cameraTarget = this.map.getCameraTargetTile();
-      if (!this.expanded || !cameraTarget) return;
+      if (this.disposed || !this.expanded || !cameraTarget) return;
       this.endPan();
       this.stopZoomAnimation();
       this.viewport = this.createViewport(cameraTarget);

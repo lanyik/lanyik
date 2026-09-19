@@ -7,6 +7,7 @@ import type { CraftOperation } from "./Crafting";
 import type { ItemType } from "./ItemDefinition";
 
 export type CombatCommand =
+    | { readonly type: "teleport"; readonly x: number; readonly z: number }
     | { readonly type: "allocate"; readonly attribute: AttributeId }
     | { readonly type: "equip"; readonly itemId: number }
     | { readonly type: "unequip"; readonly slot: EquipmentSlot }
@@ -27,6 +28,7 @@ export type CombatCommand =
 /** Commands commit in arrival order before the next batch of fixed ticks. */
 export function applyCombatCommand(simulation: CombatSimulation, command: CombatCommand): void {
     switch (command.type) {
+        case "teleport": simulation.teleport(command.x, command.z); break;
         case "allocate": simulation.allocateAttribute(command.attribute); break;
         case "equip": simulation.equip(command.itemId); break;
         case "unequip": simulation.unequip(command.slot); break;

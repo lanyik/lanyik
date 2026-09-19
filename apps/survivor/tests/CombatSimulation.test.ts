@@ -6,6 +6,8 @@ import { CombatSimulation } from "../src/core/CombatSimulation";
 import type { MovementInput } from "../src/core/CombatState";
 import { GAME_CONFIG, MAX_ENEMIES } from "../src/core/GameConfig";
 import { MAX_COMBAT_CHUNKS, type RegionalWorld } from "../src/core/RegionalWorld";
+import { OPEN_TERRAIN } from "../src/core/CombatTerrain";
+import { applyCombatCommand } from "../src/core/CombatCommand";
 
 const movementAt = (step: number): MovementInput => {
     const angle = step / ticksForSeconds(3);
@@ -13,6 +15,36 @@ const movementAt = (step: number): MovementInput => {
 };
 
 describe("CombatSimulation", () => {
+    test("map teleport commits position, region and residency without sweeping across the world", () => {
+        const combat = new CombatSimulation("map-travel");
+        combat.step({ x: 1, z: 0, active: true });
+        const before = combat.checkpoint();
+        combat.restore({ ...before, skills: { ...before.skills, dashUntil: before.tick + 30, dashX: 1, dashZ: 0 } });
+        applyCombatCommand(combat, { type: "teleport", x: 360, z: 0 });
+        const snapshot = combat.getSnapshot(), rendered = combat.getRenderState().player;
+        expect(snapshot.player).toMatchObject({ x: 360, z: 0, health: before.player.health, mana: before.player.mana });
+        expect(snapshot.region).toMatchObject({ x: 10, z: -5, ring: 10 });
+        expect(snapshot.chunks.total).toBe(MAX_COMBAT_CHUNKS);
+        expect(snapshot.player.skills.dashing).toBe(false);
+        expect(rendered).toMatchObject({ x: 360, z: 0, previousX: 360, previousZ: 0 });
+        expect(combat.checkpoint()).toMatchObject({ origin: { x: 0, z: 0 }, player: { x: 360, z: 0 } });
+        combat.step({ x: 0, z: 0, active: false });
+        expect(combat.getSnapshot().player.x).toBe(360);
+        combat.dispose();
+        expect(() => combat.teleport(0, 0)).toThrow(/closed/);
+    });
+
+    test("blocked and invalid map destinations cannot mutate the player or terrain residency", () => {
+        const combat = new CombatSimulation("blocked-map", { x: 0, z: 0 }, undefined,
+            { ...OPEN_TERRAIN, isClear: (x, _z, radius) => x + radius < 50 });
+        const before = combat.getSnapshot();
+        combat.teleport(60, 0);
+        expect(combat.getSnapshot()).toBe(before);
+        expect(combat.drainNotices().map(notice => notice.message)).toContain("目标位置无法落脚，请选择平坦陆地");
+        for (const x of [NaN, Infinity, -Infinity]) expect(() => combat.teleport(x, 0)).toThrow(/finite/);
+        expect(combat.getSnapshot()).toBe(before);
+        combat.dispose();
+    });
     test("stationary ticks reuse region and chest presentation data, then publish changed residency", () => {
         const combat = new CombatSimulation("region-presentation-cache");
         const fixture = combat as unknown as { world: RegionalWorld; playerX: number; playerZ: number;

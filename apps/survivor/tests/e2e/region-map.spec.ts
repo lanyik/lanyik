@@ -1,9 +1,10 @@
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
-import type { HexMap, WorldMinimap } from "three-hex-map";
+import { getHexCenter, type HexMap, type WorldMinimap } from "three-hex-map";
 import { pauseCombat } from "../helpers/browserCombat";
+import { ProceduralCombatTerrain } from "../../src/adapters/ProceduralCombatTerrain";
 
-test("samples terrain with a region wash, shares cached pages and leaves controls with the game", async ({ page }, testInfo) => {
+test("world map reuses terrain pages and restores inspection, target selection and authoritative travel", async ({ page }, testInfo) => {
     test.setTimeout(240_000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
@@ -23,7 +24,10 @@ test("samples terrain with a region wash, shares cached pages and leaves control
         const view = (window.survivorApplication!.session as unknown as {
             view: { map: HexMap; regionMaps: Set<{ minimap: WorldMinimap }> }
         }).view;
-        return { ...[...view.regionMaps][0].minimap.view, target: view.map.getCameraTarget().toArray() };
+        const adapter = [...view.regionMaps][0] as { minimap: WorldMinimap; visibleRegions: { ring: number }[] };
+        return { ...adapter.minimap.view, target: view.map.getCameraTarget().toArray(),
+            camera: view.map.getCamera().position.toArray(), cameraTile: view.map.getCameraTargetTile(),
+            regions: adapter.visibleRegions.map(region => region.ring), combat: window.survivorApplication!.session.getSnapshot().combat! };
     });
     await expect.poll(async () => (await inspect()).pendingPages, { timeout: 60_000 }).toBe(0);
     const compact = await inspect();
@@ -45,28 +49,98 @@ test("samples terrain with a region wash, shares cached pages and leaves control
     const expanded = await inspect();
     expect(expanded.cachedDemandedPages).toBe(expanded.demandedPages);
     expect(expanded.cachedPages).toBeLessThanOrEqual(64);
-    expect(expanded.destination).toBeUndefined();
+    expect(expanded.destination).toEqual(expanded.cameraTile);
     expect(page.workers()).toHaveLength(workers);
-    await page.keyboard.press("KeyT");
-    expect((await inspect()).target).toEqual(expanded.target);
+    const tipBounds = (await panel.locator(".map-reading-tip").boundingBox())!;
+    expect(tipBounds.y + tipBounds.height).toBeLessThan(800);
     await page.screenshot({ path: testInfo.outputPath("terrain-map-expanded.png") });
     await page.waitForTimeout(300);
     const idle = await inspect();
     expect(idle.pageRequests).toBe(expanded.pageRequests);
     expect(idle.demandRebuilds).toBe(expanded.demandRebuilds);
     expect(idle.renders).toBe(expanded.renders);
+    const boundsExpanded = (await canvas.boundingBox())!;
+    const center = { x: boundsExpanded.x + boundsExpanded.width / 2, y: boundsExpanded.y + boundsExpanded.height / 2 };
+    await page.mouse.move(center.x, center.y);
+    await page.mouse.wheel(0, -200);
+    await expect.poll(async () => (await inspect()).zoom).toBeCloseTo(Math.exp(.3), 5);
+    expect((await inspect()).camera).toEqual(expanded.camera);
+    const zoomed = await inspect();
+    await page.mouse.down({ button: "right" });
+    await expect(canvas).toHaveAttribute("data-panning", "true");
+    await page.mouse.move(center.x + 170, center.y + 70, { steps: 5 });
+    await page.mouse.up({ button: "right" });
+    await expect(canvas).toHaveAttribute("data-panning", "false");
+    const panned = await inspect();
+    expect(panned.originX).toBeLessThan(zoomed.originX! - 15);
+    expect(panned.originY).toBeLessThan(zoomed.originY! - 5);
+    expect(panned.target).toEqual(expanded.target);
+    expect(panned.combat.player).toEqual(expanded.combat.player);
+    await page.keyboard.press("Space");
+    const recentered = await inspect();
+    expect(recentered.originX! + recentered.tileSpanX! / 2).toBeCloseTo(expanded.cameraTile!.x + .5);
+    expect(recentered.originY! + recentered.tileSpanY! / 2).toBeCloseTo(expanded.cameraTile!.y + .5);
+    expect(recentered.zoom).toBeCloseTo(zoomed.zoom);
+    // Repeated panning inspects distant metadata without moving the world camera or loading encounters.
+    for (let i = 0; i < 5; i++) {
+        await page.mouse.move(center.x, center.y); await page.mouse.down({ button: "right" });
+        await page.mouse.move(center.x - 220, center.y, { steps: 3 }); await page.mouse.up({ button: "right" });
+    }
+    const distant = await inspect();
+    expect(Math.max(...distant.regions)).toBeGreaterThan(Math.max(...expanded.regions) + 3);
+    expect(distant.combat.chunks).toEqual(expanded.combat.chunks);
+    await page.getByRole("button", { name: "回到玩家" }).click();
+    // Closing discards inspection state without relocating the player.
     await page.keyboard.press("Escape");
     await expect(panel).not.toHaveClass(/expanded/);
     await expect(canvas).toHaveAttribute("data-expanded", "false");
-    expect((await inspect()).pageRequests).toBe(expanded.pageRequests);
+    expect((await inspect()).combat.player).toEqual(expanded.combat.player);
+    await canvas.click();
+    await expect(panel).toHaveClass(/expanded/);
+    const selectionView = await inspect();
+    const terrain = new ProceduralCombatTerrain(selectionView.combat.world.seed);
+    const choices: { clear: boolean; tile: { x: number; y: number }; x: number; z: number }[] = [];
+    try {
+        for (let x = Math.ceil(selectionView.originX! + 4); x < selectionView.originX! + selectionView.tileSpanX! - 4 && choices.length < 2; x++) {
+            for (let y = Math.ceil(selectionView.originY! + 4); y < selectionView.originY! + selectionView.tileSpanY! - 4 && choices.length < 2; y++) {
+                const point = getHexCenter(x, y, 1), clear = terrain.isClear(point.x, point.y, .3);
+                if (!choices.some(choice => choice.clear === clear)) choices.push({ clear, tile: { x, y }, x: point.x, z: point.y });
+            }
+        }
+    } finally { terrain.dispose(); }
+    expect(choices).toHaveLength(2);
+    for (const choice of choices.sort((a, b) => Number(a.clear) - Number(b.clear))) {
+        if (!(await inspect()).expanded) await page.keyboard.press("KeyM");
+        const current = await inspect(), bounds = (await canvas.boundingBox())!;
+        await canvas.click({ position: { x: 6 + (choice.tile.x + .5 - current.originX!) / current.tileSpanX! * (bounds.width - 12),
+            y: 6 + (choice.tile.y + .5 - current.originY!) / current.tileSpanY! * (bounds.height - 12) } });
+        expect((await inspect()).destination).toEqual(choice.tile);
+        expect((await inspect()).combat.player).toEqual(expanded.combat.player);
+        if (choice.clear) await page.getByRole("button", { name: "传送到目标" }).click();
+        else await page.keyboard.press("KeyT");
+        await expect(panel).not.toHaveClass(/expanded/);
+        if (choice.clear) {
+            await expect.poll(async () => (await inspect()).combat.player.x).toBe(choice.x);
+            expect((await inspect()).combat.player.z).toBe(choice.z);
+            await expect.poll(async () => (await inspect()).target[0]).toBeCloseTo(choice.x * 34);
+        } else {
+            await expect(page.getByText("目标位置无法落脚，请选择平坦陆地", { exact: true })).toBeVisible();
+            expect((await inspect()).target).toEqual(expanded.target);
+        }
+    }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("button", { name: "展开地图", exact: true }).click();
     const bounds = (await panel.boundingBox())!;
     expect(bounds.x).toBeGreaterThanOrEqual(0);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
-    expect(bounds.y + bounds.height).toBeLessThan(530);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
     await page.screenshot({ path: testInfo.outputPath("terrain-map-narrow.png") });
     await page.getByRole("button", { name: "收起地图", exact: true }).click();
+    await page.keyboard.press("KeyM"); await page.keyboard.press("KeyK");
+    await expect(panel).not.toHaveClass(/expanded/);
+    await expect(canvas).toHaveAttribute("data-expanded", "false");
+    await page.keyboard.press("Escape");
     const released = await page.evaluate(async () => {
         const app = window.survivorApplication!;
         const view = (app.session as unknown as { view: { regionMaps: Set<{ minimap: WorldMinimap }> } }).view;

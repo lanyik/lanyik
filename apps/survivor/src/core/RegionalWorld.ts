@@ -125,6 +125,19 @@ export class RegionalWorld {
         }
         return Object.freeze(result);
     }
+    /** Metadata only: inspecting distant terrain never creates gameplay chunks. */
+    public regionsInBounds(minX: number, minZ: number, maxX: number, maxZ: number): readonly RegionInfo[] {
+        const regions: RegionInfo[] = [];
+        const row = REGION_RADIUS * Math.sqrt(3);
+        const first = Math.ceil((minX - this.origin.x) / (REGION_RADIUS * 1.5));
+        const last = Math.floor((maxX - this.origin.x) / (REGION_RADIUS * 1.5));
+        for (let q = first; q <= last; q++) {
+            const low = Math.ceil((minZ - this.origin.z) / row - q / 2);
+            const high = Math.floor((maxZ - this.origin.z) / row - q / 2);
+            for (let r = low; r <= high; r++) regions.push(this.regionAtHex(q, r));
+        }
+        return regions;
+    }
     public residencyAt(x: number, z: number): ResidencyBand {
         const distance = Math.max(Math.abs(Math.floor((x - this.origin.x + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE) - this.centerX),
             Math.abs(Math.floor((z - this.origin.z + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE) - this.centerZ));

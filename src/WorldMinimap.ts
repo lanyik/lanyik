@@ -15,12 +15,15 @@ export interface WorldMinimapOptions {
     rasterSize?: number;
     infiniteTileSpan?: number;
     cacheEntries?: number;
+    /** Own navigation when supplied; otherwise the control moves the camera. */
     onNavigate?: (tile: Readonly<Point>) => void;
     onDestinationChange?: (tile: Readonly<Point> | undefined) => void;
     onExpandedChange?: (expanded: boolean) => void;
     onError?: (error: Error) => void;
     /** Disable inspection/navigation input when the host owns map controls. */
     interactive?: boolean;
+    /** Keep pointer controls but let the host route shortcuts through its UI. */
+    keyboard?: boolean;
     /** Replaces the default camera/destination overlay, clipped to the terrain extent. */
     drawOverlay?: (context: CanvasRenderingContext2D, frame: WorldMinimapOverlayFrame) => void;
 }
@@ -28,6 +31,7 @@ export interface WorldMinimapOptions {
 export interface WorldMinimapOverlayFrame {
     readonly content: Readonly<ContentRect>;
     readonly extent: Readonly<MinimapExtent>;
+    readonly destination?: Readonly<Point>;
 }
 
 export interface WorldMinimapView {
@@ -272,7 +276,7 @@ export class WorldMinimap {
             this.canvas.addEventListener("contextmenu", this.handleContextMenu);
             this.canvas.addEventListener("click", this.handleClick);
             this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
-            window.addEventListener("keydown", this.handleKeyDown);
+            if (options.keyboard !== false) window.addEventListener("keydown", this.handleKeyDown);
         }
         this.map.on("loadstart", this.handleWorldLoadStart);
         this.map.on("load", this.handleWorldLoad);
@@ -1013,7 +1017,7 @@ export class WorldMinimap {
                 context.beginPath();
                 context.rect(rect.x, rect.y, rect.width, rect.height);
                 context.clip();
-                try { this.drawOverlay(context, { content: rect, extent }); }
+                try { this.drawOverlay(context, { content: rect, extent, destination: this.destination }); }
                 finally { context.restore(); }
             } else {
                 this.drawCameraOverlay(context, rect, extent);
@@ -1200,11 +1204,11 @@ export class WorldMinimap {
         return tile;
     }
 
-    private teleportToDestination(): void {
-        if (this.worldLoading || !this.expanded || !this.destination) return;
+    public navigateToDestination(): void {
+        if (this.disposed || this.worldLoading || !this.expanded || !this.destination) return;
         const destination = { ...this.destination };
-        this.map.setCameraTargetTile(destination.x, destination.y);
-        this.onNavigate?.(destination);
+        if (this.onNavigate) this.onNavigate(destination);
+        else this.map.setCameraTargetTile(destination.x, destination.y);
         this.setExpanded(false);
     }
 
@@ -1213,9 +1217,9 @@ export class WorldMinimap {
         this.zoomAnchor = undefined;
     }
 
-    private recenterViewport(): void {
+    public recenter(): void {
         const cameraTarget = this.map.getCameraTargetTile();
-        if (!this.expanded || !cameraTarget) return;
+        if (this.disposed || !this.expanded || !cameraTarget) return;
         this.endPan();
         this.stopZoomAnimation();
         this.viewport = this.createViewport(cameraTarget);
@@ -1329,11 +1333,11 @@ export class WorldMinimap {
         } else if (event.code === "KeyT" && this.expanded) {
             if (event.repeat) return;
             event.preventDefault();
-            this.teleportToDestination();
+            this.navigateToDestination();
         } else if (event.code === "Space" && this.expanded) {
             if (event.repeat) return;
             event.preventDefault();
-            this.recenterViewport();
+            this.recenter();
         } else if (event.code === "Escape" && this.expanded) {
             event.preventDefault();
             this.setExpanded(false);

@@ -61,6 +61,7 @@ export class SkillSystem {
         return true;
     }
     public dashing(tick: number): boolean { return tick < this.dashUntil; }
+    public cancelTravel(): void { this.dashUntil = 0; this.dashX = this.dashZ = 0; }
     public advance(tick: number): boolean {
         if (!this.dashing(tick)) return false;
         if (!this.entities.moveActor(this.entities.player, this.dashX, this.dashZ, false)) this.dashUntil = tick;

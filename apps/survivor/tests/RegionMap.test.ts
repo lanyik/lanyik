@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { getHexCenter } from "three-hex-map";
 import { overviewPoint, overviewHeading } from "../src/adapters/HexRegionMap";
+import { RegionalWorld } from "../src/core/RegionalWorld";
 
 test("north-up heading keeps all cardinal directions and compensates map aspect ratio", () => {
     expect(overviewHeading(0, 1, 1)).toBeCloseTo(Math.PI);
@@ -24,4 +25,12 @@ test("moving across a terrain column keeps the marker continuous", () => {
         expect(before.x).toBeCloseTo(after.x, 6);
         expect(before.y).toBeCloseTo(after.y, 6);
     }
+});
+
+test("remote map metadata matches encounter regions without loading chunks", () => {
+    const world = new RegionalWorld("map-bounds", { x: 9, z: -12 });
+    const regions = world.regionsInBounds(333, -40, 405, 40);
+    expect(regions.map(region => [region.x, region.z])).toEqual([[9, -5], [9, -4], [10, -5], [10, -4], [11, -6], [11, -5]]);
+    for (const region of regions) expect(region).toEqual(world.regionAt(region.centerX, region.centerZ));
+    expect(world.chunks.size).toBe(0);
 });
