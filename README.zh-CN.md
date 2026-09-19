@@ -56,8 +56,9 @@ WASD 控制移动，武器自动攻击最近怪物，`I` 打开装备背包，`P
 
 ## 运行演示
 
-Windows 可双击根目录的 [`run-demo.bat`](run-demo.bat)：缺少 `node_modules` 时自动安装锁定依赖，构建地图基础库与演示资源后启动服务，并打开 <http://127.0.0.1:3000>。
+Windows 可双击根目录的 [`run-demo.bat`](run-demo.bat)：缺少 `node_modules` 时自动安装锁定依赖，然后直接提供 `public/` 下的现有演示文件，并打开 <http://127.0.0.1:3000>，不执行构建。
 需要 Node.js `^20.19.0 || >=22.12.0` 和 npm；使用时保留命令窗口，按 Ctrl+C 停止。启动失败时保留错误信息；3000 已被占用时先停止原服务。
+修改基础库或生成资源后，需要手动执行 `npm run build` 更新演示产物。
 
 也可通过命令行运行：
 
@@ -65,7 +66,7 @@ Windows 可双击根目录的 [`run-demo.bat`](run-demo.bat)：缺少 `node_modu
 git clone https://github.com/lanyik/lanyik.git three-hex-map
 cd three-hex-map
 npm ci
-npm start
+npm run server
 ```
 
 打开 <http://127.0.0.1:3000>。控制面板提供两种世界模式：

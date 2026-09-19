@@ -11,16 +11,12 @@ if errorlevel 1 goto :missing_node
 node -e "const [major, minor] = process.versions.node.split('.').map(Number); process.exit((major === 20 && minor >= 19 || major === 22 && minor >= 12 || major > 22) ? 0 : 1)"
 if errorlevel 1 goto :missing_node
 
-if exist "node_modules\" goto :build
+if exist "node_modules\" goto :serve
 echo Installing dependencies from package-lock.json...
 call npm.cmd ci
 if errorlevel 1 goto :failed
 
-:build
-echo Building the map library and demo assets...
-call npm.cmd run build
-if errorlevel 1 goto :failed
-
+:serve
 echo.
 echo Starting http://127.0.0.1:3000/ and opening your browser.
 echo Keep this window open while using the demo. Press Ctrl+C to stop the server.
