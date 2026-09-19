@@ -33,6 +33,7 @@ import { GAME_CONFIG, ticksPerUpdate } from "./GameConfig";
 
 import { CombatWorld, Component, Faction } from "./CombatWorld";
 import { EnemyBehavior } from "./EnemyBehavior";
+import { PlayerAutoCombat } from "./PlayerAutoCombat";
 import type { ProjectileExecutor } from "./ProjectileBatch";
 import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSystems";
 import { SkillSystem } from "./SkillSystem";
@@ -82,6 +83,7 @@ export class CombatSimulation {
     private random: DeterministicRandom;
     private readonly entities: CombatWorld;
     private readonly behavior: EnemyBehavior;
+    private readonly autoCombat: PlayerAutoCombat;
     private readonly skills: SkillSystem;
     private readonly settleOngoing = () => this.resolveImpacts();
     private readonly resolution: CombatResolution;
@@ -163,6 +165,7 @@ export class CombatSimulation {
         this.rewards = new CombatRewards(this.entities, spirit, seed);
         this.behavior = new EnemyBehavior(this.entities, isChallenge(location) ? { residencyAt: () => "near" } : this.world);
         this.skills = new SkillSystem(this.entities);
+        this.autoCombat = new PlayerAutoCombat(this.entities, this.chests, () => this.useConsumable("health"));
         this.renderState = { combatText: this.entities.combatText.buffer, player: this.playerRenderState, chests: this.chests, effects: this.entities.effects.buffer,
             entities: { ids: this.entities.world.ids, enemies: this.entities.enemies, projectiles: this.entities.projectiles,
                 experience: this.entities.experience, loot: this.entities.loot, position: this.entities.position,
@@ -238,6 +241,7 @@ export class CombatSimulation {
         this.random.restore(state.random); this.skills.restore(state.skills, state.tick); this.attackCooldown = state.attackCooldown; this.resolution.damageImmunity = state.damageImmunity;
         this.movementX = this.movementZ = 0;
         this.resolution.shieldCooldown = p.shieldRemaining; this.potionCooldown = p.potionRemaining;
+        this.autoCombat.setEnabled(false);
         this.lootProfile = lootProfile(sumOrbs(this.orbs)); this.orbBonuses = orbResonance(this.orbs); this.stats = this.calculateStats();
         this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
         this.health = Math.min(p.health, this.stats.maxHealth); this.mana = Math.min(p.mana, this.stats.maxMana);
@@ -260,7 +264,7 @@ export class CombatSimulation {
         }
         this.markChanged();
     }
-    public dispose(): void { this.closed = true; this.entities.terrain.dispose(); }
+    public dispose(): void { this.closed = true; this.autoCombat.setEnabled(false); this.entities.terrain.dispose(); }
 
     public teleport(x: number, z: number): void {
         validatePosition(x, z);
@@ -276,6 +280,7 @@ export class CombatSimulation {
         this.playerX = this.previousPlayerX = x; this.playerZ = this.previousPlayerZ = z;
         this.movementX = this.movementZ = 0;
         this.skills.cancelTravel();
+        this.autoCombat.setEnabled(false);
         if (this.location === "wilds") {
             if (this.world.synchronize(x, z)) this.reconcileRegions();
             this.world.updateAccess(x, z);
@@ -303,7 +308,8 @@ export class CombatSimulation {
         this.entities.status.advance(this.tickValue);
         this.potionCooldown = Math.max(0, this.potionCooldown - STEP_SECONDS);
         this.entities.effects.advance(this.tickValue); this.entities.combatText.advance(this.tickValue);
-        if (!this.skills.advance(this.tickValue)) this.movePlayer(input);
+        const movement = this.autoCombat.update(input, this.tickValue, this.stats);
+        if (!this.skills.advance(this.tickValue)) this.movePlayer(movement);
         if (this.location === "homestead") {
             this.skills.advanceOngoing(this.tickValue, this.random, this.settleOngoing);
             if (this.tickValue % REGENERATION_TICKS === 0) this.mana = Math.min(this.stats.maxMana, this.mana + this.stats.manaRegen);
@@ -403,6 +409,7 @@ export class CombatSimulation {
             }
         }
         return this.cachedSnapshot = Object.freeze({
+            autoCombat: Object.freeze({ enabled: this.autoCombat.enabled, activity: this.autoCombat.activity }),
             teleportRemaining: Math.max(0, (this.teleportReadyAt - this.tickValue) / GAME_CONFIG.timing.simulationHz),
             wildsPosition: Object.freeze(this.location === "wilds" ? { x: this.playerX, z: this.playerZ } : { ...this.wildsPosition }),
             challenges: Object.freeze(Object.fromEntries(CHALLENGE_IDS.flatMap(id => {
@@ -595,6 +602,14 @@ export class CombatSimulation {
     public toggleAutoCast(): void {
         if (this.gameOverValue) return;
         this.autoCast = !this.autoCast;
+        this.markChanged();
+    }
+
+    public toggleAutoCombat(): void {
+        if (this.closed || this.awaitingQueries) throw new Error("Simulation is closed or awaiting required queries");
+        if (this.gameOverValue || this.location === "homestead") return;
+        this.autoCombat.setEnabled(!this.autoCombat.enabled);
+        this.movementX = this.movementZ = 0;
         this.markChanged();
     }
 
@@ -856,6 +871,7 @@ export class CombatSimulation {
     private readonly consumeCombatEvent: CombatEventConsumer = (events, i) => {
         combatFeedback(this.entities, events, i);
         if (events.kind[i] === CombatEventKind.Defeat) {
+            if (events.player[i]) this.autoCombat.setEnabled(false);
             if (events.player[i]) { this.gameOverValue = true; this.pushNotice("danger", this.challenge ? "挑战暂止，击杀进度已保留" : "你倒在了荒原上"); }
             else this.rewards.grant(events, i, this.random, 1 + this.stats.goldBonus + this.orbBonuses.goldBonus, this.lootProfile, this.challenge ? CHALLENGE_ARENA.experience : 1);
             if (this.challenge) { this.challengeRevisionValue++; this.refreshChests(); }

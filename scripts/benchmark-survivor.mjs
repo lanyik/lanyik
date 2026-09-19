@@ -70,28 +70,32 @@ function measure(run, budgetMsPerTick) {
     return { samplesMsPerTick: samples, medianMsPerTick: median, budgetMsPerTick, workload };
 }
 
-function terrainCombat() {
+function terrainCombat(automatic = false) {
     const terrain = new current.ProceduralCombatTerrain("rift-ember-1");
     const initializing = performance.now();
     const simulation = new current.CombatSimulation("rift-ember-1", { x: 0, z: 0 }, undefined, terrain);
     const coldStartMs = performance.now() - initializing;
     simulation.health = 100_000;
+    if (automatic) simulation.toggleAutoCombat();
     const ticks = 600, started = performance.now();
-    for (let tick = 0; tick < ticks; tick++) simulation.step({ x: 1, z: .4, active: true });
+    const input = automatic ? { x: 0, z: 0, active: false } : { x: 1, z: .4, active: true };
+    for (let tick = 0; tick < ticks; tick++) simulation.step(input);
     const elapsed = performance.now() - started;
     assert.equal(simulation.tick, ticks);
     const player = simulation.getSnapshot().player;
     assert.ok(terrain.isClear(player.x, player.z, .3));
+    if (automatic) assert.ok(Math.hypot(player.x, player.z) > 1, "Automatic terrain workload must actually move the player");
     const chunks = terrain.cachedChunks; simulation.dispose();
     return { msPerTick: elapsed / ticks, coldStartMs, ticks, chunks };
 }
 
-const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), terrain: measure(terrainCombat, 3) };
+const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), terrain: measure(terrainCombat, 3),
+    autoCombat: measure(() => terrainCombat(true), 3) };
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
     simulationHz: current.GAME_CONFIG.timing.simulationHz, activeAiHz: current.GAME_CONFIG.timing.activeAiHz,
     gc: Boolean(globalThis.gc), timing: "one warmup, five samples, simulation only; travel restores health between ticks while retaining hit settlement; no browser/GPU claim" }, results }, null, 2));
 if (args.includes("--check")) {
     assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");
-    for (const result of [results.travel, results.crowded, results.terrain]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
+    for (const result of [results.travel, results.crowded, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
 }

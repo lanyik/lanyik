@@ -34,6 +34,9 @@ Worker mocks are scoped to their own suite and restored after each test.
 Browser combat fixtures advance through the session's normal in-flight barrier;
 they do not bypass it with direct transport calls, which could race an automatic
 save during slow screenshots. Production Worker entry points expose no fixture state.
+The assembled HUD/resource journey uses the test Worker's damage-immunity fixture so
+software-rendered layout checks cannot kill its actor before keyboard assertions.
+Combat death and automatic-combat shutdown remain separate gameplay/Worker checks.
 Regional ecology checks keep the full coordinate sweep but validate each immutable
 chunk layout once while it remains resident; reconstructed chunk instances are
 checked again. Residency, population consumption and reentry have separate checks.

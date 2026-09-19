@@ -51,6 +51,7 @@ Windows 可双击根目录的 [`run.bat`](run.bat)：缺少 `node_modules` 时�
 需要 Node.js `^20.19.0 || >=22.12.0` 和 npm；游玩时保留命令窗口，按 Ctrl+C 停止服务。启动失败时窗口保留错误信息；5173 已被占用时先停止原服务。
 也可运行 `npm run app:dev` 后手动打开上述地址。
 WASD 控制移动，武器自动攻击最近怪物，`I` 打开装备背包，`P` 暂停。
+`Z` 切换自动战斗：附近寻怪、优先近处宝箱、低血量用药与有限走位；WASD 随时接管，死亡停止。`F` 独立切换自动施法。
 实际架构与玩法合同见 [App 开发设计](docs/app-development.md)和
 [战斗、成长与装备](docs/game/combat-and-progression.md)。
 

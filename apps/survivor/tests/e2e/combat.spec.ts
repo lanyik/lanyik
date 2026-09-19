@@ -1,4 +1,4 @@
-import { enterWilds } from "../helpers/browserCombat";
+import { combatWorker, enterWilds, inspectCombatWorker } from "../helpers/browserCombat";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
 
@@ -14,9 +14,15 @@ test("plays with baked actors, independent character/bag windows and complete ke
     });
     page.on("response", response => { if (/\/actors\/.*\.glb$/.test(response.url()) && response.ok()) loadedActors.add(response.url()); });
     page.on("response", response => { if (/\/actors\/.*\.png$/.test(response.url()) && response.ok()) loadedAtlases.add(response.url()); });
+    await inspectCombatWorker(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await enterWilds(page);
+    // This journey verifies UI and resources, so slow software-rendered captures must not kill its actor.
+    await combatWorker(page).evaluate(() => {
+        const simulation = (self as unknown as { fixtureSimulation: { resolution: { damageImmunity: number } } }).fixtureSimulation;
+        simulation.resolution.damageImmunity = 1_000_000;
+    });
     const application = page.locator(".survivor");
     await expect(application).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     expect(loadedActors.size).toBe(6);

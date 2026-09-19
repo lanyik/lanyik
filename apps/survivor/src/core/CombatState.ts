@@ -14,6 +14,7 @@ import type { ItemType } from "./ItemDefinition";
 import type { SpiritRealm } from "./SpiritRealm";
 import type { OrbResonance } from "./Orbs";
 import type { WorldLocation } from "./Homestead";
+import type { AutoCombatActivity } from "./PlayerAutoCombat";
 import type { ChallengeId, ChallengeSummary } from "./BossChallenge";
 
 export interface MovementInput {
@@ -53,6 +54,7 @@ export interface PlayerSnapshot {
 }
 
 export interface CombatSnapshot {
+    readonly autoCombat: Readonly<{ enabled: boolean; activity: AutoCombatActivity }>;
     readonly teleportRemaining: number;
     readonly wildsPosition: Readonly<{ x: number; z: number }>;
     readonly challenges: Readonly<Partial<Record<ChallengeId, ChallengeSummary>>>;

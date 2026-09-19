@@ -333,7 +333,7 @@ canvas { display: block; }
 
 /* Combat resources remain legible over both bright and dark terrain. */
 .combat-dock { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); width: 444px; padding: 12px 16px; background: linear-gradient(155deg, #222630fa, #12161dfa); border: 1px solid var(--edge); border-top: 2px solid #a98e5d; border-radius: 6px; box-shadow: 0 10px 30px #0006; }
-.status-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); margin-bottom: 11px; }
+.status-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); margin-bottom: 11px; }
 .status-bar > span, .status-bar button { display: flex; align-items: center; gap: 6px; }
 .status-bar button { padding: 0; border: none; background: transparent; font-size: 11px; }
 .status-bar .ui-icon { width: 15px; height: 15px; }

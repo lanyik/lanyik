@@ -103,6 +103,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
             else if (event.code === "KeyQ") session.dispatch({ type: "use-consumable", effect: "health" });
             else if (event.code === "KeyE") session.dispatch({ type: "use-consumable", effect: "mana" });
             else if (event.code === "KeyF") session.dispatch({ type: "toggle-autocast" });
+            else if (event.code === "KeyZ") session.dispatch({ type: "toggle-auto-combat" });
             else if (event.code === "KeyR" && combat?.gameOver) session.dispatch({ type: "restart" });
             else if (panels.inventory && selectedId !== undefined && !combat?.gameOver && (event.code === "Enter" || event.code === "Delete")) {
                 // A narrow workspace keeps the other window mounted but hides it.
@@ -163,6 +164,9 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                 <div className="status-bar" aria-label="状态栏"><span className={player.shieldRemaining <= 0 ? "ready" : ""}><UiIcon name="shield" />免伤盾 {player.shieldRemaining > 0 ? `${player.shieldRemaining.toFixed(1)}s` : "就绪"}</span>
                     {snapshot.paused && <span className="dock-pause">战斗暂停</span>}
                     {player.skills.ward > 0 && <span>结界 {Math.ceil(player.skills.ward)}</span>}
+                    <button aria-pressed={combat.autoCombat.enabled} disabled={combat.gameOver || atHome}
+                        title="生命不高于 40% 自动用药；WASD 接管移动；附近宝箱优先；死亡停止"
+                        onClick={() => session.dispatch({ type: "toggle-auto-combat" })}><i className={combat.autoCombat.enabled ? "enabled" : ""} />自动战斗 {combat.autoCombat.enabled ? "开" : "关"}<kbd>Z</kbd></button>
                     <button aria-pressed={player.autoCast} onClick={() => session.dispatch({ type: "toggle-autocast" })}><i className={player.autoCast ? "enabled" : ""} />自动施法 {player.autoCast ? "开" : "关"}<kbd>F</kbd></button></div>
                 <div className="vitals"><div className="level-medallion"><small>等级</small><strong data-testid="player-level">{player.level}</strong></div>
                     <div className="vital-bars"><div className={`bar health-bar${player.health / player.stats.maxHealth <= .25 ? " critical" : ""}`} aria-label="生命"><span style={{ width: `${player.health / player.stats.maxHealth * 100}%` }} /><b><em>{player.health / player.stats.maxHealth <= .25 ? "生命危急" : "生命"}</em>{Math.ceil(player.health)} / {player.stats.maxHealth}</b></div>

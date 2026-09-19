@@ -17,6 +17,7 @@ export type CombatCommand =
     | { readonly type: "equip-skill"; readonly skill: SkillId; readonly slot: number }
     | { readonly type: "upgrade-skill"; readonly skill: SkillId }
     | { readonly type: "toggle-autocast" }
+    | { readonly type: "toggle-auto-combat" }
     | { readonly type: "use-consumable"; readonly effect: ConsumableEffect; readonly itemId?: number }
     | { readonly type: "sort-inventory" }
     | { readonly type: "merge-consumables" }
@@ -38,6 +39,7 @@ export function applyCombatCommand(simulation: CombatSimulation, command: Combat
         case "equip-skill": simulation.equipSkill(command.skill, command.slot); break;
         case "upgrade-skill": simulation.upgradeSkill(command.skill); break;
         case "toggle-autocast": simulation.toggleAutoCast(); break;
+        case "toggle-auto-combat": simulation.toggleAutoCombat(); break;
         case "use-consumable": simulation.useConsumable(command.effect, command.itemId); break;
         case "sort-inventory": simulation.sortInventory(); break;
         case "merge-consumables": simulation.mergeConsumables(); break;

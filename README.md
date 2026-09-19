@@ -66,8 +66,10 @@ already occupied, stop the existing server first.
 
 Alternatively, run the game application with `npm run app:dev`, then open
 <http://127.0.0.1:5173>. Use WASD to move; attacks target the nearest monster
-automatically, `I` opens equipment and `P` pauses combat. Architecture and
-implemented gameplay contracts are documented in
+automatically, `I` opens equipment and `P` pauses combat.
+`Z` toggles auto combat with nearby targeting, chest pickup, low-health potions and
+limited dodging; WASD takes over movement and death stops automation. `F`
+independently toggles automatic skill casts. Architecture and implemented gameplay contracts are documented in
 [App development](docs/app-development.md) and
 [Combat and progression](docs/game/combat-and-progression.md).
 
