@@ -49,3 +49,21 @@ subpath; applications define their own state and implement
 `GenerationCheckpointParticipant` when saving it together with terrain deltas.
 See [App development](./app-development.md) for the current survivor RPG
 application and its boundary from the reusable world runtime.
+
+## Demo build and startup
+
+`npm run build` generates forest LODs, builds the library and world-generation
+Worker, then copies the browser bundles and dependencies into `public/`.
+`npm start` builds before serving that directory on port 3000; `npm run server`
+serves existing outputs without rebuilding.
+
+The Windows entry point [`run-demo.bat`](../run-demo.bat) fixes its working
+directory to the repository root and checks Node.js `^20.19.0 || >=22.12.0` and
+npm. When `node_modules` is missing it runs `npm ci`, then executes
+`npm run build` followed by `npm run server -- -a 127.0.0.1 -o`.
+The server binds to loopback port 3000 and opens the browser after listening.
+It stays in the same terminal until Ctrl+C; dependency, build or port-binding
+failure stops startup and keeps the error visible without stopping other processes.
+The batch file uses CRLF line endings and ASCII console messages.
+The game has its own [`run.bat`](../run.bat) entry on port 5173, described in
+[App development](./app-development.md#构建与验证).

@@ -73,6 +73,15 @@ implemented gameplay contracts are documented in
 
 ## Run the demo
 
+On Windows, double-click [`run-demo.bat`](run-demo.bat) to install locked
+dependencies when `node_modules` is missing, build the map library and demo
+assets, start the server and open <http://127.0.0.1:3000>.
+It requires Node.js `^20.19.0 || >=22.12.0` and npm. Keep the terminal open while
+using the demo; press Ctrl+C to stop. Startup errors remain visible. If port 3000
+is already occupied, stop the existing server first.
+
+Alternatively, use the command line:
+
 ```bash
 git clone https://github.com/lanyik/lanyik.git three-hex-map
 cd three-hex-map

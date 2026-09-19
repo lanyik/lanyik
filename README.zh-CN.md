@@ -56,6 +56,11 @@ WASD 控制移动，武器自动攻击最近怪物，`I` 打开装备背包，`P
 
 ## 运行演示
 
+Windows 可双击根目录的 [`run-demo.bat`](run-demo.bat)：缺少 `node_modules` 时自动安装锁定依赖，构建地图基础库与演示资源后启动服务，并打开 <http://127.0.0.1:3000>。
+需要 Node.js `^20.19.0 || >=22.12.0` 和 npm；使用时保留命令窗口，按 Ctrl+C 停止。启动失败时保留错误信息；3000 已被占用时先停止原服务。
+
+也可通过命令行运行：
+
 ```bash
 git clone https://github.com/lanyik/lanyik.git three-hex-map
 cd three-hex-map
