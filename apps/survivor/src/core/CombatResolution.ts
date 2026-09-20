@@ -4,6 +4,8 @@ import { incomingDamage, outgoingDamage, reflectedDamage, type DerivedStats } fr
 import type { DeterministicRandom } from "./DeterministicRandom";
 import { ENEMY_HIT_RULES, ENEMY_SPECIAL, EnemyKind } from "./EnemyDefinitions";
 import { StatusKind } from "./StatusSystem";
+import { ticksForSeconds } from "./GameConfig";
+import { EffectKind } from "./CombatEffects";
 
 /** Damage policy and reactive effects. Inventory, progression and visuals are event consumers. */
 export class CombatResolution {
@@ -30,11 +32,26 @@ export class CombatResolution {
                 const source = impacts.source[i];
                 if (target === player) {
                     if (this.damageImmunity <= 0 && !dashing) this.damagePlayer(source, impacts.damage[i], impacts.elite[i] !== 0, impacts.boss[i] !== 0, tick, stats, random);
-                } else this.hitEnemy(source, target, impacts.damage[i], impacts.critical[i] !== 0, tick, stats, random, i);
+                } else this.hitEnemy(source, target, impacts.damage[i], impacts.critical[i] !== 0, tick, impacts.fireStats[i] ?? stats, random, i);
                 // Loot consumes the same RNG before the next hit, preserving seeded combat order.
                 e.events.drain(consume);
             }
-        } finally { impacts.count = 0; this.resolving = false; }
+        } finally { impacts.clear(); this.resolving = false; }
+    }
+
+    public advanceBurns(tick: number, stats: DerivedStats, consume: CombatEventConsumer): void {
+        const e = this.e;
+        if (!e.status.burns.isDue(tick)) return;
+        e.status.burns.advance(tick, (source, target, base, at) => {
+            const slot = e.world.resolve(target);
+            if (slot < 0 || e.vitals.health[slot] <= 0 || e.vitals.health[e.player] <= 0) return;
+            // Periodic damage has no accuracy, critical, on-hit, reflection or brief dodge immunity.
+            const defended = slot === e.player ? incomingDamage(stats, base, false, false, false) : base;
+            const damage = e.status.absorb(slot, defended * (1 - e.status.amount(StatusKind.Protection, slot, at)), at);
+            e.vitality.damage(source, target, damage, at, EffectCause.Burn);
+            e.vitality.defeat(source, target, at, EffectCause.Burn);
+            e.events.drain(consume);
+        });
     }
 
     private hitEnemy(source: number, slot: number, rolled: number, critical: boolean, tick: number, stats: DerivedStats, random: DeterministicRandom, impact: number): void {
@@ -44,19 +61,27 @@ export class CombatResolution {
             if (distance === 0 || (dx * Math.sin(p.heading[slot]) + dz * Math.cos(p.heading[slot])) / distance > .5) rolled *= 1 - ENEMY_SPECIAL.guardReduction;
         }
         const elite = enemy.elite[slot] !== 0;
+        const volley = e.impacts.fireVolley[impact], target = world.ids[slot];
+        if (volley && (volley.get(target) ?? 0) >= 2) return;
         const evasion = enemy.boss[slot] ? ENEMY_HIT_RULES.evasion.boss : elite ? ENEMY_HIT_RULES.evasion.elite : ENEMY_HIT_RULES.evasion.normal;
         if (!random.chance(Math.max(0, Math.min(1, stats.accuracy - evasion)))) { this.prevent(source, slot, tick, Prevention.Dodge); return; }
+        if (volley) volley.set(target, (volley.get(target) ?? 0) + 1);
         const frozen = !e.status.canAct(slot, tick);
         if (frozen) rolled *= e.impacts.frozenMultiplier[impact];
-        const damage = outgoingDamage(stats, rolled, e.vitals.maxHealth[slot], elite, random.chance(stats.lethalChance))
-            * (1 - e.status.amount(StatusKind.Protection, slot, tick));
-        const target = world.ids[slot];
+        const fire = e.impacts.fireValues[impact];
+        const detonation = fire?.detonation ? e.status.burns.consume(source, target) * fire.detonation : 0;
+        const damage = e.status.absorb(slot, (outgoingDamage(stats, rolled, e.vitals.maxHealth[slot], elite, random.chance(stats.lethalChance)) + detonation)
+            * (1 - e.status.amount(StatusKind.Protection, slot, tick)), tick);
+        if (detonation > 0) e.effects.add(EffectKind.Detonation, tick, p.x[slot], p.z[slot], p.radius[slot] + .9, .75, p.x[slot], p.z[slot], source);
+        if (fire?.protection && world.resolve(source) === player) e.status.apply(StatusKind.Protection, source, source, fire.protection, tick + ticksForSeconds(2), tick);
         const lost = vitality.damage(source, target, damage, tick, EffectCause.Attack, critical);
         vitality.heal(source, world.ids[player], lost * stats.lifesteal * (1 + stats.regenBonus), tick, EffectCause.Lifesteal);
         vitality.defeat(source, target, tick, EffectCause.Attack);
         if (world.resolve(target) >= 0 && e.vitals.health[slot] > 0) {
             if (frozen && e.impacts.consumeFreeze[impact]) e.status.consumeFreeze(slot, tick);
             if (e.impacts.chill[impact] > 0) e.status.chill(source, target, e.impacts.chill[impact], tick + e.impacts.chillTicks[impact], tick, e.impacts.freezeTicks[impact]);
+            if (fire?.burnDamage) e.status.burns.apply(source, target,
+                stats.damage * fire.burnDamage * (1 + stats.damageIncrease) * (1 + (elite ? stats.eliteDamage : stats.normalDamage)), tick, ticksForSeconds(fire.burnSeconds), fire.stackLimit);
         }
     }
 

@@ -5,6 +5,7 @@ import type { CombatWorld } from "../../src/core/CombatWorld";
 import type { RegionalWorld } from "../../src/core/RegionalWorld";
 import type { SkillSystem } from "../../src/core/SkillSystem";
 import type { CombatRenderState } from "../../src/core/CombatState";
+import { initialSkillRanks, nodeIndex } from "../../src/core/SkillBuild";
 import { EffectKind } from "../../src/core/CombatEffects";
 import { ActorAction } from "../../src/core/CombatWorld";
 import { EnemyKind } from "../../src/core/EnemyDefinitions";
@@ -21,11 +22,15 @@ test("new skill choreography and boss attacks cross the real Worker boundary and
     await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await pauseCombat(page);
-    await combatWorker(page).evaluate(() => {
+    const fireRanks = initialSkillRanks();
+    for (const [id, rank] of Object.entries({ fireball: 10, "fireball.power": 5, pyroblast: 3, meteor: 1 })) fireRanks[nodeIndex(id)] = rank;
+    await combatWorker(page).evaluate(ranks => {
         const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
         const f = sim as unknown as { entities: CombatWorld; world: RegionalWorld; skills: SkillSystem; autoCast: boolean; attackCooldown: number; gainExperience(amount: number): void };
         const e = f.entities, p = e.position, player = e.player;
-        f.autoCast = false; f.attackCooldown = 1000; f.gainExperience(1000);
+        const saved = sim.checkpoint();
+        sim.restore({ ...saved, player: { ...saved.player, level: 20 }, skills: { ...saved.skills, ranks, points: 0 } });
+        f.autoCast = false; f.attackCooldown = 1000;
         const cp = f.skills.checkpoint(sim.tick);
         f.skills.restore({ ...cp, readyAt: cp.readyAt.map(() => 0), recoveryUntil: 0 }, sim.tick);
         while (e.enemies.count) e.remove(e.enemies.slots[0]);
@@ -37,7 +42,7 @@ test("new skill choreography and boss attacks cross the real Worker boundary and
             e.vitals.health[slot] = e.vitals.maxHealth[slot] = 10000; e.enemy.speed[slot] = 0; e.action.readyAt[slot] = 100000;
         }
         for (const [slot, id] of (["meteor", "vortex", "blades"] as const).entries()) sim.equipSkill(id, slot);
-    });
+    }, fireRanks);
     // Distinct slots share one action timeline; preserve overlapping fields by casting meteor last.
     for (const id of ["vortex", "blades", "meteor"] as const) {
         await combatWorker(page).evaluate(id => {

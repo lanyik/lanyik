@@ -6,7 +6,7 @@ import { StatusKind } from "../src/core/StatusSystem";
 import { MAX_ENEMIES } from "../src/core/GameConfig";
 
 function inspect(fx: ActorStatusEffects) {
-    return fx as unknown as { ice: ActorStatusEffects["ground"]; crystals: ActorStatusEffects["ground"] };
+    return fx as unknown as { ice: ActorStatusEffects["ground"]; crystals: ActorStatusEffects["ground"]; flames: ActorStatusEffects["ground"]; smoke: ActorStatusEffects["ground"]; embers: ActorStatusEffects["ground"] };
 }
 
 test("slow and freeze attach distinct visuals, pause deterministically and expire independently", () => {
@@ -25,13 +25,16 @@ test("slow and freeze attach distinct visuals, pause deterministically and expir
 });
 
 test("status pools handle maximum population, removal and resource disposal without stale instances", () => {
-    const fx = new ActorStatusEffects(), status = { slowUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), frozenUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), wardUntil: new Float64Array(MAX_ENEMIES + 1) };
-    const { ice, crystals } = inspect(fx);
+    const fx = new ActorStatusEffects(), status = { burnUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), burnStacks: new Uint8Array(MAX_ENEMIES + 1).fill(32), slowUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), frozenUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), wardUntil: new Float64Array(MAX_ENEMIES + 1) };
+    const { ice, crystals, flames, smoke, embers } = inspect(fx);
     fx.begin(0, 0);
     for (let slot = 0; slot <= MAX_ENEMIES; slot++) fx.actor(status, slot, slot, 0, 0, .3);
     expect(ice.count).toBe(MAX_ENEMIES + 1); expect(crystals.count).toBe((MAX_ENEMIES + 1) * 3);
+    expect(flames.count).toBe((MAX_ENEMIES + 1) * 3); expect(smoke.count).toBe((MAX_ENEMIES + 1) * 2); expect(embers.count).toBe((MAX_ENEMIES + 1) * 3);
+    expect(flames.instanceMatrix.array.every(Number.isFinite)).toBe(true);
     fx.begin(1, 1 / 120); fx.actor(status, 0, 0, 0, 0, .3, 0);
     expect(ice.count).toBe(0); expect(crystals.count).toBe(0); expect(fx.ground.count).toBe(0);
-    const disposed = [fx.ground, ice, crystals].flatMap(mesh => [vi.spyOn(mesh, "dispose"), vi.spyOn(mesh.geometry, "dispose"), vi.spyOn(mesh.material, "dispose")]);
+    expect(flames.count).toBe(0); expect(smoke.count).toBe(0); expect(embers.count).toBe(0);
+    const disposed = [fx.ground, ice, crystals, flames, smoke, embers].flatMap(mesh => [vi.spyOn(mesh, "dispose"), vi.spyOn(mesh.geometry, "dispose"), vi.spyOn(mesh.material, "dispose")]);
     fx.dispose(); for (const spy of disposed) expect(spy).toHaveBeenCalledOnce();
 });

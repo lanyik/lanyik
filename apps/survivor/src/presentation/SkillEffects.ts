@@ -1,10 +1,11 @@
 import { AdditiveBlending, AddEquation, CustomBlending, OneFactor, SrcAlphaFactor, ZeroFactor, Color, DoubleSide, DynamicDrawUsage, InstancedBufferAttribute, InstancedMesh, Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, ShaderMaterial, SphereGeometry } from "three";
-import { EffectKind, type EffectBuffer } from "../core/CombatEffects";
+import { EffectKind, type EffectBuffer, type FireShotBuffer } from "../core/CombatEffects";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { AssetLoader } from "./AssetLoader";
 
 const COLORS = ["#bd93ff", "#7bdeff", "#ffe29a", "#80f1ce", "#8dafef", "#ff9954", "#ffb45e", "#c17bff", "#7fffd6", "#d9f5ff"].map(color => new Color(color));
 const WHITE = new Color("#f4fcff"), TAU = Math.PI * 2;
+const FIRE = new Color("#ff792b"), HOT_FIRE = new Color("#ffce6b");
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
 /** Visual choreography expands authoritative facts into bounded GPU instances, never gameplay. */
@@ -18,6 +19,7 @@ export class SkillEffects {
     private readonly dummy = new Object3D();
     private originX = 0;
     private originZ = 0;
+    private readonly time = { value: 0 };
     private readonly styles = new InstancedBufferAttribute(new Float32Array(GAME_CONFIG.presentation.effectInstances * 4), 4).setUsage(DynamicDrawUsage);
     private readonly wardGeometry = new SphereGeometry(1, 24, 16);
     private readonly wardMaterial = new ShaderMaterial({
@@ -40,6 +42,7 @@ export class SkillEffects {
     private constructor() {
         this.geometry.setAttribute("effectStyle", this.styles);
         this.material.onBeforeCompile = shader => {
+            shader.uniforms.effectTime = this.time;
             shader.vertexShader = "attribute vec4 effectStyle; varying vec4 vEffectStyle; varying vec2 vShapeUv;\n" + shader.vertexShader;
             shader.vertexShader = shader.vertexShader.replace("#include <uv_vertex>", "#include <uv_vertex>\nvShapeUv = uv * 2. - 1.; vEffectStyle = effectStyle; vMapUv = (vMapUv + vec2(mod(effectStyle.x, 3.), 1. - floor(effectStyle.x / 3.))) / vec2(3., 2.);");
             shader.vertexShader = shader.vertexShader.replace("#include <project_vertex>", `#include <project_vertex>
@@ -48,7 +51,7 @@ export class SkillEffects {
                 #else
                     if (effectStyle.w >= 8.) gl_Position = vec4(2., 2., 2., 1.);
                 #endif`);
-            shader.fragmentShader = "varying vec4 vEffectStyle; varying vec2 vShapeUv;\n" + shader.fragmentShader;
+            shader.fragmentShader = "uniform float effectTime; varying vec4 vEffectStyle; varying vec2 vShapeUv;\n" + shader.fragmentShader;
             shader.fragmentShader = shader.fragmentShader.replace("#include <map_fragment>", `
                 float shape = mod(vEffectStyle.w, 8.);
                 vec2 q = vShapeUv;
@@ -61,16 +64,22 @@ export class SkillEffects {
                 else if (shape < 4.5) {
                     float diamond = abs(q.x) + abs(q.y);
                     mask = (1. - smoothstep(.92, 1., diamond)) * (.35 + .65 * step(q.x, 0.));
-                } else {
+                } else if (shape < 5.5) {
                     float angle = atan(q.y, q.x);
                     float ring = exp(-pow((radius - .85) * 80., 2.)) + exp(-pow((radius - .65) * 80., 2.));
                     float marks = step(.8, cos(angle * 24.)) * smoothstep(.67, .7, radius) * (1. - smoothstep(.79, .82, radius));
                     mask = ring + marks;
+                } else {
+                    float h = (q.y + 1.) * .5;
+                    float sway = sin(h * 10. - effectTime * 8. + vEffectStyle.y) * .16 * h + sin(h * 19. - effectTime * 12.) * .05;
+                    float width = .9 * pow(max(0., 1. - h), .7);
+                    mask = (1. - smoothstep(width * .3, width, abs(q.x - sway))) * smoothstep(0., .08, h) * (1. - smoothstep(.82, 1., h));
+                    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1., .9, .45), pow(mask * (1. - h), 2.));
                 }
                 diffuseColor.a *= mask * vEffectStyle.z;
             `);
         };
-        this.material.customProgramCacheKey = () => "survivor-skill-choreography-v5";
+        this.material.customProgramCacheKey = () => "survivor-skill-choreography-v6";
         this.mesh = new InstancedMesh(this.geometry, this.material, GAME_CONFIG.presentation.effectInstances);
         this.mesh.name = "skill-effects"; this.mesh.renderOrder = 3;
         this.mesh.instanceMatrix.setUsage(DynamicDrawUsage); this.mesh.setColorAt(0, COLORS[0]);
@@ -103,8 +112,9 @@ export class SkillEffects {
         finally { loader.dispose(); }
     }
 
-    public update(b: EffectBuffer, seconds: number, height: (x: number, z: number) => number, playerX: number, playerZ: number, ward: number): void {
+    public update(b: EffectBuffer, seconds: number, height: (x: number, z: number) => number, playerX: number, playerZ: number, ward: number, shots: FireShotBuffer, alpha: number): void {
         this.mesh.count = 0;
+        this.time.value = seconds;
         this.originX = playerX; this.originZ = playerZ;
         const tick = seconds * GAME_CONFIG.timing.simulationHz;
         for (let i = 0; i < b.count; i++) {
@@ -114,7 +124,50 @@ export class SkillEffects {
             const y = height(x, z) + .13, r = b.radius[i];
             const fade = (1 - t) ** .7, burst = 1 - (1 - t) ** 3;
             const seed = b.started[i] * .17 + x * 2.3 + z * 1.7;
-            if (kind === EffectKind.IceBolt) {
+            if (kind === EffectKind.FireRay) {
+                const ex = b.endX[i], ez = b.endZ[i], ey = y + .57;
+                const opacity = Math.min(1, t * 15, (1 - t) * 15), shimmer = .8 + .2 * Math.sin(seconds * 35);
+                this.beam(x, y + .57, z, ex, ey, ez, r * 3.5, kind, opacity * .75);
+                this.beam(x, y + .58, z, ex, ey, ez, r * .65, -1, opacity * shimmer);
+                for (let j = 0; j < 14; j++) {
+                    const at = (seconds * 2 + j / 14) % 1, px = x + (ex - x) * at, pz = z + (ez - z) * at;
+                    this.stamp(px, y + .57 + (ey - y - .57) * at, pz, r * 2, .8, seed + j, kind, opacity * .8, 6, 0, true);
+                }
+                this.stamp(x, y, z, 1.3, 1.3, seconds, kind, opacity, 5, 0, false, true);
+            } else if (kind === EffectKind.FireWall || kind === EffectKind.FireDomain) {
+                const opacity = Math.min(1, t * 15, (1 - t) * 12), wall = kind === EffectKind.FireWall;
+                const heading = Math.atan2(b.endX[i] - x, b.endZ[i] - z), dx = Math.cos(heading), dz = -Math.sin(heading);
+                if (wall) this.beam(x - dx * r, y, z - dz * r, x + dx * r, y, z + dz * r, 1.3, kind, opacity * .5, true);
+                else {
+                    this.stamp(x, y, z, r * 2.42, r * 2.42, seconds * .1, kind, opacity * .65, 5, 0, false, true);
+                    this.stamp(x, y, z, r * 2, r * 2, -seconds * .2, kind, opacity * .28, 2, 0, false, true);
+                }
+                const count = wall ? 16 : 32;
+                for (let j = 0; j < count; j++) {
+                    const angle = j * 2.4 + seconds * .22, spread = r * Math.sqrt((j + .5) / count);
+                    const px = wall ? x + dx * r * ((j + .5) / count * 2 - 1) : x + Math.sin(angle) * spread;
+                    const pz = wall ? z + dz * r * ((j + .5) / count * 2 - 1) : z + Math.cos(angle) * spread;
+                    const ground = height(px, pz), flameHeight = (wall ? 1.7 : 1.3) * (.8 + .2 * Math.sin(seconds * 9 + j * 1.7));
+                    this.stamp(px, ground + flameHeight * .5, pz, .8, flameHeight, heading, kind, opacity * .85, 6, 0, true);
+                    this.stamp(px, ground + flameHeight * .4, pz, .65, flameHeight * .8, heading + Math.PI / 2, kind, opacity * .55, 6, 0, true);
+                    const phase = (seconds * .85 + j / count) % 1;
+                    this.stamp(px + Math.sin(angle) * phase * .3, ground + phase * 2.7, pz, .07, .2, angle, kind, opacity * Math.sin(phase * Math.PI), 4, 0, true);
+                }
+            } else if (kind === EffectKind.Doom || kind === EffectKind.FireImpact || kind === EffectKind.Detonation) {
+                const size = r * (.15 + burst), ultimate = kind === EffectKind.Doom;
+                this.stamp(x, y, z, size * 2.42, size * 2.42, t, kind, fade, 1, 0, false, true);
+                if (ultimate) this.stamp(x, y, z, r * 2.4, r * 2.4, -.3 * t, kind, fade * .7, 5, 0, false, true);
+                this.stamp(x, y + .3, z, size * 2, size * 2, 0, kind, fade * .8, 2);
+                this.stamp(x, y + .5, z, r * Math.max(0, 1 - t * 5), r * Math.max(0, 1 - t * 5), 0, -1, fade, 2, 0, true);
+                const count = ultimate ? 24 : 10;
+                for (let j = 0; j < count; j++) {
+                    const angle = j * TAU / count + seed, spread = r * burst * (.5 + (j % 3) * .2);
+                    const px = x + Math.sin(angle) * spread, pz = z + Math.cos(angle) * spread;
+                    const lift = Math.sin(t * Math.PI) * (ultimate ? 2.5 : 1.2), h = (ultimate ? 2.8 : 1.3) * fade;
+                    this.stamp(px, height(px, pz) + h * .45 + lift * .3, pz, .6 + fade * .4, h, angle, kind, fade, 6, 0, true);
+                    this.stamp(px, height(px, pz) + lift + .2, pz, .08, .35, angle, -1, fade * .7, 4, 0, true);
+                }
+            } else if (kind === EffectKind.IceBolt) {
                 const ex = b.endX[i], ez = b.endZ[i], ey = height(ex, ez) + .7;
                 this.beam(x, y + .5, z, ex, ey, ez, .18 * fade, kind, fade);
                 this.stamp(ex, ey, ez, .8 * fade, 1.3 * fade, t * 2, kind, fade, 4, 1, true);
@@ -219,6 +272,20 @@ export class SkillEffects {
                 }
             }
         }
+        for (let i = 0; i < shots.count; i++) {
+            const x = shots.previousX[i] + (shots.x[i] - shots.previousX[i]) * alpha;
+            const y = shots.previousY[i] + (shots.y[i] - shots.previousY[i]) * alpha;
+            const z = shots.previousZ[i] + (shots.z[i] - shots.previousZ[i]) * alpha;
+            const dx = shots.x[i] - shots.previousX[i], dz = shots.z[i] - shots.previousZ[i], length = Math.hypot(dx, dz), angle = Math.atan2(dx, dz);
+            const size = shots.kind[i] ? .48 : .6, kind = EffectKind.FireImpact;
+            this.stamp(x, y, z, size * 1.7, size * 1.7, angle, kind, .8, 2, 0, true);
+            this.stamp(x, y, z, size, size, angle, -1, .9, 2, 0, true);
+            if (length > 0) for (let j = 1; j <= 5; j++) {
+                const trail = j * .14, fade = 1 - j / 6;
+                this.stamp(x - dx / length * trail, y + Math.sin(seconds * 20 + j) * .04, z - dz / length * trail,
+                    size * fade, size * 1.3 * fade, angle + Math.PI / 2, kind, fade * .85, 6, 0, true);
+            }
+        }
         this.ward.visible = ward > 0;
         if (ward > 0) {
             const y = height(playerX, playerZ);
@@ -248,8 +315,9 @@ export class SkillEffects {
         this.dummy.position.set(x - this.originX, projected ? 0 : y, z - this.originZ); this.dummy.rotation.set(0, rotation, 0);
         if (!vertical) this.dummy.rotateX(-Math.PI / 2 - pitch);
         this.dummy.scale.set(width, length, 1); this.dummy.updateMatrix(); this.mesh.setMatrixAt(i, this.dummy.matrix);
-        this.mesh.setColorAt(i, kind < 0 ? WHITE : COLORS[kind === EffectKind.IceBolt || kind === EffectKind.IceField ? EffectKind.Frost : kind]);
-        this.styles.setXYZW(i, tile, 0, alpha, shape + (projected ? 8 : 0));
+        this.mesh.setColorAt(i, kind < 0 ? WHITE : kind >= EffectKind.FireRay ? kind === EffectKind.Doom || kind === EffectKind.Detonation ? HOT_FIRE : FIRE
+            : COLORS[kind === EffectKind.IceBolt || kind === EffectKind.IceField ? EffectKind.Frost : kind]);
+        this.styles.setXYZW(i, tile, rotation, alpha, shape + (projected ? 8 : 0));
     }
     public reset(): void { this.mesh.count = this.ground.count = 0; this.ward.visible = false; }
     public dispose(): void {

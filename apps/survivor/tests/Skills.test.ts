@@ -26,16 +26,22 @@ function arena() {
         const ranks = initialSkillRanks(); ranks[nodeIndex("icebolt")] = 3; ranks[nodeIndex("icebolt.power")] = 3; ranks[nodeIndex("frost")] = 1;
         expect(skills.commitBuild(ranks, 0, 8, false, 0)).toBeNull(); expect(skills.equip("frost", 1, 8)).toBe(true);
     };
+    const learnMeteor = () => {
+        skills.points = 19;
+        const ranks = initialSkillRanks();
+        for (const [id, rank] of Object.entries({ fireball: 10, "fireball.power": 5, pyroblast: 3, meteor: 1 })) ranks[nodeIndex(id)] = rank;
+        expect(skills.commitBuild(ranks, 0, 20, false, 0)).toBeNull();
+    };
     const release = (tick: number) => skills.advanceCasting(tick, random, false, () => {});
-    return { simulation, fixture, e, skills, stats, random, spawn, learnFrost, release };
+    return { simulation, fixture, e, skills, stats, random, spawn, learnFrost, learnMeteor, release };
 }
 
 test("automatic casting prioritizes protection and stationary spells ahead of mobile fillers", () => {
     const { skills, e, stats, random, spawn, release } = arena();
-    skills.equip("meteor", 5, 3); skills.equip("ward", 4, 3); spawn(2, 0);
+    skills.equip("vortex", 5, 3); skills.equip("ward", 4, 3); spawn(2, 0);
     e.vitals.mana[e.player] = 1000;
     expect(skills.castAutomatic(0, stats, 3, random, true)).toBe(true);
-    expect(skills.snapshot(0).action?.skill).toBe("meteor");
+    expect(skills.snapshot(0).action?.skill).toBe("vortex");
     release(110); e.vitals.health[e.player] = stats.maxHealth * .4;
     expect(skills.castAutomatic(110, stats, 3, random, false)).toBe(true);
     expect(skills.snapshot(110).action?.skill).toBe("ward");
@@ -46,14 +52,14 @@ test("automatic casting prioritizes protection and stationary spells ahead of mo
 
 test("autopilot stops pursuit to finish a heavy cast while manual movement still takes over", () => {
     const { simulation, fixture, skills, e, spawn } = arena();
-    fixture.gainExperience(experienceForLevel(1)); skills.equip("meteor", 5, 2);
+    fixture.gainExperience(experienceForLevel(1) + experienceForLevel(2)); skills.equip("vortex", 5, 3);
     const target = spawn(6, 0); e.vitals.health[target] = 10000; e.vitals.mana[e.player] = 1000;
     fixture.autoCast = true; simulation.toggleAutoCombat();
     for (let i = 0; i < 12; i++) simulation.step({ x: 0, z: 0, active: false });
-    expect(skills.snapshot(simulation.tick).action?.skill).toBe("meteor");
+    expect(skills.snapshot(simulation.tick).action?.skill).toBe("vortex");
     const x = e.position.x[e.player], z = e.position.z[e.player];
     for (let i = 0; i < 60; i++) simulation.step({ x: 0, z: 0, active: false });
-    expect(e.effects.buffer.kind.slice(0, e.effects.buffer.count)).toContain(EffectKind.Meteor);
+    expect(e.effects.buffer.kind.slice(0, e.effects.buffer.count)).toContain(EffectKind.Vortex);
     expect(Math.hypot(e.position.x[e.player] - x, e.position.z[e.player] - z)).toBeLessThan(1);
     simulation.step({ x: -1, z: 0, active: true });
     expect(simulation.getSnapshot().autoCombat.activity).toBe("manual");
@@ -201,13 +207,14 @@ test("full presentation buffers preserve gameplay and transfer without authority
 });
 
 test("meteor locks the initial location, preserves offensive stats and hits after windup plus flight", () => {
-    const { skills, e, stats, random, spawn, release } = arena();
+    const { skills, e, stats, random, spawn, release, learnMeteor } = arena();
+    learnMeteor();
     const target = spawn(4, 0), bystander = spawn(4, 1);
-    skills.equip("meteor", 0, 2); e.vitals.mana[e.player] = 100;
+    skills.equip("meteor", 0, 20); e.vitals.mana[e.player] = 100;
     for (let i = 0; i < GAME_CONFIG.skills.maxEffects; i++) e.effects.add(EffectKind.Heal, 0, 0, 0, 1, 10);
     const castingStats = { ...stats, damage: 10, criticalChance: 0, excellentChance: 0, lethalChance: 0 };
     vi.spyOn(random, "next").mockReturnValue(.5);
-    expect(skills.cast("meteor", 0, castingStats, 2, random)).toBe(true); castingStats.damage = 1000;
+    expect(skills.cast("meteor", 0, castingStats, 20, random)).toBe(true); castingStats.damage = 1000;
     e.position.x[target] = 15; e.updateSpatial(target, Component.Enemy); e.position.x[e.player] = -15;
     release(54);
     skills.advanceOngoing(161, random, () => {}); expect(e.impacts.count).toBe(0);
@@ -246,11 +253,11 @@ test("blade ring follows the player, leaves an inner gap and restore cancels in-
 });
 
 test("sequential casts can overlap fields at full population without overflowing damage capacity", () => {
-    const { skills, e, stats, random, spawn, release } = arena();
+    const { skills, e, stats, random, spawn, release, learnMeteor } = arena(); learnMeteor();
     for (let i = 0; i < MAX_ENEMIES; i++) spawn(2.5, 0);
     for (const [slot, id] of (["meteor", "vortex", "blades"] as const).entries()) {
-        skills.equip(id, slot, 3); e.vitals.mana[e.player] = 100;
-        expect(skills.cast(id, slot * 30, { ...stats, castSpeed: 100 }, 3, random)).toBe(true); release(slot * 30 + 12);
+        skills.equip(id, slot, 20); e.vitals.mana[e.player] = 100;
+        expect(skills.cast(id, slot * 30, { ...stats, castSpeed: 100 }, 20, random)).toBe(true); release(slot * 30 + 12);
     }
     let stages = 0, peak = 0;
     for (let tick = 73; tick <= 552; tick++) skills.advanceOngoing(tick, random, () => {
@@ -262,8 +269,8 @@ test("sequential casts can overlap fields at full population without overflowing
 
 test("automatic ground skills reject empty casts and pulse independently benefits from chill", () => {
     const { skills, e, stats, random, spawn, learnFrost, release } = arena(); learnFrost();
-    skills.equip("meteor", 0, 8); skills.equip("vortex", 2, 8); const mana = e.vitals.mana[e.player];
-    for (const id of ["meteor", "vortex"] as const) expect(skills.cast(id, 0, stats, 8, random, true)).toBe(false);
+    skills.equip("vortex", 2, 8); const mana = e.vitals.mana[e.player];
+    for (const id of ["frost", "vortex"] as const) expect(skills.cast(id, 0, stats, 8, random, true)).toBe(false);
     expect(e.vitals.mana[e.player]).toBe(mana); skills.equip("pulse", 0, 8);
     spawn(2, 0); vi.spyOn(random, "next").mockReturnValue(.5);
     skills.cast("pulse", 0, stats, 8, random); release(22); const normal = e.impacts.damage[0];

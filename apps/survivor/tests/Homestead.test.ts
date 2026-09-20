@@ -53,9 +53,14 @@ test("roundtrip rests at home and preserves wilderness position, growth, equipme
 
 test.each(["chain", "meteor", "vortex", "blades", "pulse", "frost", "ward", "dash"] as const)("home permits manual %s with costs, cooldowns and complete effect lifetime", skill => {
     const combat = new CombatSimulation("home-practice", { x: 0, z: 0 }, undefined, new HomesteadTerrain(), "homestead");
-    const state = combat.checkpoint(); combat.restore({ ...state, player: { ...state.player, level: 10 }, skills: { ...state.skills, points: 9 } });
+    const state = combat.checkpoint(); combat.restore({ ...state, player: { ...state.player, level: 20 }, skills: { ...state.skills, points: 19 } });
     if (skill === "frost") {
         const ranks = [...state.skills.ranks]; ranks[nodeIndex("icebolt")] = 3; ranks[nodeIndex("icebolt.power")] = 3; ranks[nodeIndex("frost")] = 1;
+        combat.commitSkillBuild(ranks, 0);
+    }
+    if (skill === "meteor") {
+        const ranks = [...state.skills.ranks];
+        for (const [id, rank] of Object.entries({ fireball: 10, "fireball.power": 5, pyroblast: 3, meteor: 1 })) ranks[nodeIndex(id)] = rank;
         combat.commitSkillBuild(ranks, 0);
     }
     combat.equipSkill(skill, 0);

@@ -172,7 +172,7 @@ export class CombatSimulation {
         this.behavior = new EnemyBehavior(this.entities, isChallenge(location) ? { residencyAt: () => "near" } : this.world);
         this.skills = new SkillSystem(this.entities);
         this.autoCombat = new PlayerAutoCombat(this.entities, this.chests, () => this.useConsumable("health"), location === "wilds" ? this.world : undefined);
-        this.renderState = { combatText: this.entities.combatText.buffer, player: this.playerRenderState, chests: this.chests, effects: this.entities.effects.buffer,
+        this.renderState = { combatText: this.entities.combatText.buffer, player: this.playerRenderState, chests: this.chests, effects: this.entities.effects.buffer, fireProjectiles: this.skills.fireProjectiles,
             entities: { ids: this.entities.world.ids, enemies: this.entities.enemies, projectiles: this.entities.projectiles,
                 experience: this.entities.experience, loot: this.entities.loot, position: this.entities.position,
                 vitals: this.entities.vitals, enemy: this.entities.enemy, action: this.entities.action,
@@ -225,7 +225,7 @@ export class CombatSimulation {
         }
         const recovering = recoverDefeat && this.gameOverValue;
         if (recovering) { position = CHALLENGE_SPAWN; challengeRevision++; }
-        return validateCharacterCheckpoint({ version: 6, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
+        return validateCharacterCheckpoint({ version: 7, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
             location: destination, wildsPosition, exploration: this.exploration.snapshot,
             player: travelling || point || recovering ? { ...player, inventory, ...position, ...(destination === "homestead" || recovering ? { health: this.stats.maxHealth, mana: this.stats.maxMana } : {}) } : player,
             tick: this.tickValue, kills: this.rewards.kills, openedChests: this.openedChests, nextItemId: this.rewards.nextItemId, random: this.random.state,
@@ -316,13 +316,15 @@ export class CombatSimulation {
         this.previousPlayerZ = this.playerZ;
         this.resolution.advance(STEP_SECONDS);
         this.entities.status.advance(this.tickValue);
+        this.resolution.advanceBurns(this.tickValue, this.stats, this.consumeCombatEvent);
+        if (this.gameOverValue) return executor ? Promise.resolve() : undefined;
         this.potionCooldown = Math.max(0, this.potionCooldown - STEP_SECONDS);
         this.entities.effects.advance(this.tickValue); this.entities.combatText.advance(this.tickValue);
-        const movement = this.autoCombat.update(input, this.tickValue, this.stats, this.movementX, this.movementZ, this.skills.winding(this.tickValue) && !this.skills.mobile);
+        const movement = this.autoCombat.update(input, this.tickValue, this.stats, this.movementX, this.movementZ, this.skills.holding(this.tickValue) && !this.skills.mobile);
         this.skills.advanceCasting(this.tickValue, this.random, movement.active && (input.active && !this.skills.mobile || this.autoCombat.activity === "evade"), this.settleOngoing);
         if (this.gameOverValue) return executor ? Promise.resolve() : undefined;
         if (!this.skills.advance(this.tickValue)) {
-            if (this.skills.winding(this.tickValue) && !this.skills.mobile || !this.entities.status.canMove(this.entities.player, this.tickValue)) this.movementX = this.movementZ = 0;
+            if (this.skills.holding(this.tickValue) && !this.skills.mobile || !this.entities.status.canMove(this.entities.player, this.tickValue)) this.movementX = this.movementZ = 0;
             else this.movePlayer(movement);
         }
         if (this.location === "homestead") {

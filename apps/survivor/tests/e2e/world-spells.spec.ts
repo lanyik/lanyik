@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import type { Group, PerspectiveCamera, WebGLRenderer, Scene, Fog, CubeTexture, InstancedMesh } from "three";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import type { CombatWorld } from "../../src/core/CombatWorld";
+import type { SkillSystem } from "../../src/core/SkillSystem";
 import type { RegionalWorld } from "../../src/core/RegionalWorld";
 import type { CombatRenderState } from "../../src/core/CombatState";
 import { ActorAction } from "../../src/core/CombatWorld";
@@ -65,8 +66,11 @@ test("the HDR skybox rotates beyond terrain fog; enemy weapons close, travel and
     expect(await readSky()).toEqual(sky);
     const spawn = async (kind: number, boss: boolean, distance: number) => combatWorker(page).evaluate(({ kind, boss, distance }) => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { resolution: CombatResolution; entities: CombatWorld; world: RegionalWorld; autoCast: boolean; attackCooldown: number; };
+        const fixture = simulation as unknown as { resolution: CombatResolution; entities: CombatWorld; skills: SkillSystem; world: RegionalWorld; autoCast: boolean; attackCooldown: number; };
         fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.resolution.damageImmunity = 1000;
+        // Entry may already have started a player windup; disabling auto-cast only prevents the next cast.
+        const checkpoint = simulation.checkpoint();
+        fixture.skills.restore({ ...checkpoint.skills, recoveryUntil: 0, dashUntil: 0 }, checkpoint.tick);
         const e = fixture.entities, p = e.position, player = e.player;
         while (e.enemies.count) e.remove(e.enemies.slots[0]); while (e.projectiles.count) e.remove(e.projectiles.slots[0]);
         e.effects.buffer.count = 0;

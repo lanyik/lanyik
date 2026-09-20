@@ -1,7 +1,8 @@
 import type { EntityWorld } from "./EntityWorld";
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
+import { BurnSystem } from "./BurnSystem";
 
-export enum StatusKind { Slow, Protection, Barrier, Chill, Frozen, ControlResistance }
+export enum StatusKind { Slow, Protection, Barrier, Chill, Frozen, ControlResistance, Burning }
 export enum ControlProfile { Normal, Elite, Boss }
 export const STATUS_DEFINITIONS = Object.freeze([
     { name: "减速", beneficial: false, control: true, sources: 4, maximum: .6 },
@@ -9,12 +10,16 @@ export const STATUS_DEFINITIONS = Object.freeze([
     { name: "结界", beneficial: true, control: false, sources: 1, maximum: Infinity },
     { name: "寒意", beneficial: false, control: true, sources: 4, maximum: 5 },
     { name: "冻结", beneficial: false, control: true, sources: 1, maximum: 1 },
-    { name: "控制抵抗", beneficial: true, control: false, sources: 1, maximum: 1 }
+    { name: "控制抵抗", beneficial: true, control: false, sources: 1, maximum: 1 },
+    { name: "灼烧", beneficial: false, control: false, sources: 4, maximum: 32 }
 ] as const);
 export interface SavedStatus { readonly kind: StatusKind; readonly source: number; readonly amount: number; readonly remaining: number }
 const SOURCES = 4;
 /** Independent source deadlines, bounded storage, and cheap projections for movement/actions. */
 export class StatusSystem {
+    public readonly burns: BurnSystem;
+    public readonly burnUntil: Float64Array;
+    public readonly burnStacks: Uint8Array;
     public readonly slowUntil: Float64Array;
     public readonly slowScale: Float32Array;
     public readonly wardUntil: Float64Array;
@@ -30,7 +35,8 @@ export class StatusSystem {
     private nextExpiry = Infinity;
 
     constructor(private readonly world: EntityWorld) {
-        const capacity = world.capacity * STATUS_DEFINITIONS.length * SOURCES;
+        const capacity = world.capacity * StatusKind.Burning * SOURCES;
+        this.burns = new BurnSystem(world); this.burnUntil = this.burns.until; this.burnStacks = this.burns.stacks;
         this.until = new Float64Array(capacity); this.strength = new Float64Array(capacity); this.sources = new Float64Array(capacity);
         this.active = new Uint32Array(capacity); this.indices = new Int32Array(capacity).fill(-1);
         this.slowUntil = new Float64Array(world.capacity); this.wardUntil = new Float64Array(world.capacity);
@@ -42,7 +48,7 @@ export class StatusSystem {
     public canMove(slot: number, tick: number): boolean { return this.canAct(slot, tick); }
     public apply(kind: StatusKind, source: number, target: number, strength: number, until: number, tick: number): boolean {
         const def = STATUS_DEFINITIONS[kind];
-        if (!Number.isInteger(kind) || !def || !Number.isFinite(strength) || strength <= 0 || strength > def.maximum
+        if (!Number.isInteger(kind) || !def || kind === StatusKind.Burning || !Number.isFinite(strength) || strength <= 0 || strength > def.maximum
             || !Number.isSafeInteger(tick) || tick < 0 || !Number.isSafeInteger(until) || until <= tick
             || !Number.isSafeInteger(source) || source === 0) throw new RangeError("Invalid status application");
         const slot = this.world.resolve(target);
@@ -89,11 +95,13 @@ export class StatusSystem {
         return true;
     }
     public amount(kind: StatusKind, slot: number, tick: number): number {
+        if (kind === StatusKind.Burning) return tick < this.burnUntil[slot] ? this.burnStacks[slot] : 0;
         const base = this.base(kind, slot); let amount = 0;
         for (let j = 0; j < STATUS_DEFINITIONS[kind].sources; j++) if (tick < this.until[base + j]) amount = Math.max(amount, this.strength[base + j]);
         return amount;
     }
     public deadline(kind: StatusKind, slot: number): number {
+        if (kind === StatusKind.Burning) return this.burnUntil[slot];
         const base = this.base(kind, slot); let until = 0;
         for (let j = 0; j < STATUS_DEFINITIONS[kind].sources; j++) until = Math.max(until, this.until[base + j]);
         return until;
@@ -116,6 +124,11 @@ export class StatusSystem {
         this.erase(i); this.project(slot, tick);
         this.apply(StatusKind.ControlResistance, source, this.world.ids[slot], 1, tick + ticksForSeconds(3), tick);
     }
+    public removeProtection(source: number, slot: number, tick: number): void {
+        const base = this.base(StatusKind.Protection, slot);
+        for (let i = base; i < base + SOURCES; i++) if (this.sources[i] === source) this.erase(i);
+        this.project(slot, tick);
+    }
     public advance(tick: number): void {
         if (tick < this.nextExpiry) return;
         this.nextExpiry = Infinity;
@@ -131,7 +144,7 @@ export class StatusSystem {
     }
     public save(slot: number, tick: number): SavedStatus[] {
         const entries: SavedStatus[] = [];
-        for (let kind = 0; kind < STATUS_DEFINITIONS.length; kind++) {
+        for (let kind = 0; kind < StatusKind.Burning; kind++) {
             const base = this.base(kind, slot);
             for (let j = 0; j < STATUS_DEFINITIONS[kind].sources; j++) if (tick < this.until[base + j]) entries.push({ kind, source: this.sources[base + j], amount: this.strength[base + j], remaining: this.until[base + j] - tick });
         }
@@ -163,7 +176,8 @@ export class StatusSystem {
         });
     }
     public clear(slot: number): void {
-        for (let kind = 0; kind < STATUS_DEFINITIONS.length; kind++) {
+        this.burns.clear(slot);
+        for (let kind = 0; kind < StatusKind.Burning; kind++) {
             const base = this.base(kind, slot);
             for (let j = 0; j < SOURCES; j++) this.erase(base + j);
         }

@@ -15,6 +15,8 @@ import { ControlProfile, StatusSystem } from "./StatusSystem";
 import { CombatText } from "./CombatText";
 import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
 import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
+import type { DerivedStats } from "./CombatStats";
+import type { FireSkillValues } from "./Skills";
 
 export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enemy: 8, Projectile: 16, Experience: 32, GroundItem: 64, Hostile: 128 });
 export enum Faction { Player, Enemy }
@@ -39,6 +41,9 @@ class DamageBuffer {
     public readonly freezeTicks = new Uint32Array(MAX_ENEMIES + MAX_PROJECTILES);
     public readonly frozenMultiplier = new Float32Array(MAX_ENEMIES + MAX_PROJECTILES);
     public readonly consumeFreeze = new Uint8Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly fireStats: (DerivedStats | undefined)[] = new Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly fireValues: (FireSkillValues | undefined)[] = new Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly fireVolley: (Map<number, number> | undefined)[] = new Array(MAX_ENEMIES + MAX_PROJECTILES);
 
     public add(source: number, target: number, damage: number, elite = 0, boss = 0, critical = 0): void {
         if (this.count === this.source.length) throw new Error("Damage event capacity exhausted");
@@ -48,6 +53,8 @@ class DamageBuffer {
         this.critical[i] = critical;
         this.chill[i] = this.chillTicks[i] = this.freezeTicks[i] = this.consumeFreeze[i] = 0;
         this.frozenMultiplier[i] = 1;
+        this.fireStats[i] = this.fireValues[i] = undefined;
+        this.fireVolley[i] = undefined;
     }
 
     public ice(source: number, target: number, damage: number, critical: boolean, chill: number, chillTicks: number, freezeTicks: number, multiplier: number, consume: boolean): void {
@@ -55,6 +62,13 @@ class DamageBuffer {
         this.add(source, target, damage, 0, 0, Number(critical));
         this.chill[i] = chill; this.chillTicks[i] = chillTicks; this.freezeTicks[i] = freezeTicks;
         this.frozenMultiplier[i] = multiplier; this.consumeFreeze[i] = Number(consume);
+    }
+    public fire(source: number, target: number, damage: number, critical: boolean, stats: DerivedStats, values: FireSkillValues, volley?: Map<number, number>): void {
+        const i = this.count;
+        this.add(source, target, damage, 0, 0, Number(critical)); this.fireStats[i] = stats; this.fireValues[i] = values; this.fireVolley[i] = volley;
+    }
+    public clear(): void {
+        this.fireStats.fill(undefined, 0, this.count); this.fireValues.fill(undefined, 0, this.count); this.fireVolley.fill(undefined, 0, this.count); this.count = 0;
     }
 }
 

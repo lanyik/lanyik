@@ -244,7 +244,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.playerBody.visible = state.player.dashing || !state.player.invulnerable || Math.floor(timestampMs / 70) % 2 === 0;
         this.shield.visible = state.player.shieldReady || state.player.ward > 0;
         this.shield.scale.setScalar(state.player.ward > 0 ? 1.6 : 1);
-        this.effects!.update(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ, state.player.ward);
+        this.effects!.update(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ, state.player.ward, state.fireProjectiles, alpha);
         this.enemyEffects.begin(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ);
         this.statusEffects.begin(statusTick, state.player.animationTime);
         if (!state.player.gameOver) this.statusEffects.actor(status, state.player.entitySlot, 0, this.player.position.y, 0, position.radius[state.player.entitySlot]);

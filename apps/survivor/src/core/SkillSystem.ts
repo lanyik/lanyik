@@ -1,18 +1,20 @@
 import { StatusKind, type SavedStatus } from "./StatusSystem";
 import { SkillBuild, SKILL_NODES, nodeIndex } from "./SkillBuild";
+import { FireCasting } from "./FireCasting";
+import type { SavedBurn } from "./BurnSystem";
 import { FrostCasting } from "./FrostCasting";
 import { CombatWorld, Component } from "./CombatWorld";
 import { EffectKind } from "./CombatEffects";
 import { rollAttack, type DerivedStats } from "./CombatStats";
 import type { DeterministicRandom } from "./DeterministicRandom";
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
-import { DEFAULT_LOADOUT, SKILLS, SKILL_IDS, SKILL_RULES, chainTargets, skillIndex, skillValues, isFrostSkill, isUltimate, mobileCast, SKILL_TIMINGS, type SkillValues, type SkillId, type SkillSnapshot } from "./Skills";
+import { DEFAULT_LOADOUT, SKILLS, SKILL_IDS, SKILL_RULES, chainTargets, skillIndex, skillValues, isFireSkill, isFrostSkill, isUltimate, mobileCast, SKILL_TIMINGS, type SkillValues, type SkillId, type SkillSnapshot } from "./Skills";
 
 /** Player skill state lives with the authority; UI and effects never decide hits. */
-export interface SkillCheckpoint { readonly points: number; readonly loadout: readonly (SkillId | null)[]; readonly ranks: readonly number[]; readonly revision: number; readonly statuses: readonly SavedStatus[]; readonly recoveryUntil: number; readonly readyAt: readonly number[];
+export interface SkillCheckpoint { readonly points: number; readonly loadout: readonly (SkillId | null)[]; readonly ranks: readonly number[]; readonly revision: number; readonly statuses: readonly SavedStatus[]; readonly burns: readonly SavedBurn[]; readonly recoveryUntil: number; readonly readyAt: readonly number[];
     readonly dashUntil: number; readonly dashX: number; readonly dashZ: number }
-interface PendingCast { readonly id: SkillId; readonly stats: DerivedStats; readonly values: SkillValues; readonly started: number; readonly releaseAt: number; readonly endsAt: number; readonly targetX: number; readonly targetZ: number; readonly heading: number; released: boolean }
-type OngoingId = "meteor" | "vortex" | "blades";
+interface PendingCast { readonly id: SkillId; readonly stats: DerivedStats; readonly values: SkillValues; readonly started: number; readonly releaseAt: number; readonly endsAt: number; readonly channelUntil: number; readonly targetX: number; readonly targetZ: number; readonly heading: number; released: boolean }
+type OngoingId = "vortex" | "blades";
 interface OngoingSkill {
     readonly stats: DerivedStats; readonly damage: number; readonly radius: number;
     readonly x: number; readonly z: number; readonly endsAt: number; nextAt: number;
@@ -20,6 +22,7 @@ interface OngoingSkill {
 export class SkillSystem {
     private readonly build = new SkillBuild();
     private readonly frost: FrostCasting;
+    private readonly fire: FireCasting;
     private pending: PendingCast | undefined;
     private recoveryUntil = 0;
     public get points(): number { return this.build.points; }
@@ -32,30 +35,33 @@ export class SkillSystem {
     private dashZ = 0;
     // One live cast per ongoing skill, independent of the lossy presentation buffer.
     private readonly ongoing = new Map<OngoingId, OngoingSkill>();
-    constructor(private readonly entities: CombatWorld) { this.frost = new FrostCasting(entities); }
+    constructor(private readonly entities: CombatWorld) { this.frost = new FrostCasting(entities); this.fire = new FireCasting(entities); }
+    public get fireProjectiles() { return this.fire.projectiles; }
     public get ward(): number { return this.entities.status.amount(StatusKind.Barrier, this.entities.player, 0); }
     private get wardUntil(): number { return this.entities.status.deadline(StatusKind.Barrier, this.entities.player); }
     public checkpoint(tick = 0): SkillCheckpoint { return { points: this.points, loadout: [...this.loadout], ranks: this.build.snapshot().ranks,
-        revision: this.build.revision, statuses: this.entities.status.save(this.entities.player, tick), recoveryUntil: Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0),
+        revision: this.build.revision, statuses: this.entities.status.save(this.entities.player, tick), burns: this.entities.status.burns.save(this.entities.player, tick), recoveryUntil: Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0),
         readyAt: Array.from(this.readyAt), dashUntil: this.dashUntil, dashX: this.dashX, dashZ: this.dashZ }; }
     public restore(state: SkillCheckpoint, tick: number): void {
-        this.ongoing.clear(); this.frost.clear(); this.pending = undefined; this.recoveryUntil = state.recoveryUntil;
+        this.ongoing.clear(); this.frost.clear(); this.fire.clear(); this.pending = undefined; this.recoveryUntil = state.recoveryUntil;
         this.entities.effects.cancelSource(this.entities.world.ids[this.entities.player]);
         this.loadout.splice(0, this.loadout.length, ...state.loadout); this.readyAt.set(state.readyAt);
         this.build.restore(state.ranks, state.points, state.revision);
         this.entities.status.restore(this.entities.player, state.statuses, tick);
+        this.entities.status.burns.restore(this.entities.player, state.burns, tick);
         this.entities.status.durationScale[this.entities.player] = 1 - .04 * this.build.rank("frost.resilience");
         this.dashUntil = state.dashUntil; this.dashX = state.dashX; this.dashZ = state.dashZ;
     }
     public snapshot(tick: number): SkillSnapshot {
-        const pending = this.pending, winding = pending && tick < pending.releaseAt;
-        return Object.freeze({ points: this.points, refundBlocked: this.busy(tick) || this.ongoing.size > 0 || this.frost.ongoing, loadout: Object.freeze([...this.loadout]), build: this.build.snapshot(), modifiers: this.build.modifiers,
+        const pending = this.pending, winding = pending && tick < pending.releaseAt, channeling = pending && !winding && tick < pending.channelUntil;
+        return Object.freeze({ points: this.points, refundBlocked: this.busy(tick) || this.ongoing.size > 0 || this.frost.ongoing || this.fire.ongoing, loadout: Object.freeze([...this.loadout]), build: this.build.snapshot(), modifiers: this.build.modifiers,
             ranks: Object.freeze(Object.fromEntries(SKILL_IDS.map(id => [id, this.build.rank(id)])) as Record<SkillId, number>),
             remaining: Object.freeze(Object.fromEntries(SKILL_IDS.map((id, i) => [id, Math.max(0, this.readyAt[i] - tick) / GAME_CONFIG.timing.simulationHz])) as Record<SkillId, number>),
             ward: this.ward, wardRemaining: Math.max(0, this.wardUntil - tick) / GAME_CONFIG.timing.simulationHz, dashing: this.dashing(tick),
             recoveryRemaining: Math.max(0, Math.max(this.recoveryUntil, pending?.endsAt ?? 0) - tick) / GAME_CONFIG.timing.simulationHz,
-            action: pending ? { skill: pending.id, phase: winding ? "windup" as const : "recovery" as const, remaining: Math.max(0, (winding ? pending.releaseAt : pending.endsAt) - tick) / GAME_CONFIG.timing.simulationHz,
-                duration: ((winding ? pending.releaseAt - pending.started : pending.endsAt - pending.releaseAt)) / GAME_CONFIG.timing.simulationHz } : null,
+            action: pending ? { skill: pending.id, phase: winding ? "windup" as const : channeling ? "channel" as const : "recovery" as const,
+                remaining: Math.max(0, (winding ? pending.releaseAt : channeling ? pending.channelUntil : pending.endsAt) - tick) / GAME_CONFIG.timing.simulationHz,
+                duration: (winding ? pending.releaseAt - pending.started : channeling ? pending.channelUntil - pending.releaseAt : pending.endsAt - pending.channelUntil) / GAME_CONFIG.timing.simulationHz } : null,
             statuses: this.entities.status.snapshot(this.entities.player, tick) });
     }
     public equip(id: SkillId, slot: number, level: number): boolean {
@@ -67,8 +73,10 @@ export class SkillSystem {
         this.loadout[slot] = id; return true;
     }
     public commitBuild(ranks: readonly number[], revision: number, level: number, homestead: boolean, tick: number): string | null {
-        const reason = this.build.commit(ranks, revision, level, homestead && !this.busy(tick) && !this.ongoing.size && !this.frost.ongoing);
+        const protection = this.build.rank("fire.resilience");
+        const reason = this.build.commit(ranks, revision, level, homestead && !this.busy(tick) && !this.ongoing.size && !this.frost.ongoing && !this.fire.ongoing);
         if (reason) return reason;
+        if (this.build.rank("fire.resilience") < protection) this.entities.status.removeProtection(this.entities.world.ids[this.entities.player], this.entities.player, tick);
         for (let slot = 0; slot < this.loadout.length; slot++) {
             const id = this.loadout[slot]; if (id && this.build.rank(id) === 0) this.loadout[slot] = null;
         }
@@ -76,19 +84,19 @@ export class SkillSystem {
         return null;
     }
     public busy(tick: number): boolean { return tick < Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0) || this.dashing(tick); }
-    public winding(tick: number): boolean { return !!this.pending && !this.pending.released && tick < this.pending.releaseAt; }
+    public holding(tick: number): boolean { return !!this.pending && tick < Math.max(this.pending.releaseAt, this.pending.channelUntil); }
     public get mobile(): boolean { return !!this.pending && mobileCast(this.pending.id); }
     public advanceCasting(tick: number, random: DeterministicRandom, interrupt: boolean, settle: () => void): void {
         const cast = this.pending;
         if (!cast) return;
-        if (!cast.released && (interrupt || this.entities.vitals.health[this.entities.player] <= 0 || !this.entities.status.canAct(this.entities.player, tick))) {
-            this.pending = undefined; this.recoveryUntil = Math.max(this.recoveryUntil, tick + ticksForSeconds(.12)); return;
+        if ((!cast.released || tick < cast.channelUntil) && (interrupt || this.entities.vitals.health[this.entities.player] <= 0 || !this.entities.status.canAct(this.entities.player, tick))) {
+            this.fire.interruptChannel(); this.pending = undefined; this.recoveryUntil = Math.max(this.recoveryUntil, tick + ticksForSeconds(.12)); return;
         }
         if (!cast.released && tick >= cast.releaseAt) { cast.released = true; this.release(cast, tick, random); settle(); }
         if (tick >= cast.endsAt) this.pending = undefined;
     }
     public dashing(tick: number): boolean { return tick < this.dashUntil; }
-    public cancelTravel(): void { this.recoveryUntil = Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0); this.dashUntil = 0; this.dashX = this.dashZ = 0; this.pending = undefined; this.ongoing.clear(); this.frost.clear(); }
+    public cancelTravel(): void { this.recoveryUntil = Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0); this.dashUntil = 0; this.dashX = this.dashZ = 0; this.pending = undefined; this.ongoing.clear(); this.frost.clear(); this.fire.clear(); }
     public advance(tick: number): boolean {
         if (!this.dashing(tick)) return false;
         if (!this.entities.status.canMove(this.entities.player, tick)) { this.dashUntil = tick; return false; }
@@ -96,8 +104,8 @@ export class SkillSystem {
         return true;
     }
     public advanceOngoing(tick: number, random: DeterministicRandom, settle: () => void): void {
-        this.frost.advance(tick, random, settle);
-        const { position: p, player, world, impacts, effects, enemy: e, terrain } = this.entities;
+        this.frost.advance(tick, random, settle); this.fire.advance(tick, random, settle);
+        const { position: p, player, world, impacts, enemy: e, terrain } = this.entities;
         for (const [id, cast] of this.ongoing) {
             if (tick > cast.endsAt) { this.ongoing.delete(id); continue; }
             if (tick < cast.nextAt) continue;
@@ -118,10 +126,7 @@ export class SkillSystem {
                     this.entities.updateSpatial(slot, Component.Enemy);
                 }
             }
-            if (id === "meteor") {
-                effects.add(EffectKind.MeteorImpact, tick, x, z, cast.radius, .85, x, z, world.ids[player]);
-                this.ongoing.delete(id);
-            } else if (tick === cast.endsAt) this.ongoing.delete(id);
+            if (tick === cast.endsAt) this.ongoing.delete(id);
             else cast.nextAt += ticksForSeconds(SKILL_RULES[id].interval);
             // Each cast can fill the hit buffer; settle before the next spatial query.
             settle();
@@ -155,10 +160,10 @@ export class SkillSystem {
         if (v.health[player] <= 0 || !this.loadout.includes(id) || !this.build.rank(id) || level < definition.unlock || tick < this.readyAt[i]
             || !status.canAct(player, tick) || this.dashing(tick) || this.busy(tick) && id !== "dash"
             || v.mana[player] < values.mana || automatic && !definition.automatic
-            || this.ongoing.has(id as OngoingId) || this.frost.active(id)) return false;
+            || this.ongoing.has(id as OngoingId) || this.frost.active(id) || !this.fire.available(id, values)) return false;
         if (id === "ward" && (this.ward > 0 || automatic && v.health[player] / stats.maxHealth > SKILL_RULES.ward.automaticHealthRatio)) return false;
-        const field = id === "meteor" || id === "vortex" || id === "icestorm" || id === "blizzard";
-        const range = id === "vortex" ? SKILL_RULES.vortex.range : field ? 8 : id === "chain" ? SKILL_RULES.chain.firstRange : values.radius + (id === "blades" ? SKILL_RULES.blades.width : 0);
+        const field = id === "meteor" || id === "vortex" || id === "icestorm" || id === "blizzard" || id === "firewall" || id === "firedomain";
+        const range = isFireSkill(id) && id !== "doom" ? values.fire!.range : id === "vortex" ? SKILL_RULES.vortex.range : field ? 8 : id === "chain" ? SKILL_RULES.chain.firstRange : values.radius + (id === "blades" ? SKILL_RULES.blades.width : 0);
         const target = id === "dash" || id === "ward" ? -1 : this.nearest(p.x[player], p.z[player], range);
         if (automatic && id !== "ward") {
             const nearby = this.entities.queryNearby(Component.Enemy, p.x[player], p.z[player], range, true);
@@ -168,14 +173,16 @@ export class SkillSystem {
                 if (id === "blades" && Math.hypot(p.x[slot] - p.x[player], p.z[slot] - p.z[player]) + p.radius[slot] < values.radius - SKILL_RULES.blades.width) continue;
                 if (this.entities.canSee(player, slot)) { eligible = true; break; }
             }
-            if (!eligible || (field || id === "chain" || id === "icebolt" || id === "icelance") && target < 0) return false;
+            if (!eligible || (field || id === "chain" || id === "icebolt" || id === "icelance" || isFireSkill(id) && id !== "doom") && target < 0) return false;
         }
         const heading = target >= 0 ? Math.atan2(p.x[target] - p.x[player], p.z[target] - p.z[player]) : p.heading[player];
         const releaseAt = tick + ticksForSeconds(Math.max(id === "dash" ? 0 : .1, SKILL_TIMINGS[id][0] / (1 + stats.castSpeed)));
-        const endsAt = Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0, releaseAt + ticksForSeconds(Math.max(.15, SKILL_TIMINGS[id][1] / (1 + stats.castSpeed))));
-        this.pending = { id, stats: { ...stats }, values, started: tick, releaseAt, endsAt, released: false, heading,
-            targetX: field ? target < 0 ? p.x[player] + Math.sin(heading) * 4 : p.x[target] : p.x[player],
-            targetZ: field ? target < 0 ? p.z[player] + Math.cos(heading) * 4 : p.z[target] : p.z[player] };
+        const channelUntil = releaseAt + (id === "fireray" ? ticksForSeconds(values.duration) : 0);
+        const endsAt = Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0, channelUntil + ticksForSeconds(Math.max(.15, SKILL_TIMINGS[id][1] / (1 + stats.castSpeed))));
+        if (id === "dash") this.fire.interruptChannel();
+        this.pending = { id, stats: { ...stats }, values, started: tick, releaseAt, channelUntil, endsAt, released: false, heading,
+            targetX: field || isFireSkill(id) && id !== "doom" ? target < 0 ? p.x[player] + Math.sin(heading) * 4 : p.x[target] : p.x[player],
+            targetZ: field || isFireSkill(id) && id !== "doom" ? target < 0 ? p.z[player] + Math.cos(heading) * 4 : p.z[target] : p.z[player] };
         v.mana[player] -= values.mana; this.readyAt[i] = tick + ticksForSeconds(values.cooldown);
         if (releaseAt === tick) { this.pending.released = true; this.release(this.pending, tick, random); }
         return true;
@@ -185,15 +192,16 @@ export class SkillSystem {
         const { position: p, player, impacts, world, effects, status } = this.entities;
         const x = p.x[player], z = p.z[player];
         if (isFrostSkill(id)) { this.frost.release(id, tick, stats, values, cast.targetX, cast.targetZ, cast.heading, random); return; }
-        if (id === "meteor" || id === "vortex" || id === "blades") {
+        if (isFireSkill(id)) { this.fire.release(id, tick, stats, values, cast.targetX, cast.targetZ, cast.heading, random); return; }
+        if (id === "vortex" || id === "blades") {
             if (this.ongoing.has(id)) return;
-            const duration = id === "meteor" ? SKILL_RULES.meteor.delay : SKILL_RULES[id].duration;
-            const nextAt = tick + ticksForSeconds(id === "meteor" ? duration : SKILL_RULES[id].interval);
+            const duration = SKILL_RULES[id].duration;
+            const nextAt = tick + ticksForSeconds(SKILL_RULES[id].interval);
             // Manual ground casts land ahead when no enemy can be targeted; auto casts still require a target.
             const cx = cast.targetX, cz = cast.targetZ;
             this.ongoing.set(id, { stats: { ...stats }, damage: values.damage, radius: values.radius, x: cx, z: cz,
                 endsAt: tick + ticksForSeconds(duration), nextAt });
-            effects.add(id === "meteor" ? EffectKind.Meteor : id === "vortex" ? EffectKind.Vortex : EffectKind.Blades,
+            effects.add(id === "vortex" ? EffectKind.Vortex : EffectKind.Blades,
                 tick, cx, cz, values.radius, duration, cx, cz, world.ids[player]);
         } else if (id === "ward") {
             if (status.amount(StatusKind.Barrier, player, tick) > 0) return;

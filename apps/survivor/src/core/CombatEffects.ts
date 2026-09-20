@@ -1,6 +1,15 @@
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 
-export enum EffectKind { Pulse, Frost, Lightning, Dash, Ward, Meteor, MeteorImpact, Vortex, Blades, Shatter, Heal, EnemyReave, EnemyJaws, EnemyFault, EnemyQuake, IceBolt, IceField }
+export enum EffectKind { Pulse, Frost, Lightning, Dash, Ward, Meteor, MeteorImpact, Vortex, Blades, Shatter, Heal, EnemyReave, EnemyJaws, EnemyFault, EnemyQuake, IceBolt, IceField, FireRay, FireWall, FireDomain, FireImpact, Doom, Detonation }
+export const MAX_FIRE_PROJECTILES = 24;
+export function fireShotArrays(create: <T extends Float32Array | Float64Array | Uint8Array>(type: {
+    readonly BYTES_PER_ELEMENT: number; new(length: number): T; new(buffer: ArrayBuffer, offset: number, count: number): T
+}, count: number) => T) {
+    const n = MAX_FIRE_PROJECTILES;
+    return { x: create(Float64Array, n), y: create(Float64Array, n), z: create(Float64Array, n),
+        previousX: create(Float64Array, n), previousY: create(Float64Array, n), previousZ: create(Float64Array, n), kind: create(Uint8Array, n) };
+}
+export type FireShotBuffer = ReturnType<typeof fireShotArrays> & { readonly count: number };
 export function effectArrays(create: <T extends Float32Array | Float64Array | Uint8Array>(type: {
     readonly BYTES_PER_ELEMENT: number; new(length: number): T; new(buffer: ArrayBuffer, offset: number, count: number): T
 }, count: number) => T) {
@@ -33,6 +42,10 @@ export class CombatEffects {
     public cancelSource(source: number): void {
         let i = 0;
         while (i < this.buffer.count) { if (this.sources[i] === source) this.remove(i); else i++; }
+    }
+    public cancelKind(source: number, kind: EffectKind): void {
+        let i = 0;
+        while (i < this.buffer.count) { if (this.sources[i] === source && this.buffer.kind[i] === kind) this.remove(i); else i++; }
     }
     private remove(i: number): void {
         const b = this.buffer, last = --b.count;
