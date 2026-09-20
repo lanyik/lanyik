@@ -38,6 +38,7 @@ import { ActorAction, Faction } from "../core/CombatWorld";
 import { ActorModels } from "./ActorModels";
 import { SkillEffects } from "./SkillEffects";
 import { EnemyPresentation } from "./EnemyPresentation";
+import { ActorStatusEffects } from "./ActorStatusEffects";
 import { DamageNumbers } from "./DamageNumbers";
 import { BoundaryMist } from "./BoundaryMist";
 import { ENEMY_DEFINITIONS, ENEMY_SPECIAL } from "../core/EnemyDefinitions";
@@ -103,6 +104,7 @@ export class CombatLayer implements WorldRenderLayer {
     private disposed = false;
     private readonly projectiles: InstancedMesh;
     private readonly enemyEffects = new EnemyPresentation();
+    private readonly statusEffects = new ActorStatusEffects();
     private damageNumbers?: DamageNumbers;
     private readonly hand = new Vector3();
     private presentationTime = -1;
@@ -147,8 +149,8 @@ export class CombatLayer implements WorldRenderLayer {
         this.experience = this.instance(this.geometries.experience, this.experienceMaterial, MAX_EXPERIENCE_ORBS);
         this.projectiles.count = this.experience.count = 0;
         this.buildPlayer();
-        this.groundProjection.root.add(this.enemyEffects.warnings, this.telegraphs, this.chargeWarnings, this.groundPlayer, this.lootEffects.halo);
-        this.root.add(this.enemyEffects.root, this.projectiles, this.experience, this.lootEffects.beam, this.player, this.mist.mesh);
+        this.groundProjection.root.add(this.enemyEffects.warnings, this.telegraphs, this.chargeWarnings, this.groundPlayer, this.lootEffects.halo, this.statusEffects.ground);
+        this.root.add(this.enemyEffects.root, this.projectiles, this.experience, this.lootEffects.beam, this.player, this.mist.mesh, this.statusEffects.root);
         this.root.add(this.challengeMist.root);
         try { resources.acquireRequired("combat-render-pool", {}, true, [
             ...collectObject3DResourceAllocations([this.root, this.groundProjection.root]),
@@ -235,13 +237,17 @@ export class CombatLayer implements WorldRenderLayer {
         this.presentationTime = state.player.animationTime;
         const turn = state.player.heading - this.playerBody.rotation.y;
         this.playerBody.rotation.y += Math.atan2(Math.sin(turn), Math.cos(turn)) * (1 - Math.exp(-24 * dt));
-        this.actors.animateHero(state.player.animationTime, Math.hypot(state.player.x - state.player.previousX, state.player.z - state.player.previousZ) > .0001);
+        const statusTick = Math.round(state.player.animationTime * GAME_CONFIG.timing.simulationHz);
+        const playerFrozen = status.frozenUntil[state.player.entitySlot] > statusTick;
+        this.actors.animateHero(playerFrozen ? 0 : state.player.animationTime, !playerFrozen && Math.hypot(state.player.x - state.player.previousX, state.player.z - state.player.previousZ) > .0001);
         this.playerBody.rotation.z = state.player.gameOver ? -Math.PI / 2 : 0;
         this.playerBody.visible = state.player.dashing || !state.player.invulnerable || Math.floor(timestampMs / 70) % 2 === 0;
         this.shield.visible = state.player.shieldReady || state.player.ward > 0;
         this.shield.scale.setScalar(state.player.ward > 0 ? 1.6 : 1);
         this.effects!.update(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ, state.player.ward);
         this.enemyEffects.begin(state.effects, state.player.animationTime, this.effectHeight, playerX, playerZ);
+        this.statusEffects.begin(statusTick, state.player.animationTime);
+        if (!state.player.gameOver) this.statusEffects.actor(status, state.player.entitySlot, 0, this.player.position.y, 0, position.radius[state.player.entitySlot]);
         this.damageNumbers!.update(state.combatText, state.player.animationTime, this.effectHeight, playerX, playerZ);
         this.mist.update(0, this.player.position.y, 0, state.player.animationTime, playerX, playerZ);
         this.mist.mesh.visible = this.location === "wilds";
@@ -258,10 +264,13 @@ export class CombatLayer implements WorldRenderLayer {
             const homeX = enemy.homeX[index], homeZ = enemy.homeZ[index];
             const distance = Math.max(Math.hypot(x - playerX, z - playerZ) - position.radius[index] * 2,
                 Math.hypot(homeX - playerX, homeZ - playerZ));
-            if (actorVisibility(distance) === 0) continue;
+            const visibility = actorVisibility(distance);
+            if (visibility === 0) continue;
+            const groundHeight = this.height(x, z);
+            this.statusEffects.actor(status, index, x - playerX, groundHeight, z - playerZ, position.radius[index], visibility);
             const rotation = position.heading[index];
-            this.enemyEffects.actor(action.kind[index], action.progress[index], x, z, this.height(x, z), rotation,
-                action.targetX[index], action.targetZ[index], status.wardUntil[index] > state.player.animationTime * GAME_CONFIG.timing.simulationHz);
+            this.enemyEffects.actor(action.kind[index], action.progress[index], x, z, groundHeight, rotation,
+                action.targetX[index], action.targetZ[index], status.wardUntil[index] > statusTick);
             if ((action.kind[index] === ActorAction.Melee || action.kind[index] === ActorAction.Charge) && action.progress[index] < .5) {
                 const charge = action.kind[index] === ActorAction.Charge, length = ENEMY_SPECIAL.charge.speed * ENEMY_SPECIAL.charge.duration;
                 this.dummy.position.set(x - playerX + (charge ? Math.sin(rotation) * length / 2 : 0), 0,
@@ -275,14 +284,14 @@ export class CombatLayer implements WorldRenderLayer {
             if (enemy.elite[index]) this.color.lerp(ELITE, .38);
             if (enemy.boss[index]) this.color.lerp(BOSS, .5);
             if (enemy.enraged[index]) this.color.lerp(ENRAGED, .6);
-            if (status.slowUntil[index] > state.player.animationTime * GAME_CONFIG.timing.simulationHz) this.color.lerp(FROST, .65);
-            const frozen = status.frozenUntil[index] > state.player.animationTime * GAME_CONFIG.timing.simulationHz;
+            if (status.slowUntil[index] > statusTick) this.color.lerp(FROST, .65);
+            const frozen = status.frozenUntil[index] > statusTick;
             if (frozen) this.color.lerp(FROST, .92);
-            if (status.wardUntil[index] > state.player.animationTime * GAME_CONFIG.timing.simulationHz) this.color.lerp(HEAL, .45);
+            if (status.wardUntil[index] > statusTick) this.color.lerp(HEAL, .45);
             if (vitals.hitFlash[index] > 0) this.color.setRGB(2, 2, 2);
             for (const mesh of this.actors.enemies[ENEMY_DEFINITIONS[enemy.kind[index]].model]) {
                 const instance = mesh.count++;
-                this.setInstance(mesh, instance, x, this.height(x, z), z, position.radius[index] / .3, rotation);
+                this.setInstance(mesh, instance, x, groundHeight, z, position.radius[index] / .3, rotation);
                 mesh.setColorAt(instance, this.color);
                 mesh.geometry.getAttribute("actorHome").setXY(instance, homeX - playerX, homeZ - playerZ);
                 this.actors.animateEnemy(mesh, instance, index, ids[index], frozen ? 0 : state.player.animationTime, frozen ? ActorAction.Idle : action.kind[index], frozen ? 0 : action.progress[index]);
@@ -291,7 +300,7 @@ export class CombatLayer implements WorldRenderLayer {
                     const scale = position.radius[index] / .3, sin = Math.sin(rotation), cos = Math.cos(rotation);
                     const hx = x + (this.hand.x * cos + this.hand.z * sin) * scale;
                     const hz = z + (this.hand.z * cos - this.hand.x * sin) * scale;
-                    this.enemyEffects.hand(action.kind[index], action.progress[index], hx, this.height(x, z) + this.hand.y * scale, hz,
+                    this.enemyEffects.hand(action.kind[index], action.progress[index], hx, groundHeight + this.hand.y * scale, hz,
                         action.targetX[index], action.targetZ[index], rotation, this.effectHeight);
                 }
             }
@@ -359,11 +368,11 @@ export class CombatLayer implements WorldRenderLayer {
             chestMesh.setColorAt(instance, this.color);
             this.lootEffects.add(x - playerX, y, z - playerZ, RARITIES.indexOf(CHEST_RULES[CHEST_TIERS[tier]].rarity), index, true);
         }
-        uploadCombatInstances(chestMesh); this.lootEffects.upload();
+        uploadCombatInstances(chestMesh); this.lootEffects.upload(); this.statusEffects.upload();
     }
 
     public reset(): void {
-        this.actors?.reset(); this.presentationTime = -1; this.enemyEffects.reset();
+        this.actors?.reset(); this.presentationTime = -1; this.enemyEffects.reset(); this.statusEffects.reset();
         this.damageNumbers?.reset();
         this.root.visible = this.groundProjection.root.visible = false;
         this.projectiles.count = this.experience.count = 0;
@@ -393,7 +402,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.host?.removeObject(this.root);
         this.host = undefined;
         this.actors?.dispose();
-        this.effects?.dispose(); this.enemyEffects.dispose();
+        this.effects?.dispose(); this.enemyEffects.dispose(); this.statusEffects.dispose();
         this.damageNumbers?.dispose();
         this.lootModels?.dispose();
         this.lootEffects.dispose();

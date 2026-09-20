@@ -8,6 +8,7 @@ import type { CombatRenderState } from "../../src/core/CombatState";
 import type { EnemyKind } from "../../src/core/EnemyDefinitions";
 import type { SkillSystem } from "../../src/core/SkillSystem";
 import { EffectKind } from "../../src/core/CombatEffects";
+import { StatusKind } from "../../src/core/StatusSystem";
 import { enterWilds, advanceCombat, combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
 
 test("tree hover, bounded panning, held point allocation and one-click respec", async ({ page }, info) => {
@@ -57,9 +58,12 @@ test("tree hover, bounded panning, held point allocation and one-click respec", 
     await expect(points).toHaveAttribute("data-points", String(initial - held));
     await panel.locator('[data-node="icebolt"]').focus(); await page.keyboard.press("Space"); await page.keyboard.press("Digit6");
     await expect(panel.locator('[data-skill-slot="5"]')).toContainText("冰霜弹");
+    await expect(panel.locator('[data-node="icebolt"] .node-equipped')).toHaveText("已装备 6");
+    await panel.locator('[data-node="icebolt"]').hover(); await expect(page.getByRole("tooltip")).toContainText("已装备 · 槽位 6");
     await panel.getByRole("button", { name: "免费洗点", exact: true }).click();
     await expect(points).toHaveAttribute("data-points", String(initial));
     await expect(panel.locator('[data-skill-slot="5"]')).toContainText("空槽位");
+    await expect(panel.locator('[data-node="icebolt"] .node-equipped')).toHaveCount(0);
     await expect(panel.locator(".node-point-controls > span")).toHaveText("0");
     await scroll.evaluate(el => { el.scrollTop = 235; el.scrollLeft = 155; });
     await page.screenshot({ path: info.outputPath("skill-tree-panning.png") });
@@ -179,5 +183,30 @@ test("constellation drafts, six slots, drag inputs and casting recovery work thr
     });
     expect(rendered.pools).toEqual([1, 1, 2, 1, 1]);
     expect(rendered.effects).toBeGreaterThan(0); expect(rendered.ward).toBe(true); expect(rendered.kinds).toContain(EffectKind.IceBolt);
-    await page.screenshot({ path: info.outputPath("ice-cast-and-monsters.png") }); expect(errors).toEqual([]);
+    await page.screenshot({ path: info.outputPath("ice-cast-and-monsters.png") });
+    await combatWorker(page).evaluate(({ slow, frozen }) => {
+        const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        const fixture = simulation as unknown as { entities: CombatWorld; skills: SkillSystem; attackCooldown: number };
+        const e = fixture.entities, tick = simulation.tick;
+        fixture.skills.restore(fixture.skills.checkpoint(tick), tick); fixture.attackCooldown = 0;
+        while (e.projectiles.count) e.remove(e.projectiles.slots[0]);
+        for (let i = 0; i < e.enemies.count; i++) e.status.clear(e.enemies.slots[i]);
+        const first = e.enemies.slots[0], second = e.enemies.slots[1], source = e.world.ids[e.player];
+        e.status.apply(slow, source, e.world.ids[first], .5, tick + 240, tick);
+        e.status.apply(frozen, source, e.world.ids[second], 1, tick + 120, tick);
+        e.status.apply(frozen, source, source, 1, tick + 120, tick);
+    }, { slow: StatusKind.Slow, frozen: StatusKind.Frozen });
+    await advanceCombat(page, 1);
+    const counts = () => page.evaluate(() => {
+        const session = window.survivorApplication!.session as unknown as { view: { layer: { statusEffects: { ground: InstancedMesh; crystals: InstancedMesh; ice: InstancedMesh } } } };
+        const effects = session.view.layer.statusEffects;
+        return [effects.ground.count, effects.crystals.count, effects.ice.count];
+    });
+    await expect.poll(counts).toEqual([3, 9, 2]);
+    // Save through the real authority/persistence barrier while controls suppress ordinary attacks.
+    const saved = await page.evaluate(async () => (await window.survivorApplication!.session.save("manual-1")).checkpoint.attackCooldown);
+    expect(saved).toBe(0);
+    await page.screenshot({ path: info.outputPath("slow-and-frozen-actors.png") });
+    await advanceCombat(page, 120); await expect.poll(counts).toEqual([1, 3, 0]);
+    expect(errors).toEqual([]);
 });

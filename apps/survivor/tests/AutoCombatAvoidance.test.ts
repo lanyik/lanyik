@@ -49,7 +49,7 @@ function arena(attack: Attack, enabled: boolean, heading = 0, terrain = OPEN_TER
     a.targetX[slot] = e.position.x[e.player]; a.targetZ[slot] = e.position.z[e.player]; a.variant[slot] = boss ? 5 : 3;
     a.reach[slot] = attack.kind === ActorAction.Melee ? 1.2 : 9;
     const chests = { count: 0, x: new Float64Array(1), z: new Float64Array(1), tiers: new Uint8Array(1) };
-    const controller = new PlayerAutoCombat(e, chests, () => {}); controller.setEnabled(enabled);
+    const controller = new PlayerAutoCombat(e, chests, () => {}, undefined); controller.setEnabled(enabled);
     let vx = 0, vz = 0, evaded = false, travel = 0;
     const step = (tick: number) => {
         const movement = controller.update(rest, tick, stats, vx, vz), p = e.position, player = e.player;

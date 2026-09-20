@@ -15,17 +15,41 @@ import { createConsumable } from "../src/core/InventoryItem";
 const rest = { x: 0, z: 0, active: false };
 const stats = deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, sumEquipment({}));
 const region = new RegionalWorld("auto-arena", { x: 0, z: 0 }).regionAt(0, 0);
-function arena(terrain = OPEN_TERRAIN) {
+function arena(terrain = OPEN_TERRAIN, regions?: Pick<RegionalWorld, "regionAt">) {
     const e = new CombatWorld(0, 0, terrain), heal = vi.fn();
     e.vitals.health[e.player] = e.vitals.maxHealth[e.player] = stats.maxHealth;
     const chests = { count: 0, x: new Float64Array(3), z: new Float64Array(3), tiers: new Uint8Array(3) };
-    const controller = new PlayerAutoCombat(e, chests, heal);
+    const controller = new PlayerAutoCombat(e, chests, heal, regions);
     const spawn = (x: number, z: number) => e.spawnEnemy({ x, z, kind: EnemyKind.Grunt, level: 1, elite: false, boss: false, region }, { resident: true });
     const update = (tick: number, input = rest) => controller.update(input, tick, stats);
     return { e, chests, controller, spawn, update, heal };
 }
 
 describe("player auto combat", () => {
+    test("wide search weights higher-level regions, keeps targets stable and yields to local combat", () => {
+        const a = arena(); a.spawn(-24, 0); const high = a.spawn(28, 0);
+        a.e.enemy.regions[high] = { ...region, level: 11 };
+        const query = vi.spyOn(a.e, "queryNearby"); a.controller.setEnabled(true);
+        expect(a.update(1).x).toBe(1);
+        expect(query.mock.calls.filter(call => call[3] > 16).map(call => call[3])).toEqual([32]);
+        query.mockClear(); expect(a.update(13).x).toBe(1);
+        expect(query.mock.calls.filter(call => call[3] > 16)).toHaveLength(0);
+        a.spawn(-2, 0); a.update(25); expect(a.controller.activity).toBe("fight");
+    });
+    test("empty searches expand at most twice a second and stay inside the resident search bound", () => {
+        const a = arena(); a.spawn(49, 0); const query = vi.spyOn(a.e, "queryNearby"); a.controller.setEnabled(true);
+        for (let tick = 1; tick <= 120; tick++) expect(a.update(tick).active).toBe(false);
+        expect(query.mock.calls.filter(call => call[3] > 16).map(call => call[3])).toEqual([32, 48, 32, 48]);
+        const distant = arena(); distant.spawn(40, 0); distant.controller.setEnabled(true);
+        expect(distant.update(1)).toMatchObject({ active: true, x: 1 });
+    });
+    test("empty wilds explore toward higher region levels without creating resident chunks; arenas remain idle", () => {
+        const regions = { regionAt: vi.fn((x: number, _z: number) => ({ ...region, level: x > 20 ? 11 : 1 })) };
+        const a = arena(OPEN_TERRAIN, regions); a.controller.setEnabled(true);
+        const move = a.update(1); expect(move.x).toBeGreaterThan(.5); expect(a.controller.activity).toBe("seek");
+        const calls = regions.regionAt.mock.calls.length; a.update(13); expect(regions.regionAt).toHaveBeenCalledTimes(calls);
+        const arenaOnly = arena(); arenaOnly.controller.setEnabled(true); expect(arenaOnly.update(1).active).toBe(false);
+    });
     test("a safe stationary cast suspends pursuit, but an incoming bolt still preempts it", () => {
         const a = arena(); a.spawn(12, 0); a.controller.setEnabled(true);
         expect(a.update(1).active).toBe(true); expect(a.controller.canStopToCast).toBe(true);
@@ -81,7 +105,7 @@ describe("player auto combat", () => {
         a.controller.setEnabled(false); expect(a.update(61)).toBe(rest);
     });
 
-    test("nearby chests precede searching, combat preempts chests, and distant targets are ignored", () => {
+    test("nearby chests precede searching, combat preempts chests, and empty local search expands", () => {
         const a = arena(); a.controller.setEnabled(true); a.spawn(12, 0);
         a.chests.count = 2; a.chests.x[0] = -4; a.chests.z[1] = 7;
         expect(a.update(1)).toMatchObject({ x: -1, active: true }); expect(a.controller.activity).toBe("chest");
@@ -90,7 +114,7 @@ describe("player auto combat", () => {
         a.update(13); expect(a.controller.activity).toBe("fight");
         while (a.e.enemies.count) a.e.remove(a.e.enemies.slots[0]);
         a.chests.count = 0; a.spawn(17, 0);
-        expect(a.update(25)).toMatchObject({ active: false }); expect(a.controller.activity).toBe("idle");
+        expect(a.update(25)).toMatchObject({ active: true, x: 1 }); expect(a.controller.activity).toBe("seek");
     });
 
     test("target handles cannot follow a recycled enemy slot and equal distances use stable identities", () => {
@@ -202,6 +226,17 @@ describe("bounded local paths and threat observation", () => {
             if (Math.hypot(p.x[slot] - 6, p.z[slot]) < .95) { reached = true; break; }
         }
         expect(reached).toBe(true);
+    });
+    test("remote pursuit crosses a local detour using bounded navigation legs", () => {
+        const terrain = wall(), move = vi.spyOn(terrain, "move"), a = arena(terrain); a.spawn(40, 0); a.controller.setEnabled(true);
+        let reached = false;
+        for (let tick = 1; tick <= 3000; tick++) {
+            const movement = a.update(tick);
+            a.e.moveActor(a.e.player, movement.x * stats.moveSpeed / 120, movement.z * stats.moveSpeed / 120);
+            if (a.e.position.x[a.e.player] > 32) { reached = true; break; }
+        }
+        expect(reached).toBe(true);
+        expect(Math.max(...move.mock.calls.map(call => Math.hypot(call[2], call[3])))).toBeLessThanOrEqual(12.000001);
     });
     test("projectile prediction uses hostile live trajectories and ignores friendly fire", () => {
         const a = arena(), threats = new AutoCombatThreats(a.e);

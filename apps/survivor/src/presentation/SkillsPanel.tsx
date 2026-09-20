@@ -42,8 +42,9 @@ function keyMove(event: KeyboardEvent, node: SkillNode, nodes: readonly SkillNod
     }
     if (nearest) { select(nearest.id); document.getElementById("skill-node-" + nearest.id)?.focus(); }
 }
-const SkillGraph = memo(function SkillGraph({ nodes, ranks, committed, selected, level, select }: {
+const SkillGraph = memo(function SkillGraph({ nodes, ranks, committed, loadout, selected, level, select }: {
     readonly nodes: readonly SkillNode[]; readonly ranks: readonly number[]; readonly committed: readonly number[];
+    readonly loadout: readonly (SkillId | null)[];
     readonly selected: string; readonly level: number; readonly select: (id: string) => void;
 }) {
     const drag = useSkillDrag();
@@ -61,16 +62,18 @@ const SkillGraph = memo(function SkillGraph({ nodes, ranks, committed, selected,
         {nodes[0]?.frost && <><span className="constellation-label damage-path">碎裂之径</span><span className="constellation-label control-path">永冬之径</span></>}
         {nodes.map(node => {
             const rank = ranks[nodeIndex(node.id)], current = committed[nodeIndex(node.id)], reason = nodeRequirement(node, ranks, level);
-            const learned = rank > 0, draft = rank !== current;
-            return <IconTooltip key={node.id} identity={"node:" + node.id} className="tree-node-tooltip" anchorStyle={{ left: node.x, top: node.y }} content={<div className="tree-node-preview"><h3>{node.name}</h3><b>{rank} / {node.maximum}{draft ? ` · 已学 ${current} 级` : ""}</b><p>{node.description}</p><p>{reason ?? "前置满足"}</p>{node.parent && <small>前置：{SKILL_NODES[nodeIndex(node.parent)].name} {node.parentRank} 级</small>}<p>点击查看数值与加点 · 长按 ＋ 连续提升</p></div>}>
+            const learned = rank > 0, draft = rank !== current, slot = node.kind === "active" && node.skill ? loadout.indexOf(node.skill) : -1;
+            const equipped = slot >= 0 ? `已装备 · 槽位 ${slot + 1}` : "";
+            return <IconTooltip key={node.id} identity={"node:" + node.id} className="tree-node-tooltip" anchorStyle={{ left: node.x, top: node.y }} content={<div className="tree-node-preview"><h3>{node.name}</h3><b>{rank} / {node.maximum}{draft ? ` · 已学 ${current} 级` : ""}</b>{equipped && <p className="node-equipped-detail">{equipped}</p>}<p>{node.description}</p><p>{reason ?? "前置满足"}</p>{node.parent && <small>前置：{SKILL_NODES[nodeIndex(node.parent)].name} {node.parentRank} 级</small>}<p>点击查看数值与加点 · 长按 ＋ 连续提升</p></div>}>
             <button id={"skill-node-" + node.id} type="button" data-node={node.id} data-skill={node.kind === "active" ? node.skill : undefined}
-                className={"constellation-node " + node.kind + (learned ? " learned" : "") + (reason && !learned ? " locked" : "") + (draft ? " draft" : "")}
-                aria-pressed={selected === node.id} aria-label={node.name + " " + rank + "/" + node.maximum}
+                className={"constellation-node " + node.kind + (learned ? " learned" : "") + (reason && !learned ? " locked" : "") + (draft ? " draft" : "") + (equipped ? " equipped" : "")}
+                aria-pressed={selected === node.id} aria-label={node.name + " " + rank + "/" + node.maximum + (equipped ? " · " + equipped : "")}
                 onClick={() => select(node.id)} onKeyDown={event => { if (event.key === " " && node.kind === "active" && node.skill && current > 0) drag.keyboard(event, node.skill); else keyMove(event, node, nodes, select); }}
                 onPointerDown={event => { if (node.kind === "active" && node.skill && current > 0) drag.begin(event, node.skill); }}>
                 <span className="node-aura" />
                 <span className="node-emblem">{node.kind === "active" && node.skill ? <SkillIcon id={node.skill} /> : node.kind === "mastery" ? "✧" : node.kind === "passive" ? "✦" : node.modifier === "power" ? "⚔" : node.modifier === "shape" ? "⌖" : "◷"}</span>
                 <span className="node-name">{node.name}</span><span className="node-rank">{rank}<i> / {node.maximum}</i></span>
+                {equipped && <span className="node-equipped" aria-hidden="true">已装备 {slot + 1}</span>}
             </button></IconTooltip>;
         })}
     </div>;
@@ -91,7 +94,7 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
     const theme = SCHOOLS.find(entry => entry.id === school)!;
     const nodes = useMemo(() => school === "frost" ? SKILL_NODES.filter(node => node.frost)
         : SKILL_NODES.filter(node => node.skill && node.kind === "active" && SCHOOL_SKILLS[school].includes(node.skill))
-            .map((node, i) => ({ ...node, x: 460 + (i % 2) * 320, y: 130 + Math.floor(i / 2) * 235 })), [school]);
+            .map((node, i, group) => ({ ...node, x: group.length === 1 ? 620 : 460 + (i % 2) * 320, y: 130 + Math.floor(i / 2) * 235 })), [school]);
     useEffect(() => {
         const element = scroller.current;
         if (element) { element.scrollLeft = Math.max(0, (MAP_WIDTH - element.clientWidth) / 2); element.scrollTop = 0; }
@@ -115,7 +118,8 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
     function locate() {
         const shown = nodes.find(candidate => candidate.id === selected);
         if (shown && scroller.current) {
-            scroller.current.scrollTo({ left: Math.max(0, shown.x - scroller.current.clientWidth / 2), top: Math.max(0, shown.y - scroller.current.clientHeight / 2), behavior: "smooth" });
+            const margin = Math.max(0, (scroller.current.clientWidth - MAP_WIDTH) / 2);
+            scroller.current.scrollTo({ left: Math.max(0, margin + shown.x - scroller.current.clientWidth / 2), top: Math.max(0, shown.y - scroller.current.clientHeight / 2), behavior: "smooth" });
         }
     }
     return <section className="skills-window constellation-window window" role="dialog" aria-label="技能" style={{ "--school-color": theme.color } as CSSProperties}>
@@ -134,7 +138,7 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
                     onPointerMove={event => { const start = pan.current; if (!start || start.id !== event.pointerId) return; event.currentTarget.scrollLeft = start.left + start.x - event.clientX; event.currentTarget.scrollTop = start.top + start.y - event.clientY; }}
                     onPointerUp={event => { if (pan.current?.id === event.pointerId) { pan.current = undefined; delete event.currentTarget.dataset.panning; event.currentTarget.releasePointerCapture(event.pointerId); } }}
                     onPointerCancel={event => { pan.current = undefined; delete event.currentTarget.dataset.panning; }} onLostPointerCapture={event => { pan.current = undefined; delete event.currentTarget.dataset.panning; }}>
-                    <SkillGraph nodes={nodes} ranks={draft} committed={skills.build.ranks} level={level} selected={selected} select={select} /></div>
+                    <SkillGraph nodes={nodes} ranks={draft} committed={skills.build.ranks} loadout={skills.loadout} level={level} selected={selected} select={select} /></div>
                 <div className="constellation-legend"><span>□ 主动</span><span>○ 强化</span><span>◇ 专精</span><b>{school === "frost" ? "本系投入 " + investedPoints(draft, true) : "现有术式 · 专属分支随后接入"}</b></div>
             </div>
             <aside className="constellation-details" aria-label="节点详情" ref={details}>

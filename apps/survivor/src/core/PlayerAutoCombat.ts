@@ -5,10 +5,12 @@ import type { DerivedStats } from "./CombatStats";
 import { PLAYER_RADIUS, ticksForSeconds, ticksPerUpdate } from "./GameConfig";
 import { AutoCombatPath } from "./AutoCombatPath";
 import { AutoCombatThreats } from "./AutoCombatThreats";
+import type { RegionalWorld } from "./RegionalWorld";
 
 export type AutoCombatActivity = "off" | "manual" | "evade" | "fight" | "chest" | "seek" | "idle";
 const DECISION_TICKS = ticksPerUpdate(10), SEARCH_RADIUS = 16, CHEST_RADIUS = 6;
 const MANUAL_GRACE = ticksForSeconds(.35), BLOCKED_TICKS = ticksForSeconds(1.5);
+const WIDE_RADIUS = 48, WIDE_INTERVAL = ticksForSeconds(.5), LEG_DISTANCE = 12;
 const branch = (test: (c: PlayerAutoCombat) => boolean, tick: (c: PlayerAutoCombat) => void): BehaviorNode<PlayerAutoCombat> => ({
     type: "sequence", children: [{ type: "condition", test }, { type: "action", tick: c => { tick(c); return BehaviorStatus.Running; }, halt: () => {} }]
 });
@@ -20,6 +22,7 @@ export class PlayerAutoCombat {
         branch(c => c.enemySlot >= 0 && (c.engaged || c.attackable), c => { c.engaged = true; c.fight(); }),
         branch(c => c.chooseChest(), c => c.approach("chest", c.chestX, c.chestZ, .65)),
         branch(c => c.enemySlot >= 0, c => c.fight()),
+        branch(c => !!c.regions, c => c.explore()),
         branch(() => true, c => c.stop("idle"))
     ] });
     private readonly running = new Int16Array(1).fill(-1);
@@ -46,6 +49,12 @@ export class PlayerAutoCombat {
     private arrival = 0;
     private nextDecision = 0;
     private nextPlan = 0;
+    private nextWideSearch = 0;
+    private exploring = false;
+    private headingX = 0;
+    private headingZ = 1;
+    private navigationX = 0;
+    private navigationZ = 0;
     private manualUntil = 0;
     private progressX = 0;
     private progressZ = 0;
@@ -55,7 +64,8 @@ export class PlayerAutoCombat {
     private enabledValue = false;
     private activityValue: AutoCombatActivity = "off";
 
-    constructor(private readonly entities: CombatWorld, private readonly chests: ChestRenderBuffer, private readonly heal: () => void) {
+    constructor(private readonly entities: CombatWorld, private readonly chests: ChestRenderBuffer, private readonly heal: () => void,
+        private readonly regions: Pick<RegionalWorld, "regionAt"> | undefined) {
         this.path = new AutoCombatPath(entities.terrain); this.threats = new AutoCombatThreats(entities);
     }
     public get enabled(): boolean { return this.enabledValue; }
@@ -67,7 +77,8 @@ export class PlayerAutoCombat {
     public setEnabled(enabled: boolean): void {
         PlayerAutoCombat.tree.halt(this, 0, this.running);
         this.enabledValue = enabled; this.target = 0; this.enemySlot = -1; this.engaged = this.attackable = false;
-        this.nextDecision = this.manualUntil = 0; this.evading = this.stationarySafe = false;
+        this.nextDecision = this.manualUntil = this.nextWideSearch = 0; this.evading = this.stationarySafe = false;
+        this.exploring = false; this.headingX = 0; this.headingZ = 1;
         this.rejectedUntil.fill(0); this.stop(enabled ? "idle" : "off");
     }
 
@@ -107,6 +118,7 @@ export class PlayerAutoCombat {
     }
 
     private stop(activity: AutoCombatActivity): void {
+        this.exploring = false;
         this.activityValue = activity; this.movement.x = this.movement.z = 0; this.movement.active = false;
         this.path.cancel(); this.nextPlan = 0;
     }
@@ -133,6 +145,7 @@ export class PlayerAutoCombat {
             this.attackable = (p.x[this.enemySlot] - x) ** 2 + (p.z[this.enemySlot] - z) ** 2 <= attackRange && e.canSee(e.player, this.enemySlot, .11);
             return;
         }
+        const previous = this.enemySlot;
         this.target = 0; this.enemySlot = -1; this.engaged = false;
         const nearby = e.queryNearby(Component.Enemy, x, z, SEARCH_RADIUS);
         let nearest = SEARCH_RADIUS ** 2, attackNearest = attackRange, attackSlot = -1;
@@ -147,10 +160,54 @@ export class PlayerAutoCombat {
             }
         }
         if (attackSlot >= 0) { this.enemySlot = attackSlot; this.target = e.world.ids[attackSlot]; this.attackable = true; }
+        if (this.enemySlot >= 0) return;
+        // Keep a remote pursuit stable; a fresh local target above can still preempt it.
+        if (previous >= 0 && (p.x[previous] - x) ** 2 + (p.z[previous] - z) ** 2 <= WIDE_RADIUS ** 2
+            && !this.rejected(p.x[previous], p.z[previous])) {
+            this.enemySlot = previous; this.target = e.world.ids[previous]; return;
+        }
+        if (this.tick < this.nextWideSearch) return;
+        this.nextWideSearch = this.tick + WIDE_INTERVAL;
+        const localLevel = this.regions?.regionAt(x, z).level ?? 1;
+        for (let radius = 32; radius <= WIDE_RADIUS; radius += 16) {
+            const candidates = e.queryNearby(Component.Enemy, x, z, radius);
+            let best = Infinity;
+            for (let i = 0; i < candidates.count; i++) {
+                const slot = candidates.slots[i], id = e.world.ids[slot];
+                if (this.rejected(p.x[slot], p.z[slot])) continue;
+                const distance = Math.hypot(p.x[slot] - x, p.z[slot] - z);
+                const level = e.enemy.regions[slot]!.level;
+                const score = distance / (1 + .12 * Math.min(10, Math.max(0, level - localLevel)));
+                if (score < best || score === best && (!this.target || id < this.target)) {
+                    best = score; this.target = id; this.enemySlot = slot;
+                }
+            }
+            if (this.enemySlot >= 0) return;
+        }
     }
     private fight(): void {
+        this.exploring = false;
         if (this.attackable) this.stop("fight");
         else this.approach("seek", this.entities.position.x[this.enemySlot], this.entities.position.z[this.enemySlot], .35);
+    }
+
+    private explore(): void {
+        if (!this.exploring || Math.hypot(this.goalX - this.x, this.goalZ - this.z) < 1) {
+            const localLevel = this.regions!.regionAt(this.x, this.z).level;
+            let best = -Infinity, dx = 0, dz = 0;
+            for (let i = 0; i < 8; i++) {
+                const angle = i * Math.PI / 4, x = Math.sin(angle), z = Math.cos(angle);
+                if (this.rejected(this.x + x * LEG_DISTANCE, this.z + z * LEG_DISTANCE)) continue;
+                // Metadata only: looking ahead never activates chunks or spawns actors.
+                const level = this.regions!.regionAt(this.x + x * 40, this.z + z * 40).level;
+                const score = .25 * Math.max(-10, Math.min(10, level - localLevel)) + .3 * (x * this.headingX + z * this.headingZ);
+                if (score > best) { best = score; dx = x; dz = z; }
+            }
+            if (best === -Infinity) { this.stop("idle"); return; }
+            this.headingX = dx; this.headingZ = dz;
+            this.approach("seek", this.x + dx * LEG_DISTANCE, this.z + dz * LEG_DISTANCE, .6);
+            this.exploring = true;
+        } else this.approach("seek", this.goalX, this.goalZ, .6);
     }
     private chooseChest(): boolean {
         if (this.activityValue === "chest" && Math.hypot(this.chestX - this.x, this.chestZ - this.z) <= 8 && !this.rejected(this.chestX, this.chestZ)) {
@@ -167,15 +224,18 @@ export class PlayerAutoCombat {
     }
 
     private approach(activity: "chest" | "seek", x: number, z: number, arrival: number): void {
+        if (activity === "chest") this.exploring = false;
         const changed = activity !== this.activityValue || Math.hypot(x - this.plannedX, z - this.plannedZ) > 1;
         this.activityValue = activity; this.goalX = x; this.goalZ = z; this.arrival = arrival;
         if (changed) { this.path.cancel(); this.nextPlan = 0; this.progressAt = this.tick; this.progressX = this.x; this.progressZ = this.z; }
         if (this.tick < this.nextPlan || this.path.status === "searching") return;
         this.nextPlan = this.tick + ticksForSeconds(.75);
         this.plannedX = x; this.plannedZ = z;
-        const moved = this.entities.terrain.move(this.x, this.z, x - this.x, z - this.z, PLAYER_RADIUS, false);
-        if (Math.hypot(moved.x - x, moved.z - z) < 1e-5) this.path.cancel();
-        else if (this.path.status !== "ready") this.path.begin(this.x, this.z, x, z);
+        const scale = Math.min(1, LEG_DISTANCE / Math.max(.001, Math.hypot(x - this.x, z - this.z)));
+        this.navigationX = this.x + (x - this.x) * scale; this.navigationZ = this.z + (z - this.z) * scale;
+        const moved = this.entities.terrain.move(this.x, this.z, this.navigationX - this.x, this.navigationZ - this.z, PLAYER_RADIUS, false);
+        if (Math.hypot(moved.x - this.navigationX, moved.z - this.navigationZ) < 1e-5) this.path.cancel();
+        else if (this.path.status !== "ready") this.path.begin(this.x, this.z, this.navigationX, this.navigationZ);
     }
 
     private followPath(): void {
@@ -185,8 +245,11 @@ export class PlayerAutoCombat {
             this.progressAt = this.tick; this.progressX = this.x; this.progressZ = this.z;
         } else if (this.tick - this.progressAt >= BLOCKED_TICKS && this.path.status !== "searching") { this.abandon(); return; }
         if (this.path.status === "searching") { this.movement.active = false; this.movement.x = this.movement.z = 0; return; }
-        let x = this.goalX, z = this.goalZ;
+        let x = this.navigationX, z = this.navigationZ;
         const waypoint = this.path.waypoint(this.x, this.z);
+        if (!waypoint && this.path.status === "ready") {
+            this.path.cancel(); this.nextPlan = 0; this.holdCast(); return;
+        }
         if (waypoint) { x = this.path.x; z = this.path.z; }
         const dx = x - this.x, dz = z - this.z, distance = Math.hypot(dx, dz);
         this.movement.active = distance > (waypoint ? .08 : this.arrival);
@@ -197,7 +260,7 @@ export class PlayerAutoCombat {
 
     private chooseDodge(vx: number, vz: number): void {
         const speed = this.stats.moveSpeed, travel = Math.min(6, speed * 1.5);
-        const arrival = this.activityValue === "seek" ? this.stats.attackRange * .85 : this.arrival;
+        const arrival = this.activityValue === "seek" && this.enemySlot >= 0 ? this.stats.attackRange * .85 : this.arrival;
         const intendedTravel = this.movement.active ? Math.min(travel, Math.max(0, Math.hypot(this.goalX - this.x, this.goalZ - this.z) - arrival)) : 0;
         const danger = this.threats.risk(this.movement.x, this.movement.z, speed, intendedTravel, vx, vz, 0);
         const stationary = this.movement.active || danger > 0 ? this.threats.risk(0, 0, speed, 0, vx, vz) : 0;

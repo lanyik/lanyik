@@ -82,6 +82,7 @@ export interface CombatNotice {
 }
 
 export interface PlayerRenderState {
+    readonly entitySlot: number;
     readonly animationTime: number;
     readonly x: number;
     readonly z: number;

@@ -141,6 +141,7 @@ export class CombatSimulation {
     private unspentAttributePoints = 0;
     private gameOverValue = false;
     private readonly playerRenderState: MutablePlayerRenderState = {
+        entitySlot: 0,
         animationTime: 0,
         x: 0,
         z: 0,
@@ -165,11 +166,12 @@ export class CombatSimulation {
         this.random = new DeterministicRandom(`${String(seed)}:combat`);
         this.world = new RegionalWorld(seed, start, terrain);
         this.entities = new CombatWorld(start.x, start.z, terrain);
+        this.playerRenderState.entitySlot = this.entities.player;
         this.resolution = new CombatResolution(this.entities);
         this.rewards = new CombatRewards(this.entities, spirit, seed);
         this.behavior = new EnemyBehavior(this.entities, isChallenge(location) ? { residencyAt: () => "near" } : this.world);
         this.skills = new SkillSystem(this.entities);
-        this.autoCombat = new PlayerAutoCombat(this.entities, this.chests, () => this.useConsumable("health"));
+        this.autoCombat = new PlayerAutoCombat(this.entities, this.chests, () => this.useConsumable("health"), location === "wilds" ? this.world : undefined);
         this.renderState = { combatText: this.entities.combatText.buffer, player: this.playerRenderState, chests: this.chests, effects: this.entities.effects.buffer,
             entities: { ids: this.entities.world.ids, enemies: this.entities.enemies, projectiles: this.entities.projectiles,
                 experience: this.entities.experience, loot: this.entities.loot, position: this.entities.position,
@@ -781,7 +783,9 @@ export class CombatSimulation {
     }
 
     private fireWeapon(): void {
-        this.attackCooldown -= STEP_SECONDS;
+        const remaining = this.attackCooldown - STEP_SECONDS;
+        // Retain sub-tick cadence only on a successful shot, never debt accumulated while casting/controlled.
+        this.attackCooldown = Math.max(0, remaining);
         if (this.skills.busy(this.tickValue) || !this.entities.status.canAct(this.entities.player, this.tickValue)) return;
         if (this.attackCooldown > 0 || this.entities.projectiles.count === MAX_PROJECTILES) return;
         let target = -1;
@@ -817,7 +821,7 @@ export class CombatSimulation {
             this.stats.attackRange / projectileSpeed + 0.25,
             { critical, height: .8, groundX: this.playerX, groundZ: this.playerZ,
                 velocityY: distance > 0 ? (this.entities.aimHeight(target) - this.entities.aimHeight(this.entities.player)) * projectileSpeed / (distance - launchOffset) : 0 }
-        )) this.attackCooldown += 1 / this.stats.attackRate;
+        )) this.attackCooldown = Math.max(0, remaining + 1 / this.stats.attackRate);
     }
 
     private resolveImpacts(): void {

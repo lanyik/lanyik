@@ -152,7 +152,7 @@ function autoAvoidance() {
             -Math.sin(angle) * 4.5, -Math.cos(angle) * 4.5, 1, 2, { turnRate: index % 2 ? .65 : -.65 });
     }
     const chests = { count: 0, x: new Float64Array(0), z: new Float64Array(0), tiers: new Uint8Array(0) };
-    const controller = new current.PlayerAutoCombat(entities, chests, () => {}), timings = [];
+    const controller = new current.PlayerAutoCombat(entities, chests, () => {}, undefined), timings = [];
     const started = performance.now();
     // Repeated identical worst-capacity decisions; these timings are per decision, not amortized ticks.
     for (let index = 0; index < 120; index++) {
@@ -185,8 +185,29 @@ function autoLoadout() {
         p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
 }
 
+function autoSearch() {
+    const entities = new current.CombatWorld(0, 0), regions = new current.RegionalWorld("wide-search-budget", { x: 0, z: 0 });
+    const stats = current.deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, current.sumEquipment({}));
+    entities.vitals.health[entities.player] = stats.maxHealth;
+    for (let i = 0; i < current.MAX_ENEMIES; i++) {
+        const angle = i * Math.PI * 2 / current.MAX_ENEMIES, x = Math.sin(angle) * 40, z = Math.cos(angle) * 40;
+        entities.spawnEnemy({ x, z, kind: current.EnemyKind.Grunt, level: 1, elite: false, boss: false, region: regions.regionAt(x, z) }, { resident: true });
+    }
+    const controller = new current.PlayerAutoCombat(entities, { count: 0, x: new Float64Array(0), z: new Float64Array(0), tiers: new Uint8Array(0) }, () => {}, regions);
+    const timings = [], started = performance.now();
+    // Force reacquisition every sample, including both empty inner rings and the full 896-actor outer ring.
+    for (let i = 0; i < 120; i++) {
+        controller.setEnabled(true); const before = performance.now();
+        const movement = controller.update({ x: 0, z: 0, active: false }, 1, stats);
+        timings.push(performance.now() - before); assert.ok(movement.active); assert.equal(controller.activity, "seek");
+    }
+    const elapsed = performance.now() - started; timings.sort((a, b) => a - b);
+    return { msPerDecision: elapsed / 120, decisions: 120, enemies: current.MAX_ENEMIES, searchRadius: 48,
+        p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
+}
+
 const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), iceEffects: measure(iceEffects, 3), terrain: measure(terrainCombat, 3),
-    autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision"), autoLoadout: measure(autoLoadout, 3, "Decision") };
+    autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision"), autoSearch: measure(autoSearch, 3, "Decision"), autoLoadout: measure(autoLoadout, 3, "Decision") };
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
     simulationHz: current.GAME_CONFIG.timing.simulationHz, activeAiHz: current.GAME_CONFIG.timing.activeAiHz,
@@ -195,5 +216,6 @@ if (args.includes("--check")) {
     assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");
     for (const result of [results.travel, results.crowded, results.iceEffects, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
     assert.ok(results.autoAvoidance.medianMsPerDecision <= results.autoAvoidance.budgetMsPerDecision, "Automatic avoidance exceeded its decision CPU budget");
+    assert.ok(results.autoSearch.medianMsPerDecision <= results.autoSearch.budgetMsPerDecision, "Expanded automatic search exceeded its decision CPU budget");
     assert.ok(results.autoLoadout.medianMsPerDecision <= results.autoLoadout.budgetMsPerDecision, "Automatic loadout exceeded its decision CPU budget");
 }

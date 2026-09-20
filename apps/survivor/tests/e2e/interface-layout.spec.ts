@@ -10,7 +10,7 @@ test("windows keep help, actions and navigation reachable across desktop, narrow
     await pauseCombat(page);
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
     const entries = [{ key: "C", name: "角色" }, { key: "B", name: "背包" }, { key: "K", name: "技能" }, { key: "J", name: "打造" }, { key: "L", name: "灵境" }, { key: "H", name: "世界传送" }, { key: "O", name: "游戏与存档" }, { key: "M", name: "地域地图" }];
-    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 1366, height: 520 }]) {
+    for (const viewport of [{ width: 2560, height: 1440 }, { width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 1366, height: 520 }]) {
         await page.setViewportSize(viewport);
         for (const entry of entries) {
             await page.keyboard.press(`Key${entry.key}`);
@@ -29,6 +29,12 @@ test("windows keep help, actions and navigation reachable across desktop, narrow
             expect(bounds.y + bounds.height).toBeLessThan(nav.y);
             expect(await panel.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
             if (entry.key === "K") expect((await panel.locator(".constellation-scroll").boundingBox())!.height).toBeGreaterThan(100);
+            if (entry.key === "K" && viewport.width === 2560) {
+                expect(Math.abs(bounds.x + bounds.width / 2 - viewport.width / 2)).toBeLessThan(1);
+                const scroll = (await panel.locator(".constellation-scroll").boundingBox())!, root = (await panel.locator('[data-node="icebolt"]').boundingBox())!;
+                expect(Math.abs(root.x + root.width / 2 - scroll.x - scroll.width / 2)).toBeLessThan(1);
+                await page.screenshot({ path: info.outputPath("skill-tree-2k.png") });
+            }
             const footer = panel.locator(".action-footer");
             if (await footer.count()) {
                 await expect(footer).toBeVisible();

@@ -11,6 +11,8 @@ import { IndexedDBCharacterRepository } from "../src/app/CharacterRepository";
 import { CombatSession } from "../src/app/CombatSession";
 import { LoopbackCombatTransport } from "./helpers/LoopbackCombatTransport";
 import { shareSnapshot } from "../src/app/ShareSnapshot";
+import type { CombatWorld } from "../src/core/CombatWorld";
+import { StatusKind } from "../src/core/StatusSystem";
 
 afterEach(() => vi.unstubAllGlobals());
 function fixture() {
@@ -39,7 +41,22 @@ test("bad versions, item duplicates, non-finite stats and invalid stacks cannot 
     expect(() => validateCharacterCheckpoint({ ...checkpoint, player: { ...checkpoint.player, gold: NaN } })).toThrow();
     expect(() => validateCharacterCheckpoint({ ...checkpoint, player: { ...checkpoint.player, inventory: [...checkpoint.player.inventory, checkpoint.player.inventory[0]] } })).toThrow();
     expect(() => validateCharacterCheckpoint({ ...checkpoint, nextItemId: 2 })).toThrow();
+    expect(() => validateCharacterCheckpoint({ ...checkpoint, attackCooldown: -.01 })).toThrow();
     simulation.dispose();
+});
+test.each(["casting", "frozen"])("saving during %s keeps weapon cooldown valid and restores without attack debt", mode => {
+    const simulation = new CombatSimulation("save-during-action");
+    const { entities: e } = simulation as unknown as { entities: CombatWorld };
+    simulation.toggleAutoCast();
+    if (mode === "casting") simulation.castSkill("pulse");
+    else e.status.apply(StatusKind.Frozen, e.world.ids[e.player], e.world.ids[e.player], 1, 240, 0);
+    for (let tick = 0; tick < 12; tick++) {
+        simulation.step({ x: 0, z: 0, active: false });
+        expect(simulation.checkpoint().attackCooldown).toBe(0);
+    }
+    const saved = simulation.checkpoint(), restored = new CombatSimulation(saved.seed, saved.origin);
+    restored.restore(saved); expect(restored.checkpoint()).toEqual(saved);
+    simulation.dispose(); restored.dispose();
 });
 test("IndexedDB slots persist across reopen; corrupt slot is isolated; auto does not overwrite manual", async () => {
     vi.stubGlobal("indexedDB", new IDBFactory());
