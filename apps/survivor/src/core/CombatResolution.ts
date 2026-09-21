@@ -32,7 +32,7 @@ export class CombatResolution {
                 const source = impacts.source[i];
                 if (target === player) {
                     if (this.damageImmunity <= 0 && !dashing) this.damagePlayer(source, impacts.damage[i], impacts.elite[i] !== 0, impacts.boss[i] !== 0, tick, stats, random);
-                } else this.hitEnemy(source, target, impacts.damage[i], impacts.critical[i] !== 0, tick, impacts.fireStats[i] ?? stats, random, i);
+                } else this.hitEnemy(source, target, impacts.damage[i], impacts.critical[i] !== 0, tick, impacts.castStats[i] ?? stats, random, i);
                 // Loot consumes the same RNG before the next hit, preserving seeded combat order.
                 e.events.drain(consume);
             }
@@ -47,7 +47,7 @@ export class CombatResolution {
             if (slot < 0 || e.vitals.health[slot] <= 0 || e.vitals.health[e.player] <= 0) return;
             // Periodic damage has no accuracy, critical, on-hit, reflection or brief dodge immunity.
             const defended = slot === e.player ? incomingDamage(stats, base, false, false, false) : base;
-            const damage = e.status.absorb(slot, defended * (1 - e.status.amount(StatusKind.Protection, slot, at)), at);
+            const damage = e.status.absorb(slot, defended * (1 - e.status.protection(slot, at)), at);
             e.vitality.damage(source, target, damage, at, EffectCause.Burn);
             e.vitality.defeat(source, target, at, EffectCause.Burn);
             e.events.drain(consume);
@@ -66,14 +66,21 @@ export class CombatResolution {
         const evasion = enemy.boss[slot] ? ENEMY_HIT_RULES.evasion.boss : elite ? ENEMY_HIT_RULES.evasion.elite : ENEMY_HIT_RULES.evasion.normal;
         if (!random.chance(Math.max(0, Math.min(1, stats.accuracy - evasion)))) { this.prevent(source, slot, tick, Prevention.Dodge); return; }
         if (volley) volley.set(target, (volley.get(target) ?? 0) + 1);
+        const lightning = e.impacts.lightningValues[impact], focus = e.impacts.lightningFocus[impact];
+        if (focus) {
+            const previous = focus.ids[slot] === target ? focus.hits[slot] : 0;
+            rolled *= 1 + Math.min(.15, previous * lightning!.focus);
+            focus.ids[slot] = target; focus.hits[slot] = previous + 1;
+        }
         const frozen = !e.status.canAct(slot, tick);
         if (frozen) rolled *= e.impacts.frozenMultiplier[impact];
         const fire = e.impacts.fireValues[impact];
         const detonation = fire?.detonation ? e.status.burns.consume(source, target) * fire.detonation : 0;
         const damage = e.status.absorb(slot, (outgoingDamage(stats, rolled, e.vitals.maxHealth[slot], elite, random.chance(stats.lethalChance)) + detonation)
-            * (1 - e.status.amount(StatusKind.Protection, slot, tick)), tick);
+            * (1 - e.status.protection(slot, tick)), tick);
         if (detonation > 0) e.effects.add(EffectKind.Detonation, tick, p.x[slot], p.z[slot], p.radius[slot] + .9, .75, p.x[slot], p.z[slot], source);
         if (fire?.protection && world.resolve(source) === player) e.status.apply(StatusKind.Protection, source, source, fire.protection, tick + ticksForSeconds(2), tick);
+        if (lightning?.protection && world.resolve(source) === player) e.status.apply(StatusKind.StaticGuard, source, source, lightning.protection, tick + ticksForSeconds(3), tick);
         const lost = vitality.damage(source, target, damage, tick, EffectCause.Attack, critical);
         vitality.heal(source, world.ids[player], lost * stats.lifesteal * (1 + stats.regenBonus), tick, EffectCause.Lifesteal);
         vitality.defeat(source, target, tick, EffectCause.Attack);
@@ -82,6 +89,7 @@ export class CombatResolution {
             if (e.impacts.chill[impact] > 0) e.status.chill(source, target, e.impacts.chill[impact], tick + e.impacts.chillTicks[impact], tick, e.impacts.freezeTicks[impact]);
             if (fire?.burnDamage) e.status.burns.apply(source, target,
                 stats.damage * fire.burnDamage * (1 + stats.damageIncrease) * (1 + (elite ? stats.eliteDamage : stats.normalDamage)), tick, ticksForSeconds(fire.burnSeconds), fire.stackLimit);
+            if (lightning) e.status.apply(StatusKind.Conductive, source, target, 1, tick + ticksForSeconds(lightning.conductiveSeconds), tick);
         }
     }
 
@@ -93,7 +101,7 @@ export class CombatResolution {
         const criticalChance = boss ? ENEMY_HIT_RULES.criticalChance.boss : elite ? ENEMY_HIT_RULES.criticalChance.elite : ENEMY_HIT_RULES.criticalChance.normal;
         const critical = random.chance(Math.max(0, criticalChance - stats.criticalResistance));
         const blocked = random.chance(stats.blockChance), reduced = incomingDamage(stats, base, elite, critical, blocked)
-            * (1 - e.status.amount(StatusKind.Protection, player, tick));
+            * (1 - e.status.protection(player, tick));
         const damage = e.status.absorb(player, reduced, tick);
         const lost = vitality.damage(source, target, damage, tick, EffectCause.Attack, critical);
         if (lost === 0) this.prevent(source, player, tick, reduced === 0 && blocked ? Prevention.Block : Prevention.Shield);

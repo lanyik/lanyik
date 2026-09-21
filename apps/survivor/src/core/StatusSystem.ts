@@ -2,7 +2,7 @@ import type { EntityWorld } from "./EntityWorld";
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 import { BurnSystem } from "./BurnSystem";
 
-export enum StatusKind { Slow, Protection, Barrier, Chill, Frozen, ControlResistance, Burning }
+export enum StatusKind { Slow, Protection, Barrier, Chill, Frozen, ControlResistance, Conductive, StaticGuard, Burning }
 export enum ControlProfile { Normal, Elite, Boss }
 export const STATUS_DEFINITIONS = Object.freeze([
     { name: "减速", beneficial: false, control: true, sources: 4, maximum: .6 },
@@ -11,8 +11,11 @@ export const STATUS_DEFINITIONS = Object.freeze([
     { name: "寒意", beneficial: false, control: true, sources: 4, maximum: 5 },
     { name: "冻结", beneficial: false, control: true, sources: 1, maximum: 1 },
     { name: "控制抵抗", beneficial: true, control: false, sources: 1, maximum: 1 },
+    { name: "导电", beneficial: false, control: false, sources: 1, maximum: 1 },
+    { name: "静电防护", beneficial: true, control: false, sources: 1, maximum: .05 },
     { name: "灼烧", beneficial: false, control: false, sources: 4, maximum: 32 }
 ] as const);
+export const MAX_SAVED_STATUSES = STATUS_DEFINITIONS.slice(0, StatusKind.Burning).reduce((sum, def) => sum + def.sources, 0);
 export interface SavedStatus { readonly kind: StatusKind; readonly source: number; readonly amount: number; readonly remaining: number }
 const SOURCES = 4;
 /** Independent source deadlines, bounded storage, and cheap projections for movement/actions. */
@@ -24,6 +27,8 @@ export class StatusSystem {
     public readonly slowScale: Float32Array;
     public readonly wardUntil: Float64Array;
     public readonly frozenUntil: Float64Array;
+    public readonly conductiveUntil: Float64Array;
+    public readonly staticGuardUntil: Float64Array;
     public readonly controlProfile: Uint8Array;
     public readonly durationScale: Float64Array;
     private readonly until: Float64Array;
@@ -41,11 +46,13 @@ export class StatusSystem {
         this.active = new Uint32Array(capacity); this.indices = new Int32Array(capacity).fill(-1);
         this.slowUntil = new Float64Array(world.capacity); this.wardUntil = new Float64Array(world.capacity);
         this.frozenUntil = new Float64Array(world.capacity); this.slowScale = new Float32Array(world.capacity).fill(1);
+        this.conductiveUntil = new Float64Array(world.capacity); this.staticGuardUntil = new Float64Array(world.capacity);
         this.controlProfile = new Uint8Array(world.capacity); this.durationScale = new Float64Array(world.capacity).fill(1);
     }
     private base(kind: StatusKind, slot: number): number { return (kind * this.world.capacity + slot) * SOURCES; }
     public canAct(slot: number, tick: number): boolean { return tick >= this.frozenUntil[slot]; }
     public canMove(slot: number, tick: number): boolean { return this.canAct(slot, tick); }
+    public protection(slot: number, tick: number): number { return Math.max(this.amount(StatusKind.Protection, slot, tick), this.amount(StatusKind.StaticGuard, slot, tick)); }
     public apply(kind: StatusKind, source: number, target: number, strength: number, until: number, tick: number): boolean {
         const def = STATUS_DEFINITIONS[kind];
         if (!Number.isInteger(kind) || !def || kind === StatusKind.Burning || !Number.isFinite(strength) || strength <= 0 || strength > def.maximum
@@ -64,6 +71,7 @@ export class StatusSystem {
         let chosen = -1, weakest = base;
         for (let j = 0; j < def.sources; j++) {
             const i = base + j;
+            if (kind === StatusKind.Conductive || kind === StatusKind.StaticGuard) { chosen = i; break; }
             if (this.until[i] <= tick) { if (chosen < 0) chosen = i; }
             else if (kind === StatusKind.Barrier) return false;
             else if (this.sources[i] === source) { chosen = i; break; }
@@ -129,6 +137,7 @@ export class StatusSystem {
         for (let i = base; i < base + SOURCES; i++) if (this.sources[i] === source) this.erase(i);
         this.project(slot, tick);
     }
+    public removeStaticGuard(slot: number): void { this.erase(this.base(StatusKind.StaticGuard, slot)); this.staticGuardUntil[slot] = 0; }
     public advance(tick: number): void {
         if (tick < this.nextExpiry) return;
         this.nextExpiry = Infinity;
@@ -181,7 +190,7 @@ export class StatusSystem {
             const base = this.base(kind, slot);
             for (let j = 0; j < SOURCES; j++) this.erase(base + j);
         }
-        this.slowUntil[slot] = this.wardUntil[slot] = this.frozenUntil[slot] = 0; this.slowScale[slot] = 1;
+        this.slowUntil[slot] = this.wardUntil[slot] = this.frozenUntil[slot] = this.conductiveUntil[slot] = this.staticGuardUntil[slot] = 0; this.slowScale[slot] = 1;
         this.controlProfile[slot] = ControlProfile.Normal; this.durationScale[slot] = 1;
     }
     private project(slot: number, tick: number): void {
@@ -190,6 +199,8 @@ export class StatusSystem {
         this.slowScale[slot] = 1 - Math.min(this.controlProfile[slot] === ControlProfile.Boss ? .2 : .6, slow);
         this.wardUntil[slot] = this.deadline(StatusKind.Protection, slot);
         this.frozenUntil[slot] = this.deadline(StatusKind.Frozen, slot);
+        this.conductiveUntil[slot] = this.deadline(StatusKind.Conductive, slot);
+        this.staticGuardUntil[slot] = this.deadline(StatusKind.StaticGuard, slot);
     }
     private erase(i: number): void {
         const cursor = this.indices[i];

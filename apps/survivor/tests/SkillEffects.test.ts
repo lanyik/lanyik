@@ -78,7 +78,8 @@ test("effect matrices retain sub-tile motion at large logical coordinates", asyn
 });
 
 test.each([EffectKind.Meteor, EffectKind.MeteorImpact, EffectKind.Vortex, EffectKind.Blades, EffectKind.Shatter,
-    EffectKind.FireRay, EffectKind.FireWall, EffectKind.FireDomain, EffectKind.FireImpact, EffectKind.Doom, EffectKind.Detonation])("new choreography %i is bounded, deterministic and uses finite local transforms", async kind => {
+    EffectKind.FireRay, EffectKind.FireWall, EffectKind.FireDomain, EffectKind.FireImpact, EffectKind.Doom, EffectKind.Detonation,
+    EffectKind.ThunderLance, EffectKind.ThunderWarning, EffectKind.ThunderImpact, EffectKind.ThunderField, EffectKind.JudgmentWarning, EffectKind.JudgmentImpact, EffectKind.Tempest])("new choreography %i is bounded, deterministic and uses finite local transforms", async kind => {
     vi.spyOn(AssetLoader.prototype, "texture").mockResolvedValue(new Texture());
     const effects = await SkillEffects.load(new AbortController().signal), facts = new CombatEffects();
     try {

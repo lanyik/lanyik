@@ -4,7 +4,7 @@ import { CombatSimulation } from "../src/core/CombatSimulation";
 import { validateCharacterCheckpoint } from "../src/core/CharacterCheckpoint";
 import { deriveStats } from "../src/core/CombatStats";
 import { sumEquipment } from "../src/core/Equipment";
-import { FIRE_SKILLS, NO_SKILL_MODIFIERS, isUltimate, skillValues } from "../src/core/Skills";
+import { FIRE_SKILLS, LIGHTNING_SKILLS, NO_SKILL_MODIFIERS, isUltimate, skillValues } from "../src/core/Skills";
 
 function ranks(values: Record<string, number>) {
     const result = initialSkillRanks(); for (const [id, value] of Object.entries(values)) result[nodeIndex(id)] = value; return result;
@@ -56,8 +56,8 @@ test("save validation enforces the complete point ledger, six slots and status b
     const simulation = new CombatSimulation("build-save"), save = simulation.checkpoint();
     expect(validateCharacterCheckpoint(save)).toEqual(save);
     expect(() => validateCharacterCheckpoint({ ...save, skills: { ...save.skills, points: 1 } })).toThrow();
-    expect(() => validateCharacterCheckpoint({ ...save, skills: { ...save.skills, loadout: ["pulse", "chain", "dash", "pulse", null, null] } })).toThrow();
-    expect(() => validateCharacterCheckpoint({ ...save, skills: { ...save.skills, loadout: ["pulse", "chain", "dash", "icebolt", null, null] } })).toThrow();
+    expect(() => validateCharacterCheckpoint({ ...save, skills: { ...save.skills, loadout: ["pulse", null, "dash", "pulse", null, null] } })).toThrow();
+    expect(() => validateCharacterCheckpoint({ ...save, skills: { ...save.skills, loadout: ["pulse", null, "dash", "icebolt", null, null] } })).toThrow();
     expect(() => validateCharacterCheckpoint({ ...save, skills: { ...save.skills, statuses: [{ kind: 4, source: 1, amount: 1, remaining: Infinity }] } })).toThrow();
     const learned = ranks({ icebolt: 3, "icebolt.power": 3, frost: 1 });
     const valid = { ...save, player: { ...save.player, level: 8 }, skills: { ...save.skills, points: 7 - investedPoints(learned), ranks: learned } };
@@ -66,7 +66,7 @@ test("save validation enforces the complete point ledger, six slots and status b
 });
 
 test("fire has 34 functional nodes, independent investment gates and its own exclusive masteries", () => {
-    expect(SKILL_NODES.filter(node => node.school === "fire")).toHaveLength(34); expect(SKILL_NODES).toHaveLength(74);
+    expect(SKILL_NODES.filter(node => node.school === "fire")).toHaveLength(34); expect(SKILL_NODES).toHaveLength(107);
     expect(validateSkillRanks(ranks({ icebolt: 10, fireball: 3, fireray: 1 }), 100)).not.toBeNull();
     const fire = ranks({ fireball: 10, "fireball.power": 5, "fireball.shape": 5, "fireball.tempo": 5, fireray: 5, pyroblast: 5,
         firewall: 5, meteor: 5, firedomain: 1, doom: 1, "fire.wildfire": 3,
@@ -89,4 +89,26 @@ test("fire has 34 functional nodes, independent investment gates and its own exc
     const wildfire = skillValues("fireball", 1, stats, { ...NO_SKILL_MODIFIERS, wildfire: 3 });
     expect(wildfire.fire!.stackLimit).toBe(8); expect(wildfire.damage).toBeCloseTo(.75 * .85);
     expect(wildfire.fire!.burnDamage).toBeCloseTo(.06 * 1.24);
+});
+
+test("lightning has independent gates, exclusive specializations and real modifier consumers without capped quantity ranks", () => {
+    expect(SKILL_NODES.filter(node => node.school === "lightning")).toHaveLength(34);
+    expect(validateSkillRanks(ranks({ fireball: 10, arc: 3, chain: 1 }), 100)).not.toBeNull();
+    const legal = ranks({ arc: 10, "arc.power": 5, "arc.shape": 5, "arc.tempo": 5, thunderlance: 3, thunderstrike: 3, chain: 3, thunderfield: 3, "lightning.overload": 3,
+        "lightning.study": 5, "lightning.economy": 5, "lightning.duration": 5, "lightning.resilience": 5 });
+    const build = new SkillBuild(); build.points = 99; expect(build.commit(legal, 0, 100, false)).toBeNull();
+    expect(build.modifiers.chain).toMatchObject({ overload: 3, damage: 5, economy: 5, duration: 5, resilience: 5 });
+    legal[nodeIndex("lightning.conduction")] = 1; expect(validateSkillRanks(legal, 100)).toContain("互斥");
+    const stats = deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, sumEquipment({}));
+    for (const id of LIGHTNING_SKILLS) {
+        const base = skillValues(id, 1, stats);
+        for (const modifier of ["power", "shape", "tempo"] as const) expect(skillValues(id, 1, stats, { ...NO_SKILL_MODIFIERS, [modifier]: 5 })).not.toEqual(base);
+        for (let shape = 1; shape <= 5; shape++) expect(skillValues(id, 1, stats, { ...NO_SKILL_MODIFIERS, shape })).not.toEqual(skillValues(id, 1, stats, { ...NO_SKILL_MODIFIERS, shape: shape - 1 }));
+        expect(skillValues(id, 1, { ...stats, castSpeed: 100 }).cooldown).toBe(isUltimate(id) ? 10 : .5);
+        const overload = skillValues(id, 1, stats, { ...NO_SKILL_MODIFIERS, overload: 3 });
+        expect(overload.damage).toBeCloseTo(base.damage * 1.36); expect(overload.mana).toBe(Math.ceil(base.mana * 1.2));
+    }
+    const guided = skillValues("chain", 1, stats, { ...NO_SKILL_MODIFIERS, shape: 5, tempo: 5, conduction: 3 });
+    expect(guided.targets).toBe(11); expect(guided.lightning!.jumpRange).toBeCloseTo(5.6);
+    expect(skillValues("thunderstrike", 1, stats, { ...NO_SKILL_MODIFIERS, shape: 5 }).lightning!.pulses).toBe(8);
 });

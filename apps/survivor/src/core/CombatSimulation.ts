@@ -225,7 +225,7 @@ export class CombatSimulation {
         }
         const recovering = recoverDefeat && this.gameOverValue;
         if (recovering) { position = CHALLENGE_SPAWN; challengeRevision++; }
-        return validateCharacterCheckpoint({ version: 7, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
+        return validateCharacterCheckpoint({ version: 8, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
             location: destination, wildsPosition, exploration: this.exploration.snapshot,
             player: travelling || point || recovering ? { ...player, inventory, ...position, ...(destination === "homestead" || recovering ? { health: this.stats.maxHealth, mana: this.stats.maxMana } : {}) } : player,
             tick: this.tickValue, kills: this.rewards.kills, openedChests: this.openedChests, nextItemId: this.rewards.nextItemId, random: this.random.state,

@@ -100,6 +100,7 @@ test("constellation drafts, six slots, drag inputs and casting recovery work thr
         while (e.enemies.count) e.remove(e.enemies.slots[0]);
         while (e.projectiles.count) e.remove(e.projectiles.slots[0]);
         fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.gainExperience(39);
+        simulation.equipSkill("dash", 1);
         const cp = fixture.skills.checkpoint(simulation.tick);
         fixture.skills.restore({ ...cp, readyAt: cp.readyAt.map(() => 0), recoveryUntil: 0 }, simulation.tick);
         e.vitals.mana[e.player] = simulation.getSnapshot().player.stats.maxMana;
@@ -139,7 +140,7 @@ test("constellation drafts, six slots, drag inputs and casting recovery work thr
     await ward.dragTo(panel.locator('[data-skill-slot="0"]'));
     await expect(panel.locator('[data-skill-slot="0"]')).toContainText("守护结界");
     await panel.locator('[data-skill-slot="0"] .skill-icon-trigger').dragTo(page.locator('.skill-slots [data-skill-slot="1"]'));
-    await expect(panel.locator('[data-skill-slot="0"]')).toContainText("连锁闪电");
+    await expect(panel.locator('[data-skill-slot="0"]')).toContainText("疾风步");
     await expect(panel.locator('[data-skill-slot="1"]')).toContainText("守护结界");
     await panel.locator('[data-skill-slot="1"] .skill-icon-trigger').focus(); await page.keyboard.press("Space"); await page.keyboard.press("Digit1");
     await expect(panel.locator('[data-skill-slot="0"]')).toContainText("守护结界");
@@ -167,10 +168,10 @@ test("constellation drafts, six slots, drag inputs and casting recovery work thr
 
     const rejected = await combatWorker(page).evaluate(() => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        simulation.castSkill("ward"); simulation.castSkill("chain");
+        simulation.castSkill("ward"); simulation.castSkill("icebolt");
         return simulation.getSnapshot().player.skills;
     });
-    expect(rejected.action?.phase).toBe("windup"); expect(rejected.remaining.chain).toBe(0);
+    expect(rejected.action?.phase).toBe("windup"); expect(rejected.remaining.icebolt).toBe(0);
     await advanceCombat(page, 50);
     await combatWorker(page).evaluate(() => (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation.castSkill("icebolt"));
     await advanceCombat(page, 20);

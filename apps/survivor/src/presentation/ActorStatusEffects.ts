@@ -6,6 +6,7 @@ import type { BufferGeometry } from "three";
 const CAPACITY = MAX_ENEMIES + 1;
 const FROST = new Color(0x71dfff), ICE = new Color(0xc4f5ff);
 const FIRE = new Color(0xff7625), SMOKE = new Color(0x292225), EMBER = new Color(0xffdc80);
+const ELECTRIC = new Color(0xc8c4ff), STATIC = new Color(0x78deff);
 type StatusMesh = InstancedMesh<BufferGeometry, MeshBasicMaterial>;
 
 /** Attached, persistent visuals rebuilt from authoritative status deadlines; no effect timers or entity cache. */
@@ -17,6 +18,8 @@ export class ActorStatusEffects {
     private readonly flames: StatusMesh;
     private readonly smoke: StatusMesh;
     private readonly embers: StatusMesh;
+    private readonly electricity: StatusMesh;
+    private readonly staticGuard: StatusMesh;
     private readonly time = { value: 0 };
     private readonly dummy = new Object3D();
     private readonly pools: readonly StatusMesh[];
@@ -30,13 +33,16 @@ export class ActorStatusEffects {
         this.flames = this.pool(new PlaneGeometry(1, 1), CAPACITY * 3, .8, "flame");
         this.smoke = this.pool(new PlaneGeometry(1, 1), CAPACITY * 2, .2, "smoke");
         this.embers = this.pool(new OctahedronGeometry(1, 0), CAPACITY * 3, .9);
+        this.electricity = this.pool(new PlaneGeometry(1, 1), CAPACITY * 3, .95, "electric");
+        this.staticGuard = this.pool(new RingGeometry(.94, 1, 32, 1, 0, Math.PI * 1.7), CAPACITY * 2, .7);
         this.flames.material.blending = this.embers.material.blending = AdditiveBlending;
+        this.electricity.material.blending = this.staticGuard.material.blending = AdditiveBlending;
         this.ground.material.depthTest = false;
-        this.root.add(this.ice, this.crystals, this.smoke, this.flames, this.embers);
-        this.pools = [this.ground, this.crystals, this.ice, this.flames, this.smoke, this.embers];
+        this.root.add(this.ice, this.crystals, this.smoke, this.flames, this.embers, this.electricity, this.staticGuard);
+        this.pools = [this.ground, this.crystals, this.ice, this.flames, this.smoke, this.embers, this.electricity, this.staticGuard];
     }
 
-    private pool(geometry: BufferGeometry, capacity: number, opacity: number, style?: "flame" | "smoke"): StatusMesh {
+    private pool(geometry: BufferGeometry, capacity: number, opacity: number, style?: "flame" | "smoke" | "electric"): StatusMesh {
         geometry.setAttribute("statusVisibility", new InstancedBufferAttribute(new Float32Array(capacity), 1).setUsage(DynamicDrawUsage));
         const material = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity, depthWrite: false, side: DoubleSide, toneMapped: false });
         material.forceSinglePass = true;
@@ -51,12 +57,13 @@ export class ActorStatusEffects {
                     float sway = sin(q.y * 9. - statusTime * 7.) * .11 * q.y + sin(q.y * 17. - statusTime * 11.) * .04;
                     float width = .48 * pow(max(0., 1. - q.y), .7);
                     float flame = (1. - smoothstep(width * .4, width, abs(q.x - .5 - sway))) * smoothstep(0., .08, q.y) * (1. - smoothstep(.8, 1., q.y));
-                    ${style === "flame" ? "diffuseColor.a *= flame; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1., .88, .38), pow(flame * (1. - q.y), 2.));"
+                    ${style === "electric" ? "float zig = abs(fract(q.y * 4. + floor(statusTime * 12.) * .31) * 2. - 1.) * .42 - .21; float line = abs(q.x - .5 - zig); diffuseColor.a *= exp(-line * line * 1700.) * smoothstep(0., .12, q.y) * (1. - smoothstep(.85, 1., q.y));"
+                        : style === "flame" ? "diffuseColor.a *= flame; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1., .88, .38), pow(flame * (1. - q.y), 2.));"
                         : "float cloud = max(0., 1. - length((q - .5) * vec2(2., 2.4))); diffuseColor.a *= cloud * cloud * (.75 + .25 * sin(q.x * 14. + q.y * 11. - statusTime * 2.));"}
                 `);
             }
         };
-        material.customProgramCacheKey = () => "actor-status-visibility-v2-" + (style ?? "ice");
+        material.customProgramCacheKey = () => "actor-status-visibility-v3-" + (style ?? "ice");
         const mesh = new InstancedMesh(geometry, material, capacity);
         mesh.count = 0; mesh.frustumCulled = false; mesh.instanceMatrix.setUsage(DynamicDrawUsage);
         mesh.setColorAt(0, FROST); mesh.instanceColor!.setUsage(DynamicDrawUsage);
@@ -69,8 +76,16 @@ export class ActorStatusEffects {
     /** Coordinates are relative to the current render origin; the ground pass supplies terrain height. */
     public actor(status: CombatRenderState["entities"]["status"], slot: number, x: number, y: number, z: number, radius: number, visibility = 1): void {
         const frozen = status.frozenUntil[slot] > this.tick, slow = status.slowUntil[slot] > this.tick, burning = status.burnUntil[slot] > this.tick;
-        if ((!frozen && !slow && !burning) || visibility <= 0) return;
+        const conductive = status.conductiveUntil[slot] > this.tick, guarded = status.staticGuardUntil[slot] > this.tick;
+        if ((!frozen && !slow && !burning && !conductive && !guarded) || visibility <= 0) return;
         const scale = radius / .3, color = frozen ? ICE : FROST;
+        if (conductive) for (let i = 0; i < 3; i++) {
+            const angle = slot * .83 + i * Math.PI * 2 / 3, pulse = .55 + .45 * Math.abs(Math.sin(this.seconds * 11 + angle));
+            this.stamp(this.electricity, x + Math.sin(angle) * radius, y + .65 * scale, z + Math.cos(angle) * radius,
+                radius * 2.2, 1.35 * scale, 1, angle, ELECTRIC, visibility * pulse);
+        }
+        if (guarded) for (let i = 0; i < 2; i++) this.stamp(this.staticGuard, x, y + (.32 + i * .62) * scale, z,
+            radius * 1.9, radius * 1.9, 1, this.seconds * (i ? -2 : 2), STATIC, visibility, -Math.PI / 2 + (i ? .3 : -.3));
         if (burning) {
             const strength = Math.min(1, status.burnStacks[slot] / 8), seed = slot * .731;
             for (let i = 0; i < 3; i++) {

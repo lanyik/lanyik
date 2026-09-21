@@ -107,7 +107,7 @@ interface CombatRenderEntities {
     readonly position: Readonly<CombatWorld["position"]>;
     readonly vitals: Readonly<Pick<CombatWorld["vitals"], "hitFlash">>;
     readonly enemy: Readonly<Pick<CombatWorld["enemy"], "kind" | "elite" | "boss" | "homeX" | "homeZ" | "enraged">>;
-    readonly status: Readonly<Pick<CombatWorld["status"], "slowUntil" | "wardUntil" | "frozenUntil" | "burnUntil" | "burnStacks">>;
+    readonly status: Readonly<Pick<CombatWorld["status"], "slowUntil" | "wardUntil" | "frozenUntil" | "burnUntil" | "burnStacks" | "conductiveUntil" | "staticGuardUntil">>;
     readonly action: Readonly<Pick<CombatWorld["action"], "kind" | "reach" | "progress" | "targetX" | "targetZ">>;
     readonly projectile: Readonly<Pick<CombatWorld["projectile"], "critical" | "faction" | "age" | "y" | "previousY">>;
     readonly experienceValue: Float64Array;

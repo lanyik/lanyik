@@ -32,8 +32,12 @@ function arena() {
         for (const [id, rank] of Object.entries({ fireball: 10, "fireball.power": 5, pyroblast: 3, meteor: 1 })) ranks[nodeIndex(id)] = rank;
         expect(skills.commitBuild(ranks, 0, 20, false, 0)).toBeNull();
     };
+    const learnChain = () => {
+        const ranks = initialSkillRanks(); ranks[nodeIndex("arc")] = 3; ranks[nodeIndex("arc.power")] = 3; ranks[nodeIndex("chain")] = 1;
+        skills.points = 7; expect(skills.commitBuild(ranks, 0, 8, false, 0)).toBeNull(); skills.equip("chain", 1, 8);
+    };
     const release = (tick: number) => skills.advanceCasting(tick, random, false, () => {});
-    return { simulation, fixture, e, skills, stats, random, spawn, learnFrost, learnMeteor, release };
+    return { simulation, fixture, e, skills, stats, random, spawn, learnFrost, learnMeteor, learnChain, release };
 }
 
 test("automatic casting prioritizes protection and stationary spells ahead of mobile fillers", () => {
@@ -80,20 +84,20 @@ test("one point per earned level, atomic build revisions, six slots and cooldown
     expect(skills.cast("pulse", 10, stats, 2, random)).toBe(true);
     expect(skills.cast("chain", 10, stats, 2, random)).toBe(false);
     expect(skills.equip("pulse", 5, 2)).toBe(true);
-    expect(skills.loadout).toEqual([null, "chain", "dash", null, null, "pulse"]);
+    expect(skills.loadout).toEqual([null, null, "dash", null, null, "pulse"]);
     expect(skills.snapshot(10).remaining.pulse).toBe(SKILLS.pulse.cooldown);
     expect(skills.cast("pulse", 11, stats, 2, random)).toBe(false);
 });
 
 test("windup commits exactly once, recovery blocks every other spell, and moving cancels without refunds", () => {
-    const { skills, e, stats, random, spawn, release } = arena();
+    const { skills, e, stats, random, spawn, release, learnChain } = arena(); learnChain();
     spawn(2, 0); const mana = e.vitals.mana[e.player];
-    expect(skills.cast("pulse", 0, stats, 1, random)).toBe(true);
+    expect(skills.cast("pulse", 0, stats, 8, random)).toBe(true);
     expect(e.impacts.count).toBe(0); release(21); expect(e.impacts.count).toBe(0);
     release(22); expect(e.impacts.count).toBe(1);
     release(23); expect(e.impacts.count).toBe(1);
-    expect(skills.cast("chain", 55, stats, 1, random)).toBe(false);
-    expect(skills.cast("chain", 56, stats, 1, random)).toBe(true);
+    expect(skills.cast("chain", 55, stats, 8, random)).toBe(false);
+    expect(skills.cast("chain", 56, stats, 8, random)).toBe(true);
     skills.advanceCasting(57, random, true, () => {});
     release(200);
     expect(e.impacts.count).toBe(1);
@@ -104,16 +108,16 @@ test("windup commits exactly once, recovery blocks every other spell, and moving
 });
 
 test("freeze interrupts a pending cast, blocks new casts and cannot turn a zero health actor into a caster", () => {
-    const { skills, e, stats, random, spawn, release } = arena();
+    const { skills, e, stats, random, spawn, release, learnChain } = arena(); learnChain();
     spawn(2, 0);
-    skills.cast("pulse", 0, stats, 1, random);
+    skills.cast("pulse", 0, stats, 8, random);
     const id = e.world.ids[e.player];
     e.status.apply(StatusKind.Frozen, id, id, 1, 121, 1);
     release(22); expect(e.impacts.count).toBe(0);
-    expect(skills.cast("chain", 22, stats, 1, random)).toBe(false);
-    expect(skills.cast("dash", 22, stats, 1, random)).toBe(false);
+    expect(skills.cast("chain", 22, stats, 8, random)).toBe(false);
+    expect(skills.cast("dash", 22, stats, 8, random)).toBe(false);
     e.status.clear(e.player); e.vitals.health[e.player] = 0;
-    expect(skills.cast("chain", 200, stats, 1, random)).toBe(false);
+    expect(skills.cast("chain", 200, stats, 8, random)).toBe(false);
 });
 
 test("mobile windup permits movement, heavy windup yields to manual movement, and refunds preserve cooldowns", () => {
@@ -142,17 +146,17 @@ test("learning both frost ultimates permits swapping, but never two equipped ult
 });
 
 test("chain lightning picks distinct nearest targets with stable ties and bounded attenuation", () => {
-    const { skills, e, stats, random, spawn, release } = arena();
+    const { skills, e, stats, random, spawn, release, learnChain } = arena(); learnChain();
     const first = spawn(2, 0), tie = spawn(-2, 0), third = spawn(-5, 0); spawn(30, 0);
     vi.spyOn(random, "next").mockReturnValue(.5);
-    expect(skills.cast("chain", 0, { ...stats, criticalChance: 0, excellentChance: 0, lethalChance: 0 }, 1, random)).toBe(true);
+    expect(skills.cast("chain", 0, { ...stats, criticalChance: 0, excellentChance: 0, lethalChance: 0 }, 8, random)).toBe(true);
     release(24);
     expect(Array.from(e.impacts.target.slice(0, e.impacts.count))).toEqual([e.world.ids[first], e.world.ids[tie], e.world.ids[third]]);
     expect(e.impacts.damage[1]).toBeCloseTo(e.impacts.damage[0] * .8, 4);
     expect(e.effects.buffer.count).toBe(3); expect(e.effects.buffer.endX[0]).toBe(2);
     while (e.enemies.count) e.remove(e.enemies.slots[0]);
     const mana = e.vitals.mana[e.player];
-    expect(skills.cast("chain", 1000, stats, 1, random, true)).toBe(false); expect(e.vitals.mana[e.player]).toBe(mana);
+    expect(skills.cast("chain", 1000, stats, 8, random, true)).toBe(false); expect(e.vitals.mana[e.player]).toBe(mana);
 });
 
 test("frost applies two chill stacks, projects movement until exact expiry and clears reused slots", () => {

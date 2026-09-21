@@ -13,11 +13,11 @@ import { RepeatButton } from "./RepeatButton";
 const SCHOOLS = [
     { id: "frost", name: "冰霜", glyph: "❄", color: "#8de3ff", caption: "穿刺碎裂 · 减速冻结" },
     { id: "fire", name: "火焰", glyph: "✧", color: "#ffa56b", caption: "燎原灼烧 · 爆燃引爆" },
-    { id: "lightning", name: "雷电", glyph: "ϟ", color: "#e5d994", caption: "连锁术式 · 分支待扩展" },
+    { id: "lightning", name: "雷电", glyph: "ϟ", color: "#b6ccff", caption: "过载轰击 · 导流电网" },
     { id: "stars", name: "星辰", glyph: "✦", color: "#baacf5", caption: "结界与刃阵 · 分支待扩展" },
     { id: "utility", name: "通用", glyph: "◇", color: "#8fe2c6", caption: "机动 · 脉冲 · 引力" }
 ] as const;
-const SCHOOL_SKILLS: Readonly<Record<string, readonly SkillId[]>> = { lightning: ["chain"], stars: ["ward", "blades"], utility: ["pulse", "vortex", "dash"] };
+const SCHOOL_SKILLS: Readonly<Record<string, readonly SkillId[]>> = { stars: ["ward", "blades"], utility: ["pulse", "vortex", "dash"] };
 const MAP_WIDTH = 1240, MAP_HEIGHT = 1250;
 // Main paths enter above icons and leave below the complete label. Side lanes stay outside the spines.
 function connection(parent: SkillNode, node: SkillNode): string {
@@ -61,6 +61,7 @@ const SkillGraph = memo(function SkillGraph({ nodes, ranks, committed, loadout, 
         </svg>
         {nodes[0]?.school === "frost" && <><span className="constellation-label damage-path">碎裂之径</span><span className="constellation-label control-path">永冬之径</span></>}
         {nodes[0]?.school === "fire" && <><span className="constellation-label damage-path">燎原之径</span><span className="constellation-label control-path">爆燃之径</span></>}
+        {nodes[0]?.school === "lightning" && <><span className="constellation-label damage-path">过载之径</span><span className="constellation-label control-path">导流之径</span></>}
         {nodes.map(node => {
             const rank = ranks[nodeIndex(node.id)], current = committed[nodeIndex(node.id)], reason = nodeRequirement(node, ranks, level);
             const learned = rank > 0, draft = rank !== current, slot = node.kind === "active" && node.skill ? loadout.indexOf(node.skill) : -1;
@@ -93,7 +94,7 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
         if (skills.build.revision !== revision) { setDraft(skills.build.ranks); setRevision(skills.build.revision); }
     }, [skills.build, revision]);
     const theme = SCHOOLS.find(entry => entry.id === school)!;
-    const nodes = useMemo(() => (school === "frost" || school === "fire") ? SKILL_NODES.filter(node => node.school === school)
+    const nodes = useMemo(() => (school === "frost" || school === "fire" || school === "lightning") ? SKILL_NODES.filter(node => node.school === school)
         : SKILL_NODES.filter(node => node.skill && node.kind === "active" && SCHOOL_SKILLS[school].includes(node.skill))
             .map((node, i, group) => ({ ...node, x: group.length === 1 ? 620 : 460 + (i % 2) * 320, y: 130 + Math.floor(i / 2) * 235 })), [school]);
     useEffect(() => {
@@ -128,8 +129,8 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
             <span className="skill-points" data-points={skills.points} aria-label={"可用点数 " + skills.points}><b>{available}</b><span>可用技能点</span></span>
         </WindowHeader>
         <nav className="school-tabs" aria-label="技能学派">{SCHOOLS.map(tab => <button key={tab.id} aria-pressed={school === tab.id} style={{ "--tab-color": tab.color } as CSSProperties}
-            onClick={() => { setSchool(tab.id); select(tab.id === "frost" ? "icebolt" : tab.id === "fire" ? "fireball" : SCHOOL_SKILLS[tab.id][0]); }}>
-            <i aria-hidden="true">{tab.glyph}</i><span>{tab.name}</span>{(tab.id === "frost" || tab.id === "fire") && <small>完整分支</small>}</button>)}</nav>
+            onClick={() => { setSchool(tab.id); select(tab.id === "frost" ? "icebolt" : tab.id === "fire" ? "fireball" : tab.id === "lightning" ? "arc" : SCHOOL_SKILLS[tab.id][0]); }}>
+            <i aria-hidden="true">{tab.glyph}</i><span>{tab.name}</span>{(tab.id === "frost" || tab.id === "fire" || tab.id === "lightning") && <small>完整分支</small>}</button>)}</nav>
         <div className="constellation-workspace">
             <div className="constellation-stage">
                 <header className="constellation-heading"><div><span>ARCANA / {String(SCHOOLS.indexOf(theme) + 1).padStart(2, "0")}</span><h3>{theme.name}之章</h3><p>{theme.caption} · 拖动空白浏览</p></div>
@@ -140,7 +141,7 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
                     onPointerUp={event => { if (pan.current?.id === event.pointerId) { pan.current = undefined; delete event.currentTarget.dataset.panning; event.currentTarget.releasePointerCapture(event.pointerId); } }}
                     onPointerCancel={event => { pan.current = undefined; delete event.currentTarget.dataset.panning; }} onLostPointerCapture={event => { pan.current = undefined; delete event.currentTarget.dataset.panning; }}>
                     <SkillGraph nodes={nodes} ranks={draft} committed={skills.build.ranks} loadout={skills.loadout} level={level} selected={selected} select={select} /></div>
-                <div className="constellation-legend"><span>□ 主动</span><span>○ 强化</span><span>◇ 专精</span><b>{(school === "frost" || school === "fire") ? "本系投入 " + investedPoints(draft, school as "frost" | "fire") : "现有术式 · 专属分支随后接入"}</b></div>
+                <div className="constellation-legend"><span>□ 主动</span><span>○ 强化</span><span>◇ 专精</span><b>{(school === "frost" || school === "fire" || school === "lightning") ? "本系投入 " + investedPoints(draft, school as "frost" | "fire" | "lightning") : "现有术式 · 专属分支随后接入"}</b></div>
             </div>
             <aside className="constellation-details" aria-label="节点详情" ref={details}>
                 <span className="node-detail-kind">{node.kind === "active" ? "主动技能" : node.kind === "mastery" ? "互斥专精" : "被动强化"}</span>
@@ -150,8 +151,20 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
                 {oldValues && preview && node.skill && <dl className="node-detail-stats"><div><dt>法力 · 当前→草稿</dt><dd>{oldValues.mana} → {preview.mana}</dd></div><div><dt>冷却</dt><dd>{oldValues.cooldown.toFixed(1)} → {preview.cooldown.toFixed(1)}s</dd></div>
                     {node.skill === "ward" ? <div><dt>吸收护盾</dt><dd>{oldValues.ward} → {preview.ward}</dd></div>
                         : node.skill === "dash" ? <div><dt>疾行距离</dt><dd>{oldValues.dashDistance.toFixed(1)} → {preview.dashDistance.toFixed(1)}</dd></div>
-                            : <><div><dt>攻击倍率</dt><dd>{Math.round(oldValues.damage * 100)} → {Math.round(preview.damage * 100)}%</dd></div><div><dt>作用范围</dt><dd>{oldValues.radius.toFixed(1)} → {preview.radius.toFixed(1)}</dd></div></>}
-                    {(node.skill === "icebolt" || node.skill === "icelance" || node.skill === "chain") && <div><dt>最多目标</dt><dd>{oldValues.targets} → {preview.targets}</dd></div>}
+                            : <><div><dt>攻击倍率</dt><dd>{Math.round(oldValues.damage * 100)} → {Math.round(preview.damage * 100)}%</dd></div>{preview.radius > 0 && <div><dt>{node.skill === "thunderlance" ? "射线半宽" : "作用范围"}</dt><dd>{oldValues.radius.toFixed(2)} → {preview.radius.toFixed(2)}</dd></div>}</>}
+                    {(node.skill === "icebolt" || node.skill === "icelance") && <div><dt>最多目标</dt><dd>{oldValues.targets} → {preview.targets}</dd></div>}
+                    {preview.lightning && oldValues.lightning && <>
+                        <div><dt>索敌距离</dt><dd>{preview.lightning.range}</dd></div>
+                        <div><dt>导电持续</dt><dd>{oldValues.lightning.conductiveSeconds.toFixed(1)} → {preview.lightning.conductiveSeconds.toFixed(1)}s</dd></div>
+                        {["arc", "chain", "tempest", "thunderlance", "thunderfield"].includes(node.skill) && <div><dt>{node.skill === "thunderfield" ? "每周期额外传导目标" : "同批不同目标上限"}</dt><dd>{oldValues.targets} → {preview.targets}</dd></div>}
+                        {["chain", "tempest", "thunderfield"].includes(node.skill) && <><div><dt>后跳距离</dt><dd>{oldValues.lightning.jumpRange.toFixed(1)} → {preview.lightning.jumpRange.toFixed(1)}</dd></div>
+                            <div><dt>每跳保留</dt><dd>{Math.round(oldValues.lightning.retention * 100)} → {Math.round(preview.lightning.retention * 100)}%</dd></div></>}
+                        {["thunderstrike", "thunderfield"].includes(node.skill) && <><div><dt>完整打击次数</dt><dd>{oldValues.lightning.pulses} → {preview.lightning.pulses}</dd></div>
+                            <div><dt>打击间隔</dt><dd>{preview.lightning.interval}s</dd></div></>}
+                        {node.skill === "thunderstrike" && <div><dt>每次重复命中累积 · 上限15%</dt><dd>{Math.round(oldValues.lightning.focus * 100)} → {Math.round(preview.lightning.focus * 100)}%</dd></div>}
+                        {node.skill === "thunderfield" && <div><dt>电场持续</dt><dd>{oldValues.duration.toFixed(1)} → {preview.duration.toFixed(1)}s</dd></div>}
+                        {node.skill === "judgment" && <div><dt>落雷延迟 / 外围伤害</dt><dd>{preview.lightning.delay}s / 50%</dd></div>}
+                    </>}
                     {node.skill === "pyroblast" && <div><dt>炎弹数量</dt><dd>{oldValues.targets} → {preview.targets}</dd></div>}
                     {preview.fire && oldValues.fire && <>
                         {preview.fire.burnDamage > 0 && <><div><dt>每层灼烧 · 每 0.5s</dt><dd>{(oldValues.fire.burnDamage * 100).toFixed(1)} → {(preview.fire.burnDamage * 100).toFixed(1)}%</dd></div>

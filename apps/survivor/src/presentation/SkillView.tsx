@@ -13,6 +13,12 @@ export function SkillIcon({ id, rank }: { readonly id: SkillId; readonly rank?: 
             <defs><radialGradient id={gradient}><stop stopColor="#fff" /><stop offset=".28" stopColor={color} /><stop offset="1" stopColor={color} stopOpacity="0" /></radialGradient></defs>
             <circle cx="32" cy="32" r="30" fill={`url(#${gradient})`} opacity=".35" />
             <g stroke={color} strokeLinecap="round" strokeLinejoin="round">
+                {id === "arc" && <><path d="M8 48L20 33L14 27L34 8L29 28L40 31L30 45L50 36L57 48" strokeWidth="4" /><circle cx="8" cy="48" r="5" fill="#eefaff" /><path d="M23 36L12 16M36 36L53 15" strokeWidth="2" /></>}
+                {id === "thunderlance" && <><path d="M56 5L39 33L31 29L9 58L23 31L31 34Z" fill="#f5f5ff" strokeWidth="2" /><path d="M8 28L22 20L19 10M44 54L47 38L58 36M8 48L20 42" strokeWidth="2" /></>}
+                {id === "thunderstrike" && <><ellipse cx="32" cy="52" rx="26" ry="8" strokeWidth="2" /><path d="M17 6L7 25H18L11 44M36 4L24 25H37L27 51M55 9L44 29H55L47 46" strokeWidth="3" /><path d="M25 53L32 47L39 53" stroke="#fff" strokeWidth="2" /></>}
+                {id === "judgment" && <><ellipse cx="32" cy="50" rx="27" ry="11" strokeWidth="2" /><path d="M37 3L20 27H33L25 50L47 20H34Z" fill="#f9f1ff" strokeWidth="2" /><path d="M6 30L17 39M57 29L47 39M12 58L20 52M50 59L43 52" strokeWidth="3" /></>}
+                {id === "thunderfield" && <><ellipse cx="32" cy="42" rx="27" ry="17" fill={color} fillOpacity=".12" strokeWidth="2" /><path d="M9 42L23 29L35 43L49 30L56 42M10 47L24 52L40 47L51 50M35 5L23 24H34L28 39L43 19H32Z" strokeWidth="2.5" /><circle cx="24" cy="52" r="3" fill="#fff" /></>}
+                {id === "tempest" && <><path d="M32 31L21 15L10 7M21 15L38 5M32 31L49 24L58 12M49 24L59 36M32 31L39 48L54 58M39 48L28 60M32 31L14 41L4 33M14 41L7 55" strokeWidth="3" /><path d="M32 22L40 31L32 40L24 31Z" fill="#fff" /><circle cx="32" cy="31" r="20" strokeDasharray="4 9" /></>}
                 {id === "meteor" && <><path d="M55 5L34 41L19 52L8 43L18 25Z" fill={color} fillOpacity=".35" strokeWidth="2" /><path d="M49 8L31 29M58 18L40 40M36 5L20 24" strokeWidth="3" /><circle cx="23" cy="40" r="12" fill={color} /><path d="M20 31L29 37L26 47L16 43Z" fill="#fff1d0" /></>}
                 {id === "fireball" && <><path d="M34 5C42 22 58 28 51 45C44 66 10 59 12 37C12 28 22 21 20 13L29 27C33 19 29 12 34 5Z" fill={color} fillOpacity=".65" strokeWidth="2" /><path d="M33 27C37 36 46 43 38 50C24 59 20 40 28 37L29 44Z" fill="#fff2b1" /></>}
                 {id === "fireray" && <><path d="M8 52L49 6L58 15L17 58Z" fill={color} fillOpacity=".3" /><path d="M12 52L52 11" stroke="#fff4c1" strokeWidth="5" /><path d="M22 26L28 30L34 23M33 42L39 33L48 35M7 40L16 42M42 8L42 16" strokeWidth="3" /><circle cx="14" cy="51" r="8" strokeWidth="2" /></>}
@@ -41,10 +47,11 @@ export function SkillIcon({ id, rank }: { readonly id: SkillId; readonly rank?: 
 export function skillSummary(id: SkillId, player: CombatSnapshot["player"]): string {
     const v = skillValues(id, player.skills.ranks[id], player.stats, player.skills.modifiers[id]);
     return id === "dash" ? `${v.dashDistance.toFixed(2)} 距离 · 免疫直接命中` : id === "ward" ? `${v.ward} 护盾 · 持续 ${SKILL_RULES.ward.durationSeconds} 秒`
+        : v.lightning ? `${Math.round(v.damage * 100)}% 伤害 · ${["thunderstrike", "thunderfield"].includes(id) ? `${v.lightning.pulses} 次打击` : id === "judgment" ? `${v.radius.toFixed(1)} 半径` : `最多 ${v.targets} 个不同目标`}`
         : v.fire && v.duration > 0 ? `每 ${v.fire.interval.toFixed(3)} 秒 ${Math.round(v.damage * 100)}% 伤害 · ${Math.floor(v.duration / v.fire.interval)} 次打击`
         : id === "icestorm" || id === "blizzard" ? `每 0.5 秒 ${Math.round(v.damage * 100)}% 伤害 · 持续 ${v.duration.toFixed(1)} 秒`
         : id === "vortex" || id === "blades" ? `每 ${SKILL_RULES[id].interval} 秒 ${Math.round(v.damage * 100)}% 伤害 · 持续 ${SKILL_RULES[id].duration} 秒`
-        : `${Math.round(v.damage * 100)}% 伤害 · ${id === "chain" ? `${v.targets} 个目标` : `${v.radius.toFixed(1)} 范围`}`;
+        : `${Math.round(v.damage * 100)}% 伤害 · ${v.radius.toFixed(1)} 范围`;
 }
 
 function SkillDetails({ id, player }: { readonly id: SkillId; readonly player: CombatSnapshot["player"] }) {
@@ -66,7 +73,13 @@ function SkillDetails({ id, player }: { readonly id: SkillId; readonly player: C
         {id === "blades" && <p>环带半径 {v.radius}，半宽 {SKILL_RULES.blades.width}；随玩家移动，内圈安全。同类持续技能结束前不能重放。</p>}
         {isFrostSkill(id) && <p>附加 {v.chill.toFixed(1)} 寒意，持续 {v.slowSeconds.toFixed(1)} 秒；五层尝试冻结 {v.freezeSeconds.toFixed(1)} 秒，结束后抵抗控制 3 秒。精英冻结减半，领主免疫冻结。</p>}
         {id === "shatter" && <p>冻结目标额外承受 50% 本技能伤害；命中后消费冻结并给予控制抵抗。</p>}
-        {id === "chain" && <p>首跳距离 {SKILL_RULES.chain.firstRange}，连跳 {SKILL_RULES.chain.jumpRange}；每跳保留 {SKILL_RULES.chain.damageRetention * 100}% 伤害，每个目标只命中一次。</p>}
+        {v.lightning && <>
+            <p>索敌距离 {v.lightning.range}；成功命中附加 {v.lightning.conductiveSeconds.toFixed(1)} 秒导电，不叠层，重复获得刷新。导电只影响后续传导优先级，不使目标眩晕或额外受伤。</p>
+            {["chain", "tempest", "thunderfield"].includes(id) && <p>后跳距离 {v.lightning.jumpRange.toFixed(1)}，每跳保留 {Math.round(v.lightning.retention * 100)}% 伤害；同批共享去重，不能隔墙传导。{id === "thunderfield" ? `每次脉冲最多额外传导 ${v.targets} 个场外目标。` : "分叉按深度衰减，闪避仍占本批访问名额。"}</p>}
+            {id === "thunderstrike" && <p>出手 {v.lightning.delay}s 后开始，每 {v.lightning.interval}s 一次，共 {v.lightning.pulses} 次；对同一目标每次后续成功命中累计增伤 {Math.round(v.lightning.focus * 100)}%，最高 15%。</p>}
+            {id === "judgment" && <p>出手 {v.lightning.delay}s 后落雷；中心 .8 距离内最近目标承受全额伤害，其他目标仅承受 50%，不会重复结算。</p>}
+            {v.lightning.protection > 0 && <p>成功命中获得三秒静电防护，减伤 {Math.round(v.lightning.protection * 100)}%；重复刷新，与其他保护取较强值。</p>}
+        </>}
         {id === "dash" && <p>沿施放时朝向穿行，{SKILL_RULES.dash.durationSeconds} 秒内免疫直接命中伤害，已有灼烧继续结算。疾行期间不能转向或施放其他技能。</p>}
         {id === "ward" && <p>护盾优先承受伤害，耗尽或 {SKILL_RULES.ward.durationSeconds} 秒后消失；护盾存在时不能刷新。</p>}
         <p className="skill-tooltip-rule">{!d.automatic ? "仅手动施放" : id === "ward" ? `自动：生命不高于 ${SKILL_RULES.ward.automaticHealthRatio * 100}% 且没有结界` : "自动：攻击范围内存在敌人"}</p>

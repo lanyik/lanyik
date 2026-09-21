@@ -105,6 +105,10 @@ test.each(["pulse", "frost", "chain"] as const)("%s excludes occluded targets, i
         const ranks = initialSkillRanks(); ranks[nodeIndex("icebolt")] = 3; ranks[nodeIndex("icebolt.power")] = 3; ranks[nodeIndex("frost")] = 1;
         skills.points = 7; expect(skills.commitBuild(ranks, 0, 8, false, 0)).toBeNull(); expect(skills.equip(id, 0, 8)).toBe(true);
     }
+    if (id === "chain") {
+        const ranks = initialSkillRanks(); ranks[nodeIndex("arc")] = 3; ranks[nodeIndex("arc.power")] = 3; ranks[nodeIndex("chain")] = 1;
+        skills.points = 7; expect(skills.commitBuild(ranks, 0, 8, false, 0)).toBeNull(); expect(skills.equip(id, 0, 8)).toBe(true);
+    }
     const random = new DeterministicRandom(1);
     expect(skills.cast(id, 1, stats, 8, random)).toBe(true);
     skills.advanceCasting(31, random, false, () => {});

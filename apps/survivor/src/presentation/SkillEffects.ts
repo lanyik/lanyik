@@ -6,6 +6,7 @@ import { AssetLoader } from "./AssetLoader";
 const COLORS = ["#bd93ff", "#7bdeff", "#ffe29a", "#80f1ce", "#8dafef", "#ff9954", "#ffb45e", "#c17bff", "#7fffd6", "#d9f5ff"].map(color => new Color(color));
 const WHITE = new Color("#f4fcff"), TAU = Math.PI * 2;
 const FIRE = new Color("#ff792b"), HOT_FIRE = new Color("#ffce6b");
+const THUNDER = new Color("#91cbff"), HIGH_VOLTAGE = new Color("#cab5ff");
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
 /** Visual choreography expands authoritative facts into bounded GPU instances, never gameplay. */
@@ -124,7 +125,46 @@ export class SkillEffects {
             const y = height(x, z) + .13, r = b.radius[i];
             const fade = (1 - t) ** .7, burst = 1 - (1 - t) ** 3;
             const seed = b.started[i] * .17 + x * 2.3 + z * 1.7;
-            if (kind === EffectKind.FireRay) {
+            if (kind === EffectKind.ThunderWarning || kind === EffectKind.JudgmentWarning) {
+                this.stamp(x, y, z, r * 2.42, r * 2.42, -t, kind, .35 + t * .45, 5, 0, false, true);
+                this.stamp(x, y, z, r * 2.42 * (1 - t), r * 2.42 * (1 - t), t, -1, .7, 1, 0, false, true);
+                for (let j = 0; j < 6; j++) {
+                    const angle = j * TAU / 6 + seed, px = x + Math.sin(angle) * r, pz = z + Math.cos(angle) * r;
+                    this.beam(px, height(px, pz) + .1, pz, px, height(px, pz) + .4 + t * 1.5, pz, .1, kind, t * .6);
+                }
+            } else if (kind === EffectKind.ThunderImpact || kind === EffectKind.JudgmentImpact) {
+                const ultimate = kind === EffectKind.JudgmentImpact, power = ultimate ? 1.8 : 1, column = Math.max(0, 1 - t * 2.2);
+                this.beam(x, y, z, x, y + 9 * power, z, power * .9, kind, column);
+                this.beam(x, y, z, x, y + 10 * power, z, power * .18, -1, column);
+                this.stamp(x, y, z, r * 2.42 * burst, r * 2.42 * burst, t, kind, fade, 1, 0, false, true);
+                this.stamp(x, y, z, r * 2.1, r * 2.1, -t, kind, fade * .65, 5, 0, false, true);
+                this.stamp(x, y + .6, z, power * 3, power * 3, 0, -1, column, 2, 0, true);
+                for (let j = 0; j < (ultimate ? 16 : 10); j++) {
+                    const angle = seed + j * 2.4, radius = r * (.4 + j % 4 * .15), px = x + Math.sin(angle) * radius, pz = z + Math.cos(angle) * radius;
+                    const midX = x + Math.sin(angle) * radius * .4, midZ = z + Math.cos(angle) * radius * .4;
+                    this.beam(x, y + (2 + j % 3) * power, z, midX, y + 1, midZ, .13 * power, kind, column);
+                    this.beam(midX, y + 1, midZ, px, height(px, pz) + .15, pz, .09 * power, kind, column);
+                    this.stamp(px, height(px, pz) + .2 + burst * 1.3, pz, .13, .35, angle, -1, fade, 4, 0, true);
+                }
+            } else if (kind === EffectKind.ThunderField) {
+                const opacity = Math.min(1, t * 12, (1 - t) * 12), phase = ((tick - b.started[i]) % (GAME_CONFIG.timing.simulationHz * .5)) / (GAME_CONFIG.timing.simulationHz * .5);
+                this.stamp(x, y, z, r * 2.42, r * 2.42, seconds * .2, kind, opacity * .7, 5, 0, false, true);
+                this.stamp(x, y, z, r * 2.42 * phase, r * 2.42 * phase, 0, kind, opacity * (1 - phase), 1, 0, false, true);
+                for (let j = 0; j < 12; j++) {
+                    const angle = j * TAU / 12, next = angle + TAU / 12, px = x + Math.sin(angle) * r, pz = z + Math.cos(angle) * r;
+                    const ex = x + Math.sin(next) * r, ez = z + Math.cos(next) * r;
+                    this.beam(px, height(px, pz) + .25, pz, ex, height(ex, ez) + .35 + Math.sin(seconds * 10 + j) * .2, ez, .11, kind, opacity * .7);
+                    if (j % 3 === 0) this.beam(px, height(px, pz) + .1, pz, px, height(px, pz) + 1.6, pz, .12, kind, opacity * (.6 + .4 * Math.sin(seconds * 12 + j)));
+                }
+            } else if (kind === EffectKind.ThunderLance) {
+                const ex = b.endX[i], ez = b.endZ[i], dx = ex - x, dz = ez - z, angle = Math.atan2(dx, dz);
+                this.beam(x, y + .57, z, ex, y + .57, ez, r * 3, kind, fade * .8);
+                this.beam(x, y + .57, z, ex, y + .57, ez, r * .5, -1, fade);
+                for (let j = 0; j < 10; j++) {
+                    const at = j / 10, px = x + dx * at, pz = z + dz * at, offset = Math.sin(seed + j * 7 + Math.floor(t * 8)) * r * 2;
+                    this.beam(px, y + .57, pz, px + Math.cos(angle) * offset, y + .57 + r, pz - Math.sin(angle) * offset, .1, kind, fade);
+                }
+            } else if (kind === EffectKind.FireRay) {
                 const ex = b.endX[i], ez = b.endZ[i], ey = y + .57;
                 const opacity = Math.min(1, t * 15, (1 - t) * 15), shimmer = .8 + .2 * Math.sin(seconds * 35);
                 this.beam(x, y + .57, z, ex, ey, ez, r * 3.5, kind, opacity * .75);
@@ -217,7 +257,7 @@ export class SkillEffects {
                     this.stamp(px, height(px, pz) + .2 + lift, pz, .3 + fade * .3, .6 + fade, angle, kind, fade, kind === EffectKind.Shatter ? 4 : 0, 2, true);
                     if (kind === EffectKind.MeteorImpact && j % 2 === 0) this.stamp(px, height(px, pz) + .3 + t, pz, 1 + t, 1 + t, angle, kind, fade * .25, 0, 3, true);
                 }
-            } else if (kind === EffectKind.Lightning) {
+            } else if (kind === EffectKind.Lightning || kind === EffectKind.Tempest) {
                 const dx = b.endX[i] - x, dz = b.endZ[i] - z, length = Math.hypot(dx, dz);
                 const endY = height(b.endX[i], b.endZ[i]) + .65;
                 const normalX = length ? -dz / length : 0, normalZ = length ? dx / length : 1;
@@ -315,7 +355,8 @@ export class SkillEffects {
         this.dummy.position.set(x - this.originX, projected ? 0 : y, z - this.originZ); this.dummy.rotation.set(0, rotation, 0);
         if (!vertical) this.dummy.rotateX(-Math.PI / 2 - pitch);
         this.dummy.scale.set(width, length, 1); this.dummy.updateMatrix(); this.mesh.setMatrixAt(i, this.dummy.matrix);
-        this.mesh.setColorAt(i, kind < 0 ? WHITE : kind >= EffectKind.FireRay ? kind === EffectKind.Doom || kind === EffectKind.Detonation ? HOT_FIRE : FIRE
+        this.mesh.setColorAt(i, kind < 0 ? WHITE : kind >= EffectKind.ThunderLance ? kind === EffectKind.Tempest || kind === EffectKind.JudgmentImpact ? HIGH_VOLTAGE : THUNDER
+            : kind >= EffectKind.FireRay ? kind === EffectKind.Doom || kind === EffectKind.Detonation ? HOT_FIRE : FIRE
             : COLORS[kind === EffectKind.IceBolt || kind === EffectKind.IceField ? EffectKind.Frost : kind]);
         this.styles.setXYZW(i, tile, rotation, alpha, shape + (projected ? 8 : 0));
     }

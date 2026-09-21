@@ -1,10 +1,10 @@
-import { FIRE_SKILLS, FROST_SKILLS, NO_SKILL_MODIFIERS, SKILLS, SKILL_IDS, isFireSkill, isFrostSkill, isUltimate, type SkillId, type SkillModifiers } from "./Skills";
+import { FIRE_SKILLS, FROST_SKILLS, LIGHTNING_SKILLS, NO_SKILL_MODIFIERS, SKILLS, SKILL_IDS, isFireSkill, isFrostSkill, isLightningSkill, isUltimate, type SkillId, type SkillModifiers } from "./Skills";
 
 export interface SkillNode {
     readonly id: string; readonly name: string; readonly description: string; readonly kind: "active" | "modifier" | "passive" | "mastery";
     readonly skill?: SkillId; readonly modifier?: "power" | "shape" | "tempo"; readonly parent?: string; readonly parentRank: number;
     readonly maximum: number; readonly initial: number; readonly level: number; readonly investment: number;
-    readonly x: number; readonly y: number; readonly school: "frost" | "fire" | "legacy"; readonly exclusive?: string;
+    readonly x: number; readonly y: number; readonly school: "frost" | "fire" | "lightning" | "legacy"; readonly exclusive?: string;
 }
 const nodes: SkillNode[] = [];
 const branches: readonly [SkillId, string | undefined, number, number, number, number, readonly string[]][] = [
@@ -24,13 +24,22 @@ function fireModifierDescription(skill: SkillId, modifier: "power" | "shape" | "
                 : skill === "firewall" ? "每点延长火墙所附灼烧 10%。" : skill === "firedomain" ? "每点延长火域持续时间 10%。"
                     : skill === "meteor" ? "每点增加灼烧引爆转化率 4 个百分点，总转化率最高 80%。" : "每点减少本技能基础冷却 2%。";
 }
-function addBranches(entries: typeof branches, school: "frost" | "fire"): void {
+function lightningModifierDescription(skill: SkillId, modifier: "power" | "shape" | "tempo"): string {
+    return modifier === "power" ? "每点增加本技能直接伤害 4%。"
+        : modifier === "shape" ? skill === "thunderstrike" ? "每点多降下一次落雷，最多八次。" : skill === "thunderlance" ? "每点多穿透一个不同目标，最多八个。"
+            : ["judgment", "thunderfield"].includes(skill) ? "每点增加作用半径 5%。" : "每点增加一个不同目标；电网所有分支共用预算，不增加每个分支的单独预算。"
+        : skill === "arc" ? "每点减少法力消耗 3%。" : skill === "chain" ? "每点增加后跳传导距离 5%，所有树修正合计最多增加 50%。"
+            : skill === "thunderstrike" ? "每点使同次轰击对同一目标的后续成功命中累积增伤 3%，累计最高 15%；闪避不累积。"
+                : skill === "thunderfield" ? "每点延长电场持续时间 10%。" : skill === "tempest" ? "每点提高后跳保留比例 2 个百分点，最高 95%，不放大首跳。"
+                    : "每点减少本技能基础冷却 2%。";
+}
+function addBranches(entries: typeof branches, school: Exclude<SkillNode["school"], "legacy">): void {
     for (const [skill, parent, branch, tier, level, investment, names] of entries) {
         const x = 620 + branch * 220, y = tier ? 360 + (tier - 1) * 340 : 90;
         add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description, kind: "active", skill,
             parent, parentRank: tier === 3 ? 5 : tier ? 3 : 0, maximum: isUltimate(skill) ? 5 : 10, initial: 0, level, investment, x, y, school });
         for (const [index, modifier] of (["power", "shape", "tempo"] as const).entries()) {
-            const description = school === "fire" ? fireModifierDescription(skill, modifier) : modifier === "power" ? "每点使本技能伤害增加 4%。"
+            const description = school === "lightning" ? lightningModifierDescription(skill, modifier) : school === "fire" ? fireModifierDescription(skill, modifier) : modifier === "power" ? "每点使本技能伤害增加 4%。"
                 : modifier === "shape" ? ["icebolt", "icelance"].includes(skill) ? "每点增加 1 个不同命中目标。" : "每点增加本技能作用范围 5%。"
                 : skill === "icebolt" ? "每点减少本技能法力消耗 3%。" : skill === "icelance" || skill === "shatter" ? "每点减少本技能基础冷却 2%。"
                     : skill === "icestorm" ? "每点延长冰晶风暴 10%。" : skill === "absolutezero" ? "每点延长所附寒意 10%。" : "每点增加本技能寒意积累 10%。";
@@ -69,7 +78,26 @@ add({ id: "fire.wildfire", name: "燎原", description: "每点增加一层自�
     maximum: 3, initial: 0, level: 30, investment: 28, x: 475, y: 910, school: "fire", exclusive: "fire.combustion" });
 add({ id: "fire.combustion", name: "爆燃", description: "每点增加 10% 直接火伤和 5 个百分点引爆转化率；自身灼烧伤害乘 80%。与燎原互斥。", kind: "mastery", parent: "meteor", parentRank: 3,
     maximum: 3, initial: 0, level: 30, investment: 28, x: 765, y: 910, school: "fire", exclusive: "fire.wildfire" });
-for (const [i, skill] of SKILL_IDS.filter(id => !isFrostSkill(id) && !isFireSkill(id)).entries()) add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description,
+addBranches([
+    ["arc", undefined, 0, 0, 2, 0, ["电势", "支路", "节流"]],
+    ["thunderlance", "arc", -1, 1, 8, 6, ["高压", "穿透", "急咏"]],
+    ["thunderstrike", "thunderlance", -1, 2, 20, 18, ["雷威", "落雷数", "聚焦"]],
+    ["judgment", "thunderstrike", -1, 3, 45, 40, ["天威", "覆盖", "复苏"]],
+    ["chain", "arc", 1, 1, 8, 6, ["初压", "跳跃", "远导"]],
+    ["thunderfield", "chain", 1, 2, 20, 18, ["电场", "扩域", "持续"]],
+    ["tempest", "thunderfield", 1, 3, 45, 40, ["主脉", "分叉", "续流"]]
+], "lightning");
+for (const [i, [id, name, description]] of ([
+    ["lightning.study", "雷电研习", "每点增加全部雷系直接伤害 3%。"], ["lightning.economy", "电荷节流", "每点减少全部雷系技能法力消耗 2%。"],
+    ["lightning.duration", "导电专注", "每点延长本人施加的导电标记 5%；导电不叠层，不造成额外伤害。"],
+    ["lightning.resilience", "静电防护", "雷系成功命中后获得三秒静电防护，每点减伤 1%；重复刷新，与其他保护取较强值，不相乘。"]
+] as const).entries()) add({ id, name, description, kind: "passive", parentRank: 0, maximum: 5, initial: 0, level: 2,
+    investment: [2, 6, 12, 18][i], x: 620, y: 420 + i * 165, school: "lightning" });
+add({ id: "lightning.overload", name: "过载", description: "每点增加 12% 直接雷伤；法力消耗统一乘 120%。与导流互斥。", kind: "mastery", parent: "thunderstrike", parentRank: 3,
+    maximum: 3, initial: 0, level: 30, investment: 28, x: 475, y: 910, school: "lightning", exclusive: "lightning.conduction" });
+add({ id: "lightning.conduction", name: "导流", description: "每点增加一个电弧/连锁/电场短链/电网目标及 5% 后跳距离；直接雷伤统一乘 85%。与过载互斥。", kind: "mastery", parent: "thunderfield", parentRank: 3,
+    maximum: 3, initial: 0, level: 30, investment: 28, x: 765, y: 910, school: "lightning", exclusive: "lightning.overload" });
+for (const [i, skill] of SKILL_IDS.filter(id => !isFrostSkill(id) && !isFireSkill(id) && !isLightningSkill(id)).entries()) add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description,
     kind: "active", skill, parentRank: 0, maximum: skill === "dash" ? 1 : 5, initial: 1, level: SKILLS[skill].unlock, investment: 0,
     x: 145 + (i % 3) * 220, y: 120 + Math.floor(i / 3) * 220, school: "legacy" });
 export const SKILL_NODES: readonly SkillNode[] = Object.freeze(nodes);
@@ -125,12 +153,13 @@ export function reachableSkillRanks(ranks: readonly number[], level: number): nu
 }
 export function compileSkillModifiers(ranks: readonly number[]): Readonly<Partial<Record<SkillId, SkillModifiers>>> {
     const rank = (id: string) => ranks[nodeIndex(id)];
-    return Object.freeze(Object.fromEntries([...FROST_SKILLS, ...FIRE_SKILLS].map(id => {
-        const school = isFireSkill(id) ? "fire" : "frost";
+    return Object.freeze(Object.fromEntries([...FROST_SKILLS, ...FIRE_SKILLS, ...LIGHTNING_SKILLS].map(id => {
+        const school = isLightningSkill(id) ? "lightning" : isFireSkill(id) ? "fire" : "frost";
         return [id, Object.freeze({ ...NO_SKILL_MODIFIERS, power: rank(`${id}.power`), shape: rank(`${id}.shape`), tempo: rank(`${id}.tempo`),
             damage: rank(`${school}.study`), economy: rank(`${school}.economy`), duration: rank(`${school}.duration`),
             ...(school === "frost" ? { shatter: rank("frost.shatter"), winter: rank("frost.winter") }
-                : { wildfire: rank("fire.wildfire"), combustion: rank("fire.combustion"), resilience: rank("fire.resilience") }) })];
+                : school === "fire" ? { wildfire: rank("fire.wildfire"), combustion: rank("fire.combustion"), resilience: rank("fire.resilience") }
+                    : { overload: rank("lightning.overload"), conduction: rank("lightning.conduction"), resilience: rank("lightning.resilience") }) })];
     })));
 }
 /** Only committed progression lives here. Cast state and cooldowns belong to SkillSystem. */

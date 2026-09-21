@@ -1,0 +1,300 @@
+{
+  "date": "2026-09-21",
+  "baselineCommit": "e38d657",
+  "scope": "Complete lightning tree, conductive and static guard statuses, bounded spatial conduction, focused barrages, fixed fields and attached electric visuals",
+  "node": {
+    "context": {
+      "node": "v22.16.0",
+      "platform": "win32",
+      "arch": "x64",
+      "cpu": "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+      "simulationHz": 120,
+      "activeAiHz": 30,
+      "gc": true,
+      "timing": "one warmup, five samples, simulation only; travel/terrain restore health between ticks while retaining hit settlement; no browser/GPU claim"
+    },
+    "results": {
+      "travel": {
+        "samplesMsPerTick": [
+          0.09179861111111111,
+          0.09356951388888891,
+          0.08911065972222221,
+          0.0859032986111111,
+          0.086675625
+        ],
+        "medianMsPerTick": 0.08911065972222221,
+        "budgetMsPerTick": 0.5,
+        "workload": {
+          "msPerTick": 0.086675625,
+          "ticks": 2880,
+          "enemies": 627,
+          "kills": 14
+        }
+      },
+      "crowded": {
+        "samplesMsPerTick": [
+          0.327833666666667,
+          0.3492470000000003,
+          0.3456846666666676,
+          0.3313766666666667,
+          0.3491990000000002
+        ],
+        "medianMsPerTick": 0.3456846666666676,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.3491990000000002,
+          "ticks": 300,
+          "enemies": 896,
+          "projectiles": 128
+        }
+      },
+      "iceEffects": {
+        "samplesMsPerTick": [
+          0.055962291666666414,
+          0.03300541666666656,
+          0.04794583333333359,
+          0.03190125000000042,
+          0.05151729166666617
+        ],
+        "medianMsPerTick": 0.04794583333333359,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.05151729166666617,
+          "ticks": 480,
+          "enemies": 896,
+          "initialStatusInstances": 4480,
+          "hits": 14336,
+          "p95TickMs": 0.0007000000000516593,
+          "p99TickMs": 1.8141000000000531,
+          "maxTickMs": 6.912900000000263
+        }
+      },
+      "fireEffects": {
+        "samplesMsPerTick": [
+          0.029281583333333475,
+          0.02829858333333315,
+          0.06163433333333349,
+          0.03142433333333353,
+          0.06215424999999982
+        ],
+        "medianMsPerTick": 0.03142433333333353,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.06215424999999982,
+          "ticks": 1200,
+          "enemies": 896,
+          "initialBurnLayers": 28672,
+          "hits": 18816,
+          "periodicHits": 38528,
+          "p95TickMs": 0.000600000000304135,
+          "p99TickMs": 2.100500000000011,
+          "maxTickMs": 19.832100000000082
+        }
+      },
+      "lightningEffects": {
+        "samplesMsPerTick": [
+          0.021333666666666508,
+          0.01788183333333336,
+          0.028951249999999693,
+          0.01958925000000022,
+          0.02850608333333336
+        ],
+        "medianMsPerTick": 0.021333666666666508,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.02850608333333336,
+          "ticks": 1200,
+          "enemies": 896,
+          "initialConductive": 896,
+          "hits": 19016,
+          "networkCasts": 10,
+          "queries": 234,
+          "candidates": 209348,
+          "p95TickMs": 0.000600000000304135,
+          "p99TickMs": 0.7751000000002932,
+          "maxTickMs": 4.684499999999844
+        }
+      },
+      "terrain": {
+        "samplesMsPerTick": [
+          0.3091698333333337,
+          0.3182975000000003,
+          0.3204250000000002,
+          0.3147365000000006,
+          0.32622833333333345
+        ],
+        "medianMsPerTick": 0.3182975000000003,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.32622833333333345,
+          "coldStartMs": 272.6968999999999,
+          "ticks": 600,
+          "chunks": 110
+        }
+      },
+      "autoCombat": {
+        "samplesMsPerTick": [
+          0.27821299999999916,
+          0.2633604999999989,
+          0.2842551666666653,
+          0.27545783333333324,
+          0.2857614999999987
+        ],
+        "medianMsPerTick": 0.27821299999999916,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.2857614999999987,
+          "coldStartMs": 262.3283999999985,
+          "ticks": 600,
+          "chunks": 110
+        }
+      },
+      "autoAvoidance": {
+        "samplesMsPerDecision": [
+          1.6675275000000056,
+          1.7730683333333217,
+          1.65164583333332,
+          1.7257308333333337,
+          1.655355833333336
+        ],
+        "medianMsPerDecision": 1.6675275000000056,
+        "budgetMsPerDecision": 3,
+        "workload": {
+          "msPerDecision": 1.655355833333336,
+          "decisions": 120,
+          "enemies": 8,
+          "liveProjectiles": 64,
+          "p95DecisionMs": 1.8695999999999913,
+          "maxDecisionMs": 14.165199999999459
+        }
+      },
+      "autoSearch": {
+        "samplesMsPerDecision": [
+          0.12011416666665961,
+          0.13577083333334486,
+          0.12012666666666215,
+          0.1308641666666669,
+          0.12267000000000129
+        ],
+        "medianMsPerDecision": 0.12267000000000129,
+        "budgetMsPerDecision": 3,
+        "workload": {
+          "msPerDecision": 0.12267000000000129,
+          "decisions": 120,
+          "enemies": 896,
+          "searchRadius": 48,
+          "p95DecisionMs": 0.4171999999998661,
+          "maxDecisionMs": 0.9768000000003667
+        }
+      },
+      "autoLoadout": {
+        "samplesMsPerDecision": [
+          1.6215400000000044,
+          1.584988333333331,
+          1.6355508333333242,
+          1.6035591666666582,
+          1.5846133333333454
+        ],
+        "medianMsPerDecision": 1.6035591666666582,
+        "budgetMsPerDecision": 3,
+        "workload": {
+          "msPerDecision": 1.5846133333333454,
+          "decisions": 120,
+          "equipment": 80,
+          "orbs": 48,
+          "unlockedSockets": 6,
+          "p95DecisionMs": 1.927400000000489,
+          "maxDecisionMs": 2.272899999999936
+        }
+      }
+    }
+  },
+  "browser": {
+    "environment": "Chromium / ANGLE D3D11, 1280x720, real combat Worker, paused simulation and live background rendering, 2.5 seconds per UI sample",
+    "results": {
+      "url": "http://127.0.0.1:4174",
+      "inventoryItems": 80,
+      "closed": {
+        "frames": 151,
+        "p95Ms": 16.700000000000728,
+        "taskMs": 294.433,
+        "layoutMs": 0.12999999999999998,
+        "styleMs": 0.027,
+        "domNodes": 630
+      },
+      "open": {
+        "frames": 146,
+        "p95Ms": 16.799999999999272,
+        "taskMs": 303.7,
+        "layoutMs": 0,
+        "styleMs": 0.245,
+        "domNodes": 1549
+      },
+      "mountedCells": 24,
+      "forge": {
+        "frames": 150,
+        "p95Ms": 16.80000000000109,
+        "taskMs": 281.829,
+        "layoutMs": 0,
+        "styleMs": 0.6879999999999994,
+        "domNodes": 2217
+      },
+      "mountedForge": 16,
+      "skills": {
+        "frames": 148,
+        "p95Ms": 16.799999999999272,
+        "taskMs": 264.0860000000001,
+        "layoutMs": 0,
+        "styleMs": 0.33500000000000024,
+        "domNodes": 3108
+      },
+      "mountedSkillNodes": 34,
+      "fireSkills": {
+        "frames": 151,
+        "p95Ms": 16.700000000000728,
+        "taskMs": 288.10099999999994,
+        "layoutMs": 0,
+        "styleMs": 0.5000000000000004,
+        "domNodes": 1522
+      },
+      "mountedFireNodes": 34,
+      "lightningSkills": {
+        "frames": 151,
+        "p95Ms": 16.799999999999272,
+        "taskMs": 269.08,
+        "layoutMs": 0,
+        "styleMs": 0.4879999999999989,
+        "domNodes": 2088
+      },
+      "mountedLightningNodes": 34
+    }
+  },
+  "validation": {
+    "unitFiles": 67,
+    "unitTests": 445,
+    "browserTests": 12,
+    "checks": [
+      "App TypeScript check and production build",
+      "Three independent 34-node trees, lightning prerequisites, specialization exclusivity and side-branch consumers",
+      "Seven lightning skills, 2K centered tree, tooltip and equipped node through real Worker and WebGL",
+      "Conductive preference, obstruction, global network deduplication and bounded target budgets",
+      "Area and short-chain overlap, focused successful hits, full-handle reuse and judgment core uniqueness",
+      "Shielded hits, source replacement/removal, independent static guard refund and strongest protection composition",
+      "Full population damage and presentation capacity, save v8 validation and transferable state isolation",
+      "Pause, status expiration, fire regression, automatic combat and loadout, save UI and skill drag inputs",
+      "Worker restart/disposal and enemy spell presentation regression",
+      "Development page shaders, skill dragging and unbundled Worker item pickup on port 5173",
+      "500-iteration foundation world replacement and resource soak",
+      "CPU benchmark gates and unchanged deterministic basic-attack balance calibration"
+    ],
+    "foundationWorldReplacementIterations": 500
+  },
+  "limitations": [
+    "Lightning parameters are an initial playable balance; the basic-attack calibration does not measure complete lightning builds.",
+    "The baseline commit identifies the prior implementation; this record does not include a paired before/after run or claim a speedup.",
+    "Lightning CPU workload measures 896 targets, overlapping fields, ten networks, status expiry and real settlement, without AI, movement or GPU rendering.",
+    "The final lightning sample recorded P99 0.7751 ms and maximum 4.6845 ms per tick; mean budgets do not bound every peak.",
+    "Spatial-query instrumentation counts returned candidates and is included in the measured CPU workload.",
+    "Paused UI samples and bounded visual pool tests do not establish GPU frame time for 896 simultaneously visible conductive actors."
+  ]
+}

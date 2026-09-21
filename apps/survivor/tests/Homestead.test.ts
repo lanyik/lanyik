@@ -58,6 +58,10 @@ test.each(["chain", "meteor", "vortex", "blades", "pulse", "frost", "ward", "das
         const ranks = [...state.skills.ranks]; ranks[nodeIndex("icebolt")] = 3; ranks[nodeIndex("icebolt.power")] = 3; ranks[nodeIndex("frost")] = 1;
         combat.commitSkillBuild(ranks, 0);
     }
+    if (skill === "chain") {
+        const ranks = [...state.skills.ranks]; ranks[nodeIndex("arc")] = 3; ranks[nodeIndex("arc.power")] = 3; ranks[nodeIndex("chain")] = 1;
+        combat.commitSkillBuild(ranks, 0);
+    }
     if (skill === "meteor") {
         const ranks = [...state.skills.ranks];
         for (const [id, rank] of Object.entries({ fireball: 10, "fireball.power": 5, pyroblast: 3, meteor: 1 })) ranks[nodeIndex(id)] = rank;

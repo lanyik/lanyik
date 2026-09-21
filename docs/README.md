@@ -75,7 +75,7 @@ docs/
 
 | 要做的事 | 主要设计 → 需要联动的设计 | 代码起点 |
 |---|---|---|
-| 技能树、Buff、被动、伤害效果 | 当前边界读[战斗架构](game/combat-architecture.md) → [技能与效果](game/skills-and-effects.md)、[战斗与成长](game/combat-and-progression.md)；目标方案读[四系技能树与状态扩展计划](game/skill-tree-and-status.md)，顺序见[开发重点](game/development-priorities.md) | [StatusSystem](../apps/survivor/src/core/StatusSystem.ts)、[BurnSystem](../apps/survivor/src/core/BurnSystem.ts)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[SkillBuild](../apps/survivor/src/core/SkillBuild.ts)、[FrostCasting](../apps/survivor/src/core/FrostCasting.ts)、[FireCasting](../apps/survivor/src/core/FireCasting.ts)、[CombatResolution](../apps/survivor/src/core/CombatResolution.ts) |
+| 技能树、Buff、被动、伤害效果 | 当前边界读[战斗架构](game/combat-architecture.md) → [技能与效果](game/skills-and-effects.md)、[战斗与成长](game/combat-and-progression.md)；目标方案读[四系技能树与状态扩展计划](game/skill-tree-and-status.md)，顺序见[开发重点](game/development-priorities.md) | [StatusSystem](../apps/survivor/src/core/StatusSystem.ts)、[BurnSystem](../apps/survivor/src/core/BurnSystem.ts)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[SkillBuild](../apps/survivor/src/core/SkillBuild.ts)、[FrostCasting](../apps/survivor/src/core/FrostCasting.ts)、[FireCasting](../apps/survivor/src/core/FireCasting.ts)、[LightningCasting](../apps/survivor/src/core/LightningCasting.ts)、[CombatResolution](../apps/survivor/src/core/CombatResolution.ts) |
 | 探索迷雾、地图传送、家园往返、Boss 副本 | [探索与家园](game/exploration-and-homestead.md) → [角色存档](game/character-saves.md)、[物品合同](game/items.md)、[界面设计](game/interface-design.md) | [Exploration](../apps/survivor/src/core/Exploration.ts)、[BossChallenge](../apps/survivor/src/core/BossChallenge.ts)、[CombatSession](../apps/survivor/src/app/CombatSession.ts) |
 | 装备、自动穿戴/嵌珠、套装、连携与构筑 | [物品合同](game/items.md) → [打造与灵境](game/crafting-and-spirit.md)、[战斗架构](game/combat-architecture.md) | [Equipment](../apps/survivor/src/core/Equipment.ts)、[AutomaticLoadout](../apps/survivor/src/core/AutomaticLoadout.ts)、[Crafting](../apps/survivor/src/core/Crafting.ts)；套装/连携尚未完整实现 |
 | 怪物行为、攻击节奏与难度 | [模拟与 AI](game/simulation-and-ai.md) → [数值平衡](game/combat-balance.md)、[技能与效果](game/skills-and-effects.md) | [EnemyBehavior](../apps/survivor/src/core/EnemyBehavior.ts)、[EnemyDefinitions](../apps/survivor/src/core/EnemyDefinitions.ts)、[EnemyActions](../apps/survivor/src/core/EnemyActions.ts) |
@@ -135,7 +135,7 @@ flowchart TB
     item -. 图标、事务与比较 .-> ui
     ui --> perf["UI 性能<br/>ui-performance.md"]
     combat -. 后续扩展 .-> plan["开发重点：计划<br/>development-priorities.md"]
-    plan --> tree["四系技能树与状态：冰霜/火焰已接入<br/>skill-tree-and-status.md"]
+    plan --> tree["四系技能树与状态：冰霜/火焰/雷电已接入<br/>skill-tree-and-status.md"]
     tree -. 施放与效果接点 .-> skill
     tree -. 来源与结算接点 .-> combat
     tree -. 树状交互方案 .-> ui
@@ -154,7 +154,7 @@ flowchart TB
 | [combat-and-progression.md](game/combat-and-progression.md) | 地域、玩法驻留、奖励来源、寻宝算法、经验与属性公式 | [CombatSimulation](../apps/survivor/src/core/CombatSimulation.ts)、[CombatStats](../apps/survivor/src/core/CombatStats.ts)、[RegionalWorld](../apps/survivor/src/core/RegionalWorld.ts)、[CombatRewards](../apps/survivor/src/core/CombatRewards.ts) |
 | [combat-balance.md](game/combat-balance.md) | 参考装备、承伤与击杀时间的数值期望及校准局限 | [EnemyDefinitions](../apps/survivor/src/core/EnemyDefinitions.ts)、[CombatBalance 测试](../apps/survivor/tests/CombatBalance.test.ts)、[报告脚本](../scripts/report-combat-balance.mjs) |
 | [skills-and-effects.md](game/skills-and-effects.md) | 技能装配、等级、释放、怪物攻击特性、特效与飘字 | [SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[EnemyActions](../apps/survivor/src/core/EnemyActions.ts)、[CombatFeedback](../apps/survivor/src/core/CombatFeedback.ts)、[SkillEffects](../apps/survivor/src/presentation/SkillEffects.ts)、[ActorStatusEffects](../apps/survivor/src/presentation/ActorStatusEffects.ts) |
-| [skill-tree-and-status.md](game/skill-tree-and-status.md) | **分阶段扩展计划**：冰霜/火焰已实现；雷电/星辰、完整 Buff/被动协议与全量调校待接入 | `SkillBuild`、`FrostCasting`、`FireCasting`、`SkillSystem`、`StatusSystem`、`BurnSystem` 和 `SkillsPanel`；当前规则归技能与战斗架构合同 |
+| [skill-tree-and-status.md](game/skill-tree-and-status.md) | **分阶段扩展计划**：冰霜/火焰/雷电已实现；星辰、完整 Buff/被动协议与全量调校待接入 | `SkillBuild`、`FrostCasting`、`FireCasting`、`LightningCasting`、`SkillSystem`、`StatusSystem`、`BurnSystem` 和 `SkillsPanel`；当前规则归技能与战斗架构合同 |
 | [items.md](game/items.md) | 装备生成与比较、物品身份、背包/穿戴/入包事务、分类回收、图标与地面表现 | [InventoryItem](../apps/survivor/src/core/InventoryItem.ts)、[Inventory](../apps/survivor/src/core/Inventory.ts)、[EquipmentEvaluation](../apps/survivor/src/core/EquipmentEvaluation.ts)、[Recycling](../apps/survivor/src/core/Recycling.ts) |
 | [crafting-and-spirit.md](game/crafting-and-spirit.md) | 词条打造、宝珠精炼/共鸣、打造事务与确认窗、永久灵境成长 | [Crafting](../apps/survivor/src/core/Crafting.ts)、[Orbs](../apps/survivor/src/core/Orbs.ts)、[SpiritRealm](../apps/survivor/src/core/SpiritRealm.ts) |
 | [character-saves.md](game/character-saves.md) | 角色检查点、自动/手动槽、灵境独立存储及读档重建边界 | [CharacterCheckpoint](../apps/survivor/src/core/CharacterCheckpoint.ts)、[CharacterRepository](../apps/survivor/src/app/CharacterRepository.ts)、[SpiritRepository](../apps/survivor/src/worker/SpiritRepository.ts) |
@@ -253,6 +253,7 @@ flowchart TB
 
 | 原始记录 | 测量阶段与当前合同 |
 |---|---|
+| [lightning-skill-tree.json](game/measurements/lightning-skill-tree.json) | 完整雷树、导电/静电防护与有界传导；896 目标重叠雷场/电网的查询与结算 CPU 样本、三系 UI 采样及验证范围 → [技能与效果](game/skills-and-effects.md)、[战斗架构](game/combat-architecture.md)、[UI 性能](game/ui-performance.md) |
 | [fire-skill-tree.json](game/measurements/fire-skill-tree.json) | 完整火树、灼烧/引爆与引导接入；28,672 层灼烧和重叠火场的 CPU 样本、冰火双页 UI 采样及验证范围 → [技能与效果](game/skills-and-effects.md)、[战斗架构](game/combat-architecture.md)、[UI 性能](game/ui-performance.md) |
 | [skill-interaction-refinement.json](game/measurements/skill-interaction-refinement.json) | 星图拖动/悬浮、单层装备锁和安全停步施法调整后的 CPU 门禁及背包/打造/星图浏览器采样 → [技能与效果](game/skills-and-effects.md)、[模拟与 AI](game/simulation-and-ai.md)、[UI 性能](game/ui-performance.md) |
 | [status-search-refinement.json](game/measurements/status-search-refinement.json) | 状态附着表现、宽屏星图和扩圈寻怪调整；896 怪物扩圈决策 CPU、背包/打造/星图浏览器采样及行为验证范围 → [技能与效果](game/skills-and-effects.md)、[模拟与 AI](game/simulation-and-ai.md)、[UI 性能](game/ui-performance.md) |

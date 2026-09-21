@@ -48,5 +48,7 @@ try {
     const skills = await sample(), mountedSkillNodes = await page.locator(".constellation-node").count();
     await page.getByRole("dialog", { name: "技能", exact: true }).getByRole("button", { name: "火焰" }).click();
     const fireSkills = await sample(), mountedFireNodes = await page.locator(".constellation-node").count();
-    console.log(JSON.stringify({ url, inventoryItems: 80, closed, open, mountedCells, forge, mountedForge, skills, mountedSkillNodes, fireSkills, mountedFireNodes }, null, 2));
+    await page.getByRole("dialog", { name: "技能", exact: true }).getByRole("button", { name: "雷电" }).click();
+    const lightningSkills = await sample(), mountedLightningNodes = await page.locator(".constellation-node").count();
+    console.log(JSON.stringify({ url, inventoryItems: 80, closed, open, mountedCells, forge, mountedForge, skills, mountedSkillNodes, fireSkills, mountedFireNodes, lightningSkills, mountedLightningNodes }, null, 2));
 } finally { await browser.close(); }

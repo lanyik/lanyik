@@ -5,7 +5,7 @@ import { POTION_RARITIES, POTION_TYPES, type InventoryItem } from "./InventoryIt
 import { RARITIES } from "./Loot";
 import { SKILL_IDS, SKILLS, isUltimate, type SkillId } from "./Skills";
 import { investedPoints, nodeIndex, validateSkillRanks } from "./SkillBuild";
-import { STATUS_DEFINITIONS, StatusKind } from "./StatusSystem";
+import { STATUS_DEFINITIONS, StatusKind, MAX_SAVED_STATUSES } from "./StatusSystem";
 import { BURN_INTERVAL, BURN_LAYERS, BURN_SOURCES } from "./BurnSystem";
 import type { SkillCheckpoint } from "./SkillSystem";
 import { validateSpiritRealm } from "./SpiritRealm";
@@ -15,7 +15,7 @@ import { CHALLENGE_IDS, CHALLENGE_ARENA, ChallengeTerrain, challengeSpawns, isCh
 import { ENEMY_DEFINITIONS, enemyStats } from "./EnemyDefinitions";
 
 export interface CharacterCheckpoint {
-    readonly version: 7;
+    readonly version: 8;
     readonly characterId: string;
     readonly challengeRevision: number;
     readonly challenges: ChallengeProgressMap;
@@ -62,7 +62,7 @@ function assertItem(item: InventoryItem): void {
 
 /** Reject invalid/currently unsupported saves before changing a running character. No migration. */
 export function validateCharacterCheckpoint(value: CharacterCheckpoint): CharacterCheckpoint {
-    if (!value || value.version !== 7) throw new Error("角色存档版本与当前游戏不一致");
+    if (!value || value.version !== 8) throw new Error("角色存档版本与当前游戏不一致");
     if (typeof value.characterId !== "string" || !value.characterId.length || value.characterId.length > 128 || !integer(value.challengeRevision)
         || !integer(value.teleportReadyAt) || value.teleportReadyAt > value.tick + GAME_CONFIG.timing.simulationHz * 5) throw new Error("角色传送进度无效");
     if ((!isChallenge(value.location) && !["wilds", "homestead"].includes(value.location)) || !value.wildsPosition
@@ -120,7 +120,7 @@ export function validateCharacterCheckpoint(value: CharacterCheckpoint): Charact
         || s.loadout.filter(id => id && isUltimate(id)).length > 1 || !Array.isArray(s.readyAt) || s.readyAt.length !== SKILL_IDS.length
         || s.readyAt.some(tick => !integer(tick)) || !integer(s.recoveryUntil) || s.recoveryUntil > value.tick + 600
         || !finite(s.dashUntil) || !Number.isFinite(s.dashX) || !Number.isFinite(s.dashZ)) throw new Error("角色技能存档无效");
-    if (!Array.isArray(s.statuses) || s.statuses.length > 15 || s.statuses.some(entry => !entry || !integer(entry.kind)
+    if (!Array.isArray(s.statuses) || s.statuses.length > MAX_SAVED_STATUSES || s.statuses.some(entry => !entry || !integer(entry.kind)
         || !STATUS_DEFINITIONS[entry.kind] || entry.kind === StatusKind.Burning || !Number.isSafeInteger(entry.source) || entry.source === 0 || !finite(entry.amount, Number.MIN_VALUE)
         || entry.amount > STATUS_DEFINITIONS[entry.kind].maximum || !integer(entry.remaining, 1) || entry.remaining > 7200)
         || new Set(s.statuses.map(entry => `${entry.kind}:${entry.source}`)).size !== s.statuses.length

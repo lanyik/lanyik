@@ -13,10 +13,11 @@ const bundle = await build({ stdin: { contents: `
     export { CombatWorld, Faction, ActorAction } from './apps/survivor/src/core/CombatWorld';
     export { FrostCasting } from './apps/survivor/src/core/FrostCasting';
     export { FireCasting } from './apps/survivor/src/core/FireCasting';
+    export { LightningCasting } from './apps/survivor/src/core/LightningCasting';
     export { CombatResolution } from './apps/survivor/src/core/CombatResolution';
     export { CombatEventKind, EffectCause } from './apps/survivor/src/core/CombatEvents';
     export { StatusKind } from './apps/survivor/src/core/StatusSystem';
-    export { skillValues } from './apps/survivor/src/core/Skills';
+    export { skillValues, NO_SKILL_MODIFIERS } from './apps/survivor/src/core/Skills';
     export { PlayerAutoCombat } from './apps/survivor/src/core/PlayerAutoCombat';
     export { EnemyKind } from './apps/survivor/src/core/EnemyDefinitions';
     export { deriveStats } from './apps/survivor/src/core/CombatStats';
@@ -145,6 +146,36 @@ function fireEffects() {
         p95TickMs: timings[Math.floor(ticks * .95)], p99TickMs: timings[Math.floor(ticks * .99)], maxTickMs: timings.at(-1) };
 }
 
+function lightningEffects() {
+    const e = new current.CombatWorld(0, 0), regions = new current.RegionalWorld("lightning-budget", { x: 0, z: 0 });
+    const region = regions.regionAt(0, 0), source = e.world.ids[e.player];
+    const stats = { ...current.deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, current.sumEquipment({})), accuracy: 2, lethalChance: 0, lifeExtraction: 0 };
+    e.vitals.health[e.player] = stats.maxHealth;
+    for (let i = 0; i < current.MAX_ENEMIES; i++) {
+        const slot = e.spawnEnemy({ x: (i % 32 - 16) * .04, z: 2 + Math.floor(i / 32) * .04, kind: 0, level: 1, elite: false, boss: false, region }, { resident: true });
+        e.vitals.health[slot] = e.vitals.maxHealth[slot] = 1e6;
+        e.status.apply(current.StatusKind.Conductive, source, e.world.ids[slot], 1, 480, 0);
+    }
+    const lightning = new current.LightningCasting(e), resolution = new current.CombatResolution(e), random = new current.DeterministicRandom("lightning-budget");
+    const modifiers = { ...current.NO_SKILL_MODIFIERS, shape: 5, tempo: 5, conduction: 3 }, network = current.skillValues("tempest", 1, stats, modifiers);
+    for (const id of ["thunderfield", "thunderstrike", "judgment"]) lightning.release(id, 0, stats, current.skillValues(id, 1, stats, modifiers), 0, 2, 0, random);
+    let queries = 0, candidates = 0, hits = 0, tick = 0;
+    const query = e.queryNearby.bind(e);
+    e.queryNearby = (...args) => { const result = query(...args); queries++; candidates += result.count; return result; };
+    const consume = () => {}, settle = () => { hits += e.impacts.count; resolution.resolve(tick, stats, random, false, consume); };
+    const ticks = 1200, timings = [], started = performance.now();
+    for (tick = 1; tick <= ticks; tick++) {
+        const before = performance.now(); e.status.advance(tick); lightning.advance(tick, random, settle);
+        if (tick <= 300 && tick % 30 === 1) { lightning.release("tempest", tick, stats, network, 0, 2, 0, random); settle(); }
+        timings.push(performance.now() - before);
+    }
+    const elapsed = performance.now() - started; timings.sort((a, b) => a - b);
+    assert.equal(hits, current.MAX_ENEMIES * 21 + 200); assert.equal(lightning.ongoing, false); assert.equal(e.enemies.count, current.MAX_ENEMIES);
+    assert.equal(e.status.conductiveUntil.some(Boolean), false);
+    return { msPerTick: elapsed / ticks, ticks, enemies: current.MAX_ENEMIES, initialConductive: current.MAX_ENEMIES, hits, networkCasts: 10, queries, candidates,
+        p95TickMs: timings[Math.floor(ticks * .95)], p99TickMs: timings[Math.floor(ticks * .99)], maxTickMs: timings.at(-1) };
+}
+
 function terrainCombat(automatic = false) {
     const terrain = new current.ProceduralCombatTerrain("rift-ember-1");
     const initializing = performance.now();
@@ -237,7 +268,7 @@ function autoSearch() {
         p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
 }
 
-const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), iceEffects: measure(iceEffects, 3), fireEffects: measure(fireEffects, 3), terrain: measure(terrainCombat, 3),
+const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), iceEffects: measure(iceEffects, 3), fireEffects: measure(fireEffects, 3), lightningEffects: measure(lightningEffects, 3), terrain: measure(terrainCombat, 3),
     autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision"), autoSearch: measure(autoSearch, 3, "Decision"), autoLoadout: measure(autoLoadout, 3, "Decision") };
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
@@ -245,7 +276,7 @@ console.log(JSON.stringify({ context: { node: process.version, platform: platfor
     gc: Boolean(globalThis.gc), timing: "one warmup, five samples, simulation only; travel/terrain restore health between ticks while retaining hit settlement; no browser/GPU claim" }, results }, null, 2));
 if (args.includes("--check")) {
     assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");
-    for (const result of [results.travel, results.crowded, results.iceEffects, results.fireEffects, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
+    for (const result of [results.travel, results.crowded, results.iceEffects, results.fireEffects, results.lightningEffects, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
     assert.ok(results.autoAvoidance.medianMsPerDecision <= results.autoAvoidance.budgetMsPerDecision, "Automatic avoidance exceeded its decision CPU budget");
     assert.ok(results.autoSearch.medianMsPerDecision <= results.autoSearch.budgetMsPerDecision, "Expanded automatic search exceeded its decision CPU budget");
     assert.ok(results.autoLoadout.medianMsPerDecision <= results.autoLoadout.budgetMsPerDecision, "Automatic loadout exceeded its decision CPU budget");

@@ -1,6 +1,7 @@
 import { StatusKind, type SavedStatus } from "./StatusSystem";
-import { SkillBuild, SKILL_NODES, nodeIndex } from "./SkillBuild";
+import { SkillBuild } from "./SkillBuild";
 import { FireCasting } from "./FireCasting";
+import { LightningCasting } from "./LightningCasting";
 import type { SavedBurn } from "./BurnSystem";
 import { FrostCasting } from "./FrostCasting";
 import { CombatWorld, Component } from "./CombatWorld";
@@ -8,7 +9,7 @@ import { EffectKind } from "./CombatEffects";
 import { rollAttack, type DerivedStats } from "./CombatStats";
 import type { DeterministicRandom } from "./DeterministicRandom";
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
-import { DEFAULT_LOADOUT, SKILLS, SKILL_IDS, SKILL_RULES, chainTargets, skillIndex, skillValues, isFireSkill, isFrostSkill, isUltimate, mobileCast, SKILL_TIMINGS, type SkillValues, type SkillId, type SkillSnapshot } from "./Skills";
+import { DEFAULT_LOADOUT, SKILLS, SKILL_IDS, SKILL_RULES, skillIndex, skillValues, isFireSkill, isFrostSkill, isLightningSkill, isUltimate, mobileCast, SKILL_TIMINGS, type SkillValues, type SkillId, type SkillSnapshot } from "./Skills";
 
 /** Player skill state lives with the authority; UI and effects never decide hits. */
 export interface SkillCheckpoint { readonly points: number; readonly loadout: readonly (SkillId | null)[]; readonly ranks: readonly number[]; readonly revision: number; readonly statuses: readonly SavedStatus[]; readonly burns: readonly SavedBurn[]; readonly recoveryUntil: number; readonly readyAt: readonly number[];
@@ -23,19 +24,19 @@ export class SkillSystem {
     private readonly build = new SkillBuild();
     private readonly frost: FrostCasting;
     private readonly fire: FireCasting;
+    private readonly lightning: LightningCasting;
     private pending: PendingCast | undefined;
     private recoveryUntil = 0;
     public get points(): number { return this.build.points; }
     public set points(value: number) { this.build.points = value; }
     public readonly loadout = [...DEFAULT_LOADOUT];
     private readonly readyAt = new Float64Array(SKILL_IDS.length);
-    private readonly chainSlots = new Int32Array(chainTargets(SKILL_NODES[nodeIndex("chain")].maximum));
     private dashUntil = 0;
     private dashX = 0;
     private dashZ = 0;
     // One live cast per ongoing skill, independent of the lossy presentation buffer.
     private readonly ongoing = new Map<OngoingId, OngoingSkill>();
-    constructor(private readonly entities: CombatWorld) { this.frost = new FrostCasting(entities); this.fire = new FireCasting(entities); }
+    constructor(private readonly entities: CombatWorld) { this.frost = new FrostCasting(entities); this.fire = new FireCasting(entities); this.lightning = new LightningCasting(entities); }
     public get fireProjectiles() { return this.fire.projectiles; }
     public get ward(): number { return this.entities.status.amount(StatusKind.Barrier, this.entities.player, 0); }
     private get wardUntil(): number { return this.entities.status.deadline(StatusKind.Barrier, this.entities.player); }
@@ -43,7 +44,7 @@ export class SkillSystem {
         revision: this.build.revision, statuses: this.entities.status.save(this.entities.player, tick), burns: this.entities.status.burns.save(this.entities.player, tick), recoveryUntil: Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0),
         readyAt: Array.from(this.readyAt), dashUntil: this.dashUntil, dashX: this.dashX, dashZ: this.dashZ }; }
     public restore(state: SkillCheckpoint, tick: number): void {
-        this.ongoing.clear(); this.frost.clear(); this.fire.clear(); this.pending = undefined; this.recoveryUntil = state.recoveryUntil;
+        this.ongoing.clear(); this.frost.clear(); this.fire.clear(); this.lightning.clear(); this.pending = undefined; this.recoveryUntil = state.recoveryUntil;
         this.entities.effects.cancelSource(this.entities.world.ids[this.entities.player]);
         this.loadout.splice(0, this.loadout.length, ...state.loadout); this.readyAt.set(state.readyAt);
         this.build.restore(state.ranks, state.points, state.revision);
@@ -54,7 +55,7 @@ export class SkillSystem {
     }
     public snapshot(tick: number): SkillSnapshot {
         const pending = this.pending, winding = pending && tick < pending.releaseAt, channeling = pending && !winding && tick < pending.channelUntil;
-        return Object.freeze({ points: this.points, refundBlocked: this.busy(tick) || this.ongoing.size > 0 || this.frost.ongoing || this.fire.ongoing, loadout: Object.freeze([...this.loadout]), build: this.build.snapshot(), modifiers: this.build.modifiers,
+        return Object.freeze({ points: this.points, refundBlocked: this.busy(tick) || this.ongoing.size > 0 || this.frost.ongoing || this.fire.ongoing || this.lightning.ongoing, loadout: Object.freeze([...this.loadout]), build: this.build.snapshot(), modifiers: this.build.modifiers,
             ranks: Object.freeze(Object.fromEntries(SKILL_IDS.map(id => [id, this.build.rank(id)])) as Record<SkillId, number>),
             remaining: Object.freeze(Object.fromEntries(SKILL_IDS.map((id, i) => [id, Math.max(0, this.readyAt[i] - tick) / GAME_CONFIG.timing.simulationHz])) as Record<SkillId, number>),
             ward: this.ward, wardRemaining: Math.max(0, this.wardUntil - tick) / GAME_CONFIG.timing.simulationHz, dashing: this.dashing(tick),
@@ -73,10 +74,11 @@ export class SkillSystem {
         this.loadout[slot] = id; return true;
     }
     public commitBuild(ranks: readonly number[], revision: number, level: number, homestead: boolean, tick: number): string | null {
-        const protection = this.build.rank("fire.resilience");
-        const reason = this.build.commit(ranks, revision, level, homestead && !this.busy(tick) && !this.ongoing.size && !this.frost.ongoing && !this.fire.ongoing);
+        const protection = this.build.rank("fire.resilience"), staticGuard = this.build.rank("lightning.resilience");
+        const reason = this.build.commit(ranks, revision, level, homestead && !this.busy(tick) && !this.ongoing.size && !this.frost.ongoing && !this.fire.ongoing && !this.lightning.ongoing);
         if (reason) return reason;
         if (this.build.rank("fire.resilience") < protection) this.entities.status.removeProtection(this.entities.world.ids[this.entities.player], this.entities.player, tick);
+        if (this.build.rank("lightning.resilience") < staticGuard) this.entities.status.removeStaticGuard(this.entities.player);
         for (let slot = 0; slot < this.loadout.length; slot++) {
             const id = this.loadout[slot]; if (id && this.build.rank(id) === 0) this.loadout[slot] = null;
         }
@@ -96,7 +98,7 @@ export class SkillSystem {
         if (tick >= cast.endsAt) this.pending = undefined;
     }
     public dashing(tick: number): boolean { return tick < this.dashUntil; }
-    public cancelTravel(): void { this.recoveryUntil = Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0); this.dashUntil = 0; this.dashX = this.dashZ = 0; this.pending = undefined; this.ongoing.clear(); this.frost.clear(); this.fire.clear(); }
+    public cancelTravel(): void { this.recoveryUntil = Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0); this.dashUntil = 0; this.dashX = this.dashZ = 0; this.pending = undefined; this.ongoing.clear(); this.frost.clear(); this.fire.clear(); this.lightning.clear(); }
     public advance(tick: number): boolean {
         if (!this.dashing(tick)) return false;
         if (!this.entities.status.canMove(this.entities.player, tick)) { this.dashUntil = tick; return false; }
@@ -104,7 +106,7 @@ export class SkillSystem {
         return true;
     }
     public advanceOngoing(tick: number, random: DeterministicRandom, settle: () => void): void {
-        this.frost.advance(tick, random, settle); this.fire.advance(tick, random, settle);
+        this.frost.advance(tick, random, settle); this.fire.advance(tick, random, settle); this.lightning.advance(tick, random, settle);
         const { position: p, player, world, impacts, enemy: e, terrain } = this.entities;
         for (const [id, cast] of this.ongoing) {
             if (tick > cast.endsAt) { this.ongoing.delete(id); continue; }
@@ -160,10 +162,10 @@ export class SkillSystem {
         if (v.health[player] <= 0 || !this.loadout.includes(id) || !this.build.rank(id) || level < definition.unlock || tick < this.readyAt[i]
             || !status.canAct(player, tick) || this.dashing(tick) || this.busy(tick) && id !== "dash"
             || v.mana[player] < values.mana || automatic && !definition.automatic
-            || this.ongoing.has(id as OngoingId) || this.frost.active(id) || !this.fire.available(id, values)) return false;
+            || this.ongoing.has(id as OngoingId) || this.frost.active(id) || !this.fire.available(id, values) || this.lightning.active(id)) return false;
         if (id === "ward" && (this.ward > 0 || automatic && v.health[player] / stats.maxHealth > SKILL_RULES.ward.automaticHealthRatio)) return false;
-        const field = id === "meteor" || id === "vortex" || id === "icestorm" || id === "blizzard" || id === "firewall" || id === "firedomain";
-        const range = isFireSkill(id) && id !== "doom" ? values.fire!.range : id === "vortex" ? SKILL_RULES.vortex.range : field ? 8 : id === "chain" ? SKILL_RULES.chain.firstRange : values.radius + (id === "blades" ? SKILL_RULES.blades.width : 0);
+        const field = id === "meteor" || id === "vortex" || id === "icestorm" || id === "blizzard" || id === "firewall" || id === "firedomain" || id === "thunderstrike" || id === "thunderfield" || id === "judgment";
+        const range = values.lightning ? values.lightning.range : isFireSkill(id) && id !== "doom" ? values.fire!.range : id === "vortex" ? SKILL_RULES.vortex.range : field ? 8 : values.radius + (id === "blades" ? SKILL_RULES.blades.width : 0);
         const target = id === "dash" || id === "ward" ? -1 : this.nearest(p.x[player], p.z[player], range);
         if (automatic && id !== "ward") {
             const nearby = this.entities.queryNearby(Component.Enemy, p.x[player], p.z[player], range, true);
@@ -173,7 +175,7 @@ export class SkillSystem {
                 if (id === "blades" && Math.hypot(p.x[slot] - p.x[player], p.z[slot] - p.z[player]) + p.radius[slot] < values.radius - SKILL_RULES.blades.width) continue;
                 if (this.entities.canSee(player, slot)) { eligible = true; break; }
             }
-            if (!eligible || (field || id === "chain" || id === "icebolt" || id === "icelance" || isFireSkill(id) && id !== "doom") && target < 0) return false;
+            if (!eligible || (field || isLightningSkill(id) || id === "icebolt" || id === "icelance" || isFireSkill(id) && id !== "doom") && target < 0) return false;
         }
         const heading = target >= 0 ? Math.atan2(p.x[target] - p.x[player], p.z[target] - p.z[player]) : p.heading[player];
         const releaseAt = tick + ticksForSeconds(Math.max(id === "dash" ? 0 : .1, SKILL_TIMINGS[id][0] / (1 + stats.castSpeed)));
@@ -193,6 +195,7 @@ export class SkillSystem {
         const x = p.x[player], z = p.z[player];
         if (isFrostSkill(id)) { this.frost.release(id, tick, stats, values, cast.targetX, cast.targetZ, cast.heading, random); return; }
         if (isFireSkill(id)) { this.fire.release(id, tick, stats, values, cast.targetX, cast.targetZ, cast.heading, random); return; }
+        if (isLightningSkill(id)) { this.lightning.release(id, tick, stats, values, cast.targetX, cast.targetZ, cast.heading, random); return; }
         if (id === "vortex" || id === "blades") {
             if (this.ongoing.has(id)) return;
             const duration = SKILL_RULES[id].duration;
@@ -214,32 +217,6 @@ export class SkillSystem {
             this.dashX = Math.sin(p.heading[player]) * values.dashDistance / duration;
             this.dashZ = Math.cos(p.heading[player]) * values.dashDistance / duration;
             effects.add(EffectKind.Dash, tick, x, z, .5, .6, x + this.dashX * duration, z + this.dashZ * duration);
-        } else if (id === "chain") {
-            let fromX = x, fromZ = z, from = player, hits = 0;
-            for (; hits < values.targets; hits++) {
-                const range = hits === 0 ? SKILL_RULES.chain.firstRange : SKILL_RULES.chain.jumpRange;
-                let nearest = range * range, target = -1;
-                const enemies = this.entities.queryNearby(Component.Enemy, fromX, fromZ, range);
-                for (let cursor = 0; cursor < enemies.count; cursor++) {
-                    const slot = enemies.slots[cursor];
-                    let visited = false;
-                    for (let j = 0; j < hits; j++) if (this.chainSlots[j] === slot) visited = true;
-                    if (visited) continue;
-                    const distance = (p.x[slot] - fromX) ** 2 + (p.z[slot] - fromZ) ** 2;
-                    if ((distance < nearest || distance === nearest && (target < 0 || world.ids[slot] < world.ids[target])) && this.entities.canSee(from, slot)) { nearest = distance; target = slot; }
-                }
-                if (target < 0) break;
-                this.chainSlots[hits] = target;
-                const hit = rollAttack(stats, random, values.damage * SKILL_RULES.chain.damageRetention ** hits);
-                impacts.add(world.ids[player], world.ids[target], hit.damage, 0, 0, Number(hit.critical));
-                effects.add(EffectKind.Lightning, tick, fromX, fromZ, .45, .55, p.x[target], p.z[target]);
-                fromX = p.x[target]; fromZ = p.z[target]; from = target;
-            }
-            if (!hits) {
-                effects.add(EffectKind.Lightning, tick, x, z, .45, .55,
-                    x + Math.sin(p.heading[player]) * SKILL_RULES.chain.firstRange,
-                    z + Math.cos(p.heading[player]) * SKILL_RULES.chain.firstRange);
-            }
         } else {
             const enemies = this.entities.queryNearby(Component.Enemy, x, z, values.radius, true, true);
             for (let cursor = 0; cursor < enemies.count; cursor++) {

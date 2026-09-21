@@ -63,7 +63,7 @@ test("burn saves preserve phase and source groups, reject invalid layers and nev
     const target = e.world.ids[e.player];
     e.status.burns.apply(target, target, 3, 0, 480); e.status.burns.apply(100, target, 4, 0, 480); e.status.burns.apply(200, target, 5, 0, 480);
     for (let tick = 0; tick < 23; tick++) simulation.step({ x: 0, z: 0, active: false });
-    const saved = simulation.checkpoint(); expect(saved.version).toBe(7);
+    const saved = simulation.checkpoint(); expect(saved.version).toBe(8);
     expect(saved.skills.burns.map(entry => [entry.amount, entry.remaining, entry.nextIn])).toEqual([[5, 457, 37], [4, 457, 37], [3, 457, 37]]);
     const restored = new CombatSimulation(saved.seed, saved.origin); restored.restore(saved);
     const once = restored.checkpoint(); restored.restore(once); expect(restored.checkpoint()).toEqual(once);
@@ -72,7 +72,7 @@ test("burn saves preserve phase and source groups, reject invalid layers and nev
         expect(() => validateCharacterCheckpoint({ ...saved, skills: { ...saved.skills, burns: [entry] } })).toThrow();
     }
     expect(() => validateCharacterCheckpoint({ ...saved, skills: { ...saved.skills, burns: Array(9).fill(saved.skills.burns[0]) } })).toThrow();
-    expect(() => validateCharacterCheckpoint({ ...saved, version: 6 } as never)).toThrow();
+    expect(() => validateCharacterCheckpoint({ ...saved, version: 7 } as never)).toThrow();
     simulation.dispose(); restored.dispose();
 });
 
