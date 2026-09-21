@@ -491,6 +491,8 @@ GPU 和长帧记录异步送达，按到达窗口统计，不能与当前帧 CPU
 ### 固定频率配置与吞吐估算
 
 `GameConfig.ts` 统一定义目标、预算、背包规则和品质色，派生周期不重复写常量。运行期不修改固定步长。
+配置阅读从 [GameConfig.ts](../../apps/survivor/src/core/GameConfig.ts) 和 [WorldView.ts](../../apps/survivor/src/core/WorldView.ts) 的中文字段注释进入：前者解释用途、单位、容量及调度，后者解释游戏单位与地图显示单位、玩法驻留区块与地形源区块的差别。普通距离以游戏单位表示，`horizonFogStart/End` 已乘显示缩放；巡逻速度是倍率，地面投影 `span` 是边长，`maxEffects` 是视觉记录容量而非技能或 Buff 数量。
+所有通过 `ticksPerUpdate` 使用的子系统频率必须整除模拟频率。配置并非所有字段都能独立修改：回复频率需核对单次回复量，技能点/槽数需联动成长与存档校验，视野需同时核对人口容量、角色淡出、AI 唤醒/休眠和卸载边界。容量和 Worker 布局在启动时派生；修改数值后按[验证矩阵](../testing.md#change-based-local-validation)验证所属边界，打包版需重新构建才生效。
 固定逻辑与渲染刷新分开；固定更新不代表主流引擎统一使用 120Hz，参见 [Unity 固定更新](https://docs.unity.cn/6000.0/Documentation/Manual/fixed-updates.html)。
 
 | 工作 | 当前调度 | 说明 |
