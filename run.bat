@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-title Survivor - Development Server
+title Survivor - Game Preview
 pushd "%~dp0"
 if errorlevel 1 exit /b 1
 
@@ -11,21 +11,22 @@ if errorlevel 1 goto :missing_node
 node -e "const [major, minor] = process.versions.node.split('.').map(Number); process.exit((major === 20 && minor >= 19 || major === 22 && minor >= 12 || major > 22) ? 0 : 1)"
 if errorlevel 1 goto :missing_node
 
-if exist "node_modules\" goto :prepare
+if exist "node_modules\" goto :build
 echo Installing dependencies from package-lock.json...
 call npm.cmd ci
 if errorlevel 1 goto :failed
 
-:prepare
-echo Preparing the game assets and local library...
-call npm.cmd run app:prepare
+:build
+echo Building the game package and preparing its assets...
+call npm.cmd run app:build
 if errorlevel 1 goto :failed
 
 echo.
-echo Starting http://127.0.0.1:5173/ and opening your browser.
+echo Starting http://127.0.0.1:4174/ and opening your browser.
+echo Playing the built game. Source edits will not reload this page.
 echo Keep this window open while playing. Press Ctrl+C to stop the server.
-echo If port 5173 is already in use, stop its existing server first.
-call npm.cmd run dev --workspace @preview/survivor -- --open
+echo If port 4174 is already in use, stop its existing server first.
+call npm.cmd run preview --workspace @preview/survivor -- --open
 if errorlevel 1 goto :failed
 popd
 endlocal

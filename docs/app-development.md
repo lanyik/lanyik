@@ -132,10 +132,10 @@ pagehide 非往返缓存场景停止应用帧并等待异步释放，重复关�
 
 ## 构建与验证
 
-`npm run app:dev` 准备本地库、地形、森林、预烘焙角色与技能图集，然后在 5173 启动；`app:build` 严格检查并生成生产应用。
-Windows 一键入口为根目录 `run.bat`，工作目录固定为脚本所在目录，检查 Node.js `^20.19.0 || >=22.12.0` 与 npm。
-缺少 `node_modules` 时先执行 `npm ci`，随后顺序执行 `npm run app:prepare` 和 `npm run dev --workspace @preview/survivor -- --open`。
-Vite 就绪后打开默认浏览器；服务在同一命令窗口运行，Ctrl+C 停止。依赖安装、资源准备或端口绑定失败立即停止并保留错误信息，不终止占用 5173 的其他进程。
+`npm run app:dev` 准备本地库、地形、森林、预烘焙角色与技能图集，然后在 5173 启动带热更新的开发服务；`app:build` 完成相同准备、严格检查并生成 `apps/survivor/dist` 生产包；`app:preview` 只在 4174 提供已有生产包，不构建、不监听源码变化。
+Windows 一键游玩入口为根目录 `run.bat`，工作目录固定为脚本所在目录，检查 Node.js `^20.19.0 || >=22.12.0` 与 npm。
+缺少 `node_modules` 时先执行 `npm ci`，随后每次顺序执行 `npm run app:build` 和 `npm run preview --workspace @preview/survivor -- --open`，确保启动的是当前代码的完整生产包；构建失败不启动预览。
+预览服务就绪后打开默认浏览器的 4174 开始界面；只启动这一个服务。游玩时改动源码不会触发页面热更新或重载，更新游戏需要重新构建并刷新页面。服务在同一命令窗口运行，Ctrl+C 停止；依赖安装、构建或端口绑定失败立即停止并保留错误信息，不终止占用 4174 的其他进程。开发仍显式使用 `npm run app:dev`，两个端口的浏览器存档各自独立。
 批处理使用 CRLF 行尾，控制台文字使用 ASCII，避免 Windows 代码页影响执行或错误展示。
 地形通行与攻击遮挡的验收由[地形合同](game/terrain-navigation.md)维护；拾取、角色与环境表现分别按所属物品和资产合同验证。
 构建脚本先校验 realpath 与父目录，只替换 `apps/survivor/.assets`；不下载网络资产或删除源文件。

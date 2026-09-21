@@ -59,13 +59,17 @@ Runtime requirements are Node.js 20 or newer for development and `three`
   diagnostics for frame, Worker, cache and residency state.
 
 On Windows, double-click [`run.bat`](run.bat) to install locked dependencies when
-`node_modules` is missing, prepare assets, start the server and open the game menu.
+`node_modules` is missing, prepare assets, build the production game and open
+<http://127.0.0.1:4174>. Each launch builds the current source, then serves
+`apps/survivor/dist`; source edits do not hot-update or reload the running page.
 It requires Node.js `^20.19.0 || >=22.12.0` and npm. Keep the terminal open while
-playing; press Ctrl+C to stop. Startup errors remain visible. If port 5173 is
-already occupied, stop the existing server first.
+playing; press Ctrl+C to stop. Startup errors remain visible. If port 4174 is
+already occupied, stop the existing server first. Use `npm run app:preview` to
+serve an existing production build without rebuilding.
 
-Alternatively, run the game application with `npm run app:dev`, then open
-<http://127.0.0.1:5173>. Use WASD to move; attacks target the nearest monster
+For development with hot updates, use `npm run app:dev` and open
+<http://127.0.0.1:5173>. Browser saves are separate for ports 5173 and 4174.
+Use WASD to move; attacks target the nearest monster
 automatically, `I` opens equipment and `P` pauses combat.
 `Z` toggles auto combat with nearby targeting, chest pickup, low-health potions and
 limited dodging; WASD takes over movement and death stops automation. `F`
@@ -276,8 +280,9 @@ are documented in [Combat ECS and behavior trees](docs/game/simulation-and-ai.md
 | `npm run build:lib` | Build ESM, CJS, global bundle and declarations into `dist/` |
 | `npm run build` | Build the library and copy the runnable demo assets into `public/` |
 | `npm run server` | Serve `public/` on port 3000 without rebuilding |
-| `npm run app:dev` | Build dependencies and run the survivor game on port 5173 |
+| `npm run app:dev` | Build dependencies and run the hot-updating game development server on port 5173 |
 | `npm run app:build` | Type-check and build the production survivor application |
+| `npm run app:preview` | Serve the existing production game on port 4174 without rebuilding |
 | `npm run test:app` | Run deterministic survivor core tests |
 | `npm run test:app:e2e` | Run the survivor browser acceptance flow |
 | `npm run benchmark:app` | Check survivor simulation CPU budgets |
