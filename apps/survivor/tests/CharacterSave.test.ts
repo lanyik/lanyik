@@ -117,6 +117,24 @@ test("unchanged cloned inventory and evaluations keep their references while cha
     expect(next.player.inventory).not.toBe(original.player.inventory); expect(next.player.inventory[1]).toBe(original.player.inventory[1]);
     simulation.dispose();
 });
+
+test("snapshot sharing keeps unchanged prefixes and handles removal, empty branches and frozen inputs", () => {
+    const simulation = fixture(), original = simulation.getSnapshot(), copy = structuredClone(original);
+    const inventory = Object.freeze(copy.player.inventory.map((item, i) => Object.freeze(i === copy.player.inventory.length - 1 ? { ...item, locked: true } : item)));
+    const next = Object.freeze({ ...copy, player: Object.freeze({ ...copy.player, inventory, equipment: Object.freeze({}) }) });
+    const shared = shareSnapshot(original, next);
+    expect(shared).toEqual(next); expect(shared.player.equipment).toEqual({});
+    expect(shared.player.inventory[0]).toBe(original.player.inventory[0]);
+    expect(shared.player.inventory.at(-1)).not.toBe(original.player.inventory.at(-1));
+    expect(shared.player.stats).toBe(original.player.stats);
+    expect(next.player.inventory[0]).toBe(inventory[0]); // Never rewrite either input's children.
+    const removed = shareSnapshot(shared, { ...next, player: { ...next.player, inventory: inventory.slice(0, 1), orbs: [undefined] } });
+    expect(removed.player.inventory).toEqual([original.player.inventory[0]]);
+    expect(removed.player.inventory[0]).toBe(original.player.inventory[0]); expect(removed.player.orbs).toEqual([undefined]);
+    const empty = shareSnapshot(removed, { ...removed, player: { ...removed.player, inventory: [] } });
+    expect(empty.player.inventory).toEqual([]);
+    simulation.dispose();
+});
 test("storage rejection is reported without stopping combat or acknowledging a save", async () => {
     vi.stubGlobal("document", { hidden: false });
     const session = new CombatSession({ workerActivity: [], load: async () => ({ x: 0, z: 0 }), reset() {}, render() {}, clearMovement() {}, readMovement: () => ({ x: 0, z: 0, active: false }), dispose: async () => {} },

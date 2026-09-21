@@ -26,6 +26,7 @@ export class BurnSystem {
     private readonly dueDamage: Float64Array;
     private readonly dueGroups: Uint8Array;
     private readonly dirty: Uint8Array;
+    private readonly dirtySlots: Uint32Array;
     private count = 0;
     private freeCount: number;
     private nextEvent = Infinity;
@@ -35,6 +36,7 @@ export class BurnSystem {
         const capacity = Math.min(world.capacity, MAX_ENEMIES + 1) * BURN_SOURCES * BURN_LAYERS;
         this.until = new Float64Array(world.capacity); this.stacks = new Uint8Array(world.capacity);
         this.head = new Int32Array(world.capacity).fill(-1); this.dirty = new Uint8Array(world.capacity);
+        this.dirtySlots = new Uint32Array(world.capacity);
         this.next = new Int32Array(capacity).fill(-1); this.index = new Int32Array(capacity).fill(-1);
         this.target = new Float64Array(capacity); this.source = new Float64Array(capacity);
         this.damage = new Float64Array(capacity); this.expires = new Float64Array(capacity); this.nextAt = new Float64Array(capacity);
@@ -97,7 +99,7 @@ export class BurnSystem {
         try {
             while (this.nextEvent <= tick) {
                 const at = this.nextEvent;
-                let dueCount = 0;
+                let dueCount = 0, dirtyCount = 0;
                 this.nextEvent = Infinity;
                 this.dueGroups.fill(0);
                 // Capture due hits before expiry/death mutates the active set. Last tick at expiry is included.
@@ -117,10 +119,15 @@ export class BurnSystem {
                         this.dueDamage[group] += this.damage[i];
                         this.nextAt[i] += BURN_INTERVAL;
                     }
-                    if (this.expires[i] <= at) { this.erase(i, slot); this.dirty[slot] = 1; }
+                    if (this.expires[i] <= at) {
+                        this.erase(i, slot);
+                        if (!this.dirty[slot]) { this.dirty[slot] = 1; this.dirtySlots[dirtyCount++] = slot; }
+                    }
                     else this.nextEvent = Math.min(this.nextEvent, this.nextAt[i], this.expires[i]);
                 }
-                for (let slot = 0; slot < this.dirty.length; slot++) if (this.dirty[slot]) { this.project(slot); this.dirty[slot] = 0; }
+                for (let i = 0; i < dirtyCount; i++) {
+                    const slot = this.dirtySlots[i]; this.project(slot); this.dirty[slot] = 0;
+                }
                 this.due.subarray(0, dueCount).sort((a, b) => this.dueTarget[a] - this.dueTarget[b] || this.dueSource[a] - this.dueSource[b]);
                 for (let j = 0; j < dueCount; j++) {
                     const i = this.due[j]; hit(this.dueSource[i], this.dueTarget[i], this.dueDamage[i], at);

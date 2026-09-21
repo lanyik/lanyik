@@ -253,6 +253,7 @@ flowchart TB
 
 | 原始记录 | 测量阶段与当前合同 |
 |---|---|
+| [combat-pipeline-optimization.json](game/measurements/combat-pipeline-optimization.json) | 标量到期按目标去重、灼烧脏列表、快照延迟分配的 Git 基线对照与严格回放；表现帧复制取舍、2K 三系持续战斗和完整背包观测 → [战斗架构](game/combat-architecture.md)、[模拟](game/simulation-and-ai.md)、[UI 性能](game/ui-performance.md)；复测入口见[验证策略](testing.md#benchmark-scope) |
 | [lightning-skill-tree.json](game/measurements/lightning-skill-tree.json) | 完整雷树、导电/静电防护与有界传导；896 目标重叠雷场/电网的查询与结算 CPU 样本、三系 UI 采样及验证范围 → [技能与效果](game/skills-and-effects.md)、[战斗架构](game/combat-architecture.md)、[UI 性能](game/ui-performance.md) |
 | [fire-skill-tree.json](game/measurements/fire-skill-tree.json) | 完整火树、灼烧/引爆与引导接入；28,672 层灼烧和重叠火场的 CPU 样本、冰火双页 UI 采样及验证范围 → [技能与效果](game/skills-and-effects.md)、[战斗架构](game/combat-architecture.md)、[UI 性能](game/ui-performance.md) |
 | [skill-interaction-refinement.json](game/measurements/skill-interaction-refinement.json) | 星图拖动/悬浮、单层装备锁和安全停步施法调整后的 CPU 门禁及背包/打造/星图浏览器采样 → [技能与效果](game/skills-and-effects.md)、[模拟与 AI](game/simulation-and-ai.md)、[UI 性能](game/ui-performance.md) |

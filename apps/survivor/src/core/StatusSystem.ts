@@ -36,6 +36,8 @@ export class StatusSystem {
     private readonly sources: Float64Array;
     private readonly active: Uint32Array;
     private readonly indices: Int32Array;
+    private readonly dirty: Uint8Array;
+    private readonly dirtySlots: Uint32Array;
     private count = 0;
     private nextExpiry = Infinity;
 
@@ -44,6 +46,7 @@ export class StatusSystem {
         this.burns = new BurnSystem(world); this.burnUntil = this.burns.until; this.burnStacks = this.burns.stacks;
         this.until = new Float64Array(capacity); this.strength = new Float64Array(capacity); this.sources = new Float64Array(capacity);
         this.active = new Uint32Array(capacity); this.indices = new Int32Array(capacity).fill(-1);
+        this.dirty = new Uint8Array(world.capacity); this.dirtySlots = new Uint32Array(world.capacity);
         this.slowUntil = new Float64Array(world.capacity); this.wardUntil = new Float64Array(world.capacity);
         this.frozenUntil = new Float64Array(world.capacity); this.slowScale = new Float32Array(world.capacity).fill(1);
         this.conductiveUntil = new Float64Array(world.capacity); this.staticGuardUntil = new Float64Array(world.capacity);
@@ -83,7 +86,9 @@ export class StatusSystem {
         }
         if (this.indices[chosen] < 0) { this.indices[chosen] = this.count; this.active[this.count++] = chosen; }
         this.sources[chosen] = source; this.strength[chosen] = strength; this.until[chosen] = until;
-        this.nextExpiry = Math.min(this.nextExpiry, until); this.project(slot, tick);
+        this.nextExpiry = Math.min(this.nextExpiry, until);
+        // These two kinds have no movement/render projection; their consumers read the source records.
+        if (kind !== StatusKind.Barrier && kind !== StatusKind.ControlResistance) this.project(slot, tick);
         return true;
     }
     public chill(source: number, target: number, amount: number, until: number, tick: number, freezeTicks: number): boolean {
@@ -141,14 +146,19 @@ export class StatusSystem {
     public advance(tick: number): void {
         if (tick < this.nextExpiry) return;
         this.nextExpiry = Infinity;
+        let dirtyCount = 0;
         for (let cursor = this.count - 1; cursor >= 0; cursor--) {
             const i = this.active[cursor], slot = Math.floor(i / SOURCES) % this.world.capacity;
             if (tick >= this.until[i]) {
                 const frozen = Math.floor(i / SOURCES / this.world.capacity) === StatusKind.Frozen;
                 const source = this.sources[i], ended = this.until[i]; this.erase(i);
                 if (frozen && ended + ticksForSeconds(3) > tick) this.apply(StatusKind.ControlResistance, source, this.world.ids[slot], 1, ended + ticksForSeconds(3), tick);
-                this.project(slot, tick);
+                if (!this.dirty[slot]) { this.dirty[slot] = 1; this.dirtySlots[dirtyCount++] = slot; }
             } else this.nextExpiry = Math.min(this.nextExpiry, this.until[i]);
+        }
+        // No external callbacks run during expiry. Publish once per target before the next simulation stage.
+        for (let i = 0; i < dirtyCount; i++) {
+            const slot = this.dirtySlots[i]; this.project(slot, tick); this.dirty[slot] = 0;
         }
     }
     public save(slot: number, tick: number): SavedStatus[] {

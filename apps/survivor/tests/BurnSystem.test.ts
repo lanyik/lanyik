@@ -74,6 +74,23 @@ test("saving preserves individual output and time-to-next-tick, including partia
     burns.restore(slot, tail, 100); hit.mockClear(); burns.advance(155, hit); expect(hit).not.toHaveBeenCalled();
 });
 
+test("expiry is published before callbacks reapply burns and the next batch expires the new layers", () => {
+    const { world, slot, target, burns } = fixture(1857), otherSlot = world.create(1), other = world.ids[otherSlot];
+    for (const id of [target, other]) for (const source of [1, 2]) burns.apply(source, id, 3, 0, 60);
+    const hits: number[][] = [];
+    burns.advance(120, (source, id, damage, tick) => {
+        hits.push([source, id, damage, tick]);
+        if (tick === 60 && source === 1) {
+            expect(burns.stacks[world.resolve(id)]).toBe(0);
+            burns.apply(3, id, 7, tick, 60);
+            expect(burns.stacks[world.resolve(id)]).toBe(1);
+        }
+        if (tick === 120) { expect(burns.stacks[slot]).toBe(0); expect(burns.stacks[otherSlot]).toBe(0); }
+    });
+    expect(hits).toEqual([[1, target, 3, 60], [2, target, 3, 60], [1, other, 3, 60], [2, other, 3, 60], [3, target, 7, 120], [3, other, 7, 120]]);
+    expect(burns.isDue(1000)).toBe(false);
+});
+
 test("invalid inputs fail before mutation and full capacity can be reused after clear", () => {
     const { target, slot, burns } = fixture(1);
     for (const damage of [NaN, Infinity, 1e308, 0, -1]) expect(() => burns.apply(1, target, damage, 0, 480)).toThrow();

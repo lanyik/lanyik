@@ -25,6 +25,36 @@ test("independent source expiry never lets weak refresh extend the stronger stat
     expect(status.amount(Kind.Slow, b, 20)).toBe(.1);
 });
 
+test("simultaneous expiry publishes every target before subsequent movement, hits and slot reuse", () => {
+    const world = new EntityWorld(3), status = new StatusSystem(world);
+    const slots = [world.create(1), world.create(1), world.create(1)];
+    for (const slot of slots) {
+        const target = world.ids[slot];
+        for (let source = 1; source <= 4; source++) {
+            status.apply(Kind.Slow, source, target, .1 * source, 60, 0);
+            status.apply(Kind.Chill, source, target, source, 60, 0);
+            status.apply(Kind.Protection, source, target, .1 * source, 60, 0);
+        }
+        status.apply(Kind.Frozen, target, target, 1, 60, 0);
+        status.apply(Kind.Conductive, target, target, 1, 60, 0);
+        status.apply(Kind.StaticGuard, target, target, .05, 90, 0);
+    }
+    status.advance(60);
+    for (const slot of slots) {
+        expect(status.slowUntil[slot]).toBe(0); expect(status.slowScale[slot]).toBe(1);
+        expect(status.wardUntil[slot]).toBe(0); expect(status.conductiveUntil[slot]).toBe(0);
+        expect(status.canMove(slot, 60)).toBe(true); expect(status.protection(slot, 60)).toBe(.05);
+        expect(status.deadline(Kind.ControlResistance, slot)).toBe(420);
+        expect(status.apply(Kind.Frozen, 1, world.ids[slot], 1, 90, 60)).toBe(false);
+    }
+    const slot = slots[1]; status.clear(slot); world.destroy(world.ids[slot]); expect(world.create(1)).toBe(slot);
+    status.apply(Kind.Slow, 1, world.ids[slot], .2, 100, 60);
+    status.advance(90); expect(status.slowScale[slot]).toBeCloseTo(.8);
+    expect(slots.map(s => status.staticGuardUntil[s])).toEqual([0, 0, 0]);
+    status.advance(100); expect(status.slowScale[slot]).toBe(1);
+    status.advance(420); expect(slots.map(s => status.save(s, 420))).toEqual([[], [], []]);
+});
+
 test("barriers reject refresh, clamp absorption, and can be reapplied immediately on depletion", () => {
     const world = new EntityWorld(1), status = new StatusSystem(world), slot = world.create(1), id = world.ids[slot];
     expect(status.apply(Kind.Barrier, id, id, 10, 20, 0)).toBe(true);

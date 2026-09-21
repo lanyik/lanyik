@@ -127,6 +127,18 @@ browser input latency. Serial and scheduled full-capacity queries have budget ga
 enabling production parallel queries additionally requires an improvement over
 serial execution. Configuration and thresholds belong to the simulation contract.
 
+`node --expose-gc scripts/benchmark-survivor-pipeline.mjs <baseline-commit>` builds
+the committed baseline through Git reads without replacing the worktree. It times
+expiry events and snapshot sharing separately, checks an exact 1,200-tick replay,
+and compares native render copies with sparse slot writes. Snapshot cloning and
+status setup are excluded from their respective timings; this is Node CPU evidence.
+`node scripts/benchmark-survivor-combat.mjs <preview-url>` observes the complete
+2560×1440 browser path with a valid mixed-school build, moving/resting input,
+durable enemies and replenished player vitals. It retains real casting, AI, hit
+settlement, Worker pacing and rendering; an 8-second warmup precedes a 15-second
+sample. It asserts that all three status families actually occur, reports raw
+diagnostic windows and never infers GPU timing from frame rate.
+
 ## Meaning of the 500-iteration soak
 
 One iteration is one `HexMap.loadWorld()` replacement, not a tick or terrain tile.
