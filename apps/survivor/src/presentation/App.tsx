@@ -16,6 +16,7 @@ import { WorkerLoadPanel } from "./WorkerLoadPanel";
 import { SkillsPanel } from "./SkillsPanel";
 import { SkillDragProvider } from "./SkillDrag";
 import { OrbDragProvider } from "./OrbDrag";
+import { PassiveSlots } from "./PassiveView";
 import { SkillSlot } from "./SkillSlot";
 import { CraftingPanel } from "./CraftingPanel";
 import { SpiritRealmPanel } from "./SpiritRealmPanel";
@@ -188,6 +189,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                         disabled={combat.gameOver || snapshot.paused || player.potionRemaining > 0 || !item || !canUseConsumable(item, player)}
                         onClick={() => session.dispatch({ type: "use-consumable", effect })}><ItemIcon item={item} type="consumable" value={effect} className="skill-symbol" /></button></ItemTooltip><span>{effect === "health" ? "生命药剂" : "法力药剂"}</span><small>{player.potionRemaining > 0 ? `${player.potionRemaining.toFixed(1)}s` : `× ${count}`}</small></div>)}
                 </div>
+                <PassiveSlots player={player} />
             </section>
             <nav className="interface-menu panel" aria-label="界面快捷键">{MENUS.map(menu => <button key={menu.id} className={panels[menu.id] ? "active" : ""} aria-expanded={panels[menu.id]} disabled={snapshot.travelling || menu.id === "travel" && combat.gameOver} onClick={() => toggle(menu.id)}>
                 <UiIcon name={menu.id} /><span>{menu.name}{menu.id === "character" && player.unspentAttributePoints > 0 && <i>{player.unspentAttributePoints}</i>}{menu.id === "skills" && player.skills.points > 0 && <i>{player.skills.points}</i>}</span><kbd>{menu.key}</kbd></button>)}

@@ -39,6 +39,7 @@ import type { ProjectileExecutor } from "./ProjectileBatch";
 import { advanceProjectiles, moveEnemies, advanceEnemyActions } from "./CombatSystems";
 import { SkillSystem } from "./SkillSystem";
 import type { SkillId } from "./Skills";
+import type { PassiveId } from "./PassiveSkills";
 import { validateCharacterCheckpoint, type CharacterCheckpoint } from "./CharacterCheckpoint";
 import { MAX_PROJECTILES, CONSUMABLE_COOLDOWN } from "./GameConfig";
 import type { CombatRenderState, CombatSnapshot, CombatNotice, PlayerSnapshot, PlayerRenderState, MovementInput, ChestRenderBuffer } from "./CombatState";
@@ -52,6 +53,7 @@ const PICKUP_ARRIVAL = .25;
 const pickupTravel = (distance: number, radius: number) => Math.min(distance, (5 + (radius - distance) * 2.2) * STEP_SECONDS);
 const REGENERATION_TICKS = ticksPerUpdate(GAME_CONFIG.timing.regenerationHz);
 const AUTO_SKILL_TICKS = ticksPerUpdate(GAME_CONFIG.timing.autoSkillHz);
+const PASSIVE_PICKUP_TICKS = ticksPerUpdate(GAME_CONFIG.skills.passivePickupHz);
 type MutablePlayerRenderState = { -readonly [Key in keyof PlayerRenderState]: PlayerRenderState[Key] };
 class ChestPool implements ChestRenderBuffer {
     public count = 0;
@@ -200,7 +202,7 @@ export class CombatSimulation {
     public get challengeRevision(): number { return this.challengeRevisionValue; }
     public checkpoint(destination: WorldLocation = this.location, point?: { x: number; z: number }, targetTerrain?: CombatTerrain, recoverDefeat = false): CharacterCheckpoint {
         if ((this.gameOverValue && !recoverDefeat) || this.closed || this.awaitingQueries) throw new Error("当前角色状态不可保存");
-        const { stats: _stats, skills: _skills, battlePower: _power, equipmentPower: _equipmentPower, lootProfile: _loot, orbResonance: _resonance, experienceToLevel: _nextLevel, ...player } = this.getSnapshot().player;
+        const { stats: _stats, skills: _skills, passiveBonuses: _passiveBonuses, battlePower: _power, equipmentPower: _equipmentPower, lootProfile: _loot, orbResonance: _resonance, experienceToLevel: _nextLevel, ...player } = this.getSnapshot().player;
         const wildsPosition = this.location === "wilds" ? { x: this.playerX, z: this.playerZ } : { ...this.wildsPosition };
         const travelling = destination !== this.location, skills = this.skills.checkpoint(this.tickValue);
         let challenges = this.captureChallenges(), inventory = player.inventory, challengeRevision = this.challengeRevisionValue;
@@ -225,7 +227,7 @@ export class CombatSimulation {
         }
         const recovering = recoverDefeat && this.gameOverValue;
         if (recovering) { position = CHALLENGE_SPAWN; challengeRevision++; }
-        return validateCharacterCheckpoint({ version: 9, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
+        return validateCharacterCheckpoint({ version: 10, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
             location: destination, wildsPosition, exploration: this.exploration.snapshot,
             player: travelling || point || recovering ? { ...player, inventory, ...position, ...(destination === "homestead" || recovering ? { health: this.stats.maxHealth, mana: this.stats.maxMana } : {}) } : player,
             tick: this.tickValue, kills: this.rewards.kills, openedChests: this.openedChests, nextItemId: this.rewards.nextItemId, random: this.random.state,
@@ -249,7 +251,7 @@ export class CombatSimulation {
         this.resolution.shieldCooldown = p.shieldRemaining; this.potionCooldown = p.potionRemaining;
         this.autoCombat.setEnabled(false);
         this.failedLoadoutReceipts.clear(); this.failedLoadoutContext = undefined; this.automaticReceiptTick = -1;
-        this.lootProfile = lootProfile(sumOrbs(this.orbs)); this.orbBonuses = orbResonance(this.orbs); this.stats = this.calculateStats();
+        this.lootProfile = lootProfile(sumOrbs(this.orbs), this.skills.passiveEffects.find); this.orbBonuses = orbResonance(this.orbs); this.stats = this.calculateStats();
         this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
         this.health = Math.min(p.health, this.stats.maxHealth); this.mana = Math.min(p.mana, this.stats.maxMana);
         this.playerX = this.previousPlayerX = p.x; this.playerZ = this.previousPlayerZ = p.z; this.heading = p.heading;
@@ -402,7 +404,7 @@ export class CombatSimulation {
             unspentAttributePoints: this.unspentAttributePoints,
             gold: this.rewards.gold,
             shieldRemaining: this.resolution.shieldCooldown,
-            skills: this.skills.snapshot(this.tickValue),
+            skills: this.skills.snapshot(this.tickValue), passiveBonuses: this.skills.passiveEffects.bonuses,
             potionRemaining: this.potionCooldown,
             autoCast: this.autoCast,
             orbs: Object.freeze([...this.orbs]),
@@ -410,7 +412,7 @@ export class CombatSimulation {
             attributes: Object.freeze({ ...this.attributes }),
             stats: this.stats,
             battlePower: battlePower(this.stats),
-            equipmentPower: battlePower(this.stats) - battlePower(deriveStats(this.level, this.attributes, sumEquipment({}))),
+            equipmentPower: battlePower(this.stats) - battlePower(deriveStats(this.level, this.attributes, sumEquipment({}), this.skills.passiveEffects.bonuses)),
             equipment,
             inventory: Object.freeze([...this.inventory]),
             autoRecycle: this.autoRecycle,
@@ -587,7 +589,7 @@ export class CombatSimulation {
         this.inventory.splice(index, 1);
         if (previous && !this.storeInventoryItem(previous)) throw new Error("Orb exchange lost its reserved slot");
         this.orbs[socket] = item;
-        this.lootProfile = lootProfile(sumOrbs(this.orbs));
+        this.lootProfile = lootProfile(sumOrbs(this.orbs), this.skills.passiveEffects.find);
         this.orbBonuses = orbResonance(this.orbs);
         this.inventoryFullNotified = false;
         this.pushNotice("loot", `已嵌入 ${item.name}`);
@@ -614,7 +616,7 @@ export class CombatSimulation {
         if (!this.storeInventoryItem(orb)) { this.notifyInventoryFull("orb"); return; }
         this.inventoryFullNotified = false;
         this.orbs[socket] = undefined;
-        this.lootProfile = lootProfile(sumOrbs(this.orbs));
+        this.lootProfile = lootProfile(sumOrbs(this.orbs), this.skills.passiveEffects.find);
         this.orbBonuses = orbResonance(this.orbs);
         this.markChanged();
     }
@@ -643,9 +645,26 @@ export class CombatSimulation {
         if (!this.gameOverValue && this.skills.equip(id, slot, this.level)) this.markChanged();
     }
 
+    public equipPassive(id: PassiveId | null, slot: number): void {
+        if (this.gameOverValue || this.closed) return;
+        if (this.location !== "homestead" || this.skills.snapshot(this.tickValue).refundBlocked) {
+            this.pushNotice("danger", "请回家园并等待施法结束，再装卸常驻被动"); this.markChanged(); return;
+        }
+        if (!this.skills.equipPassive(id, slot, this.level)) {
+            this.pushNotice("danger", "被动尚未学习或槽位尚未解锁"); this.markChanged(); return;
+        }
+        this.recalculateStats(false, false);
+        this.lootProfile = lootProfile(sumOrbs(this.orbs), this.skills.passiveEffects.find);
+        this.markChanged();
+    }
+
     public commitSkillBuild(ranks: readonly number[], revision: number): void {
         if (this.gameOverValue) return;
         const reason = this.skills.commitBuild(ranks, revision, this.level, this.location === "homestead", this.tickValue);
+        if (!reason) {
+            this.recalculateStats(false, false);
+            this.lootProfile = lootProfile(sumOrbs(this.orbs), this.skills.passiveEffects.find);
+        }
         this.pushNotice(reason ? "danger" : "info", reason ?? "技能构筑已应用"); this.markChanged();
     }
 
@@ -838,15 +857,19 @@ export class CombatSimulation {
             if (slot >= 0) { e.position.previousX[slot] = e.position.x[slot]; e.position.previousZ[slot] = e.position.z[slot]; }
         }
         this.movingExperienceCount = 0;
-        const nearby = e.queryNearby(Component.Experience, this.playerX, this.playerZ, this.stats.pickupRadius, false, true);
-        for (let cursor = 0; cursor < nearby.count; cursor++) {
-            const index = nearby.slots[cursor];
+        const all = this.skills.passiveEffects.collectAll && this.tickValue % PASSIVE_PICKUP_TICKS === 0;
+        const nearby = all ? e.experience : e.queryNearby(Component.Experience, this.playerX, this.playerZ, this.stats.pickupRadius, false, true);
+        const count = nearby.count; let collected = 0;
+        for (let cursor = 0; cursor < count; cursor++) {
+            if (all && collected === GAME_CONFIG.skills.passivePickupBatch) break;
+            // Dense authority lists remove by swap; backwards traversal keeps remaining slots valid.
+            const index = nearby.slots[all ? count - 1 - cursor : cursor];
             const x = e.position.x[index], z = e.position.z[index];
             e.position.previousX[index] = x; e.position.previousZ[index] = z;
             const dx = this.playerX - x, dz = this.playerZ - z, distance = Math.hypot(dx, dz);
-            const travel = pickupTravel(distance, this.stats.pickupRadius);
-            if (distance - travel <= PICKUP_ARRIVAL) {
-                this.gainExperience(e.experienceValue[index]); e.remove(index);
+            const travel = all ? 0 : pickupTravel(distance, this.stats.pickupRadius);
+            if (all || distance - travel <= PICKUP_ARRIVAL) {
+                this.gainExperience(e.experienceValue[index]); e.remove(index); collected++;
                 if (this.challenge) this.challengeRevisionValue++;
             } else {
                 e.position.x[index] += dx / distance * travel; e.position.z[index] += dz / distance * travel;
@@ -856,6 +879,7 @@ export class CombatSimulation {
         }
     }
 
+    private passiveLootCursor = 0;
     private collectEquipment(): void {
         const e = this.entities, p = e.position;
         for (let i = 0; i < this.movingLootCount; i++) {
@@ -863,13 +887,18 @@ export class CombatSimulation {
             if (slot >= 0) { p.previousX[slot] = p.x[slot]; p.previousZ[slot] = p.z[slot]; }
         }
         this.movingLootCount = 0;
-        const nearby = e.queryNearby(Component.GroundItem, this.playerX, this.playerZ, this.stats.pickupRadius, false, true);
-        for (let cursor = 0; cursor < nearby.count; cursor++) {
-            const index = nearby.slots[cursor], id = this.entities.item.id[index];
+        const all = this.skills.passiveEffects.collectAll && this.tickValue % PASSIVE_PICKUP_TICKS === 0;
+        const nearby = all ? e.loot : e.queryNearby(Component.GroundItem, this.playerX, this.playerZ, this.stats.pickupRadius, false, true);
+        const count = nearby.count;
+        for (let cursor = 0; cursor < count; cursor++) {
+            if (all && cursor === GAME_CONFIG.skills.passivePickupBatch) break;
+            // Bound attempts even with a full bag. A rotating dense index prevents failed items starving others.
+            if (all) this.passiveLootCursor %= nearby.count;
+            const index = nearby.slots[all ? this.passiveLootCursor : cursor], id = this.entities.item.id[index];
             const dx = this.playerX - p.x[index], dz = this.playerZ - p.z[index], distance = Math.hypot(dx, dz);
-            const travel = pickupTravel(distance, this.stats.pickupRadius);
+            const travel = all ? 0 : pickupTravel(distance, this.stats.pickupRadius);
             p.previousX[index] = p.x[index]; p.previousZ[index] = p.z[index];
-            if (distance - travel > PICKUP_ARRIVAL) {
+            if (!all && distance - travel > PICKUP_ARRIVAL) {
                 p.x[index] += dx / distance * travel; p.z[index] += dz / distance * travel;
                 e.updateSpatial(index, Component.GroundItem); this.movingLoot[this.movingLootCount++] = e.world.ids[index];
                 continue;
@@ -877,7 +906,7 @@ export class CombatSimulation {
             const item = this.rewards.groundItems.get(id);
             if (!item) throw new Error(`Ground equipment ${id} is missing`);
             const recycled = this.recycled[item.type];
-            if (!this.receiveItems([item], 0, item)) continue;
+            if (!this.receiveItems([item], 0, item)) { if (all) this.passiveLootCursor++; continue; }
             this.rewards.groundItems.delete(id);
             this.entities.remove(index);
             if (this.challenge) this.challengeRevisionValue++;
@@ -941,12 +970,12 @@ export class CombatSimulation {
     }
 
     private calculateStats(): DerivedStats {
-        return deriveStats(this.level, this.attributes, sumEquipment(this.equipped));
+        return deriveStats(this.level, this.attributes, sumEquipment(this.equipped), this.skills.passiveEffects.bonuses);
     }
 
     private shouldAutoRecycle(item: InventoryItem): boolean {
         return shouldRecycle(item, this.autoRecycle, {
-            level: this.level, attributes: this.attributes, equipment: this.equipped, stats: this.stats
+            level: this.level, attributes: this.attributes, equipment: this.equipped, stats: this.stats, passiveBonuses: this.skills.passiveEffects.bonuses
         });
     }
 
@@ -968,7 +997,7 @@ export class CombatSimulation {
                 this.automaticReceiptTick = this.tickValue;
             }
             const plan = planAutomaticLoadout({ inventory: this.inventory, equipment: this.equipped, orbs: this.orbs,
-                level: this.level, attributes: this.attributes, recycling: this.autoRecycle }, incoming, protectedId);
+                level: this.level, attributes: this.attributes, recycling: this.autoRecycle, passiveBonuses: this.skills.passiveEffects.bonuses, passiveFind: this.skills.passiveEffects.find }, incoming, protectedId);
             if (!plan.ok) {
                 if (receipt) this.failedLoadoutReceipts.add(receipt);
                 this.notifyInventoryFull(plan.blocked); return false;
@@ -977,7 +1006,7 @@ export class CombatSimulation {
             this.orbs.splice(0, this.orbs.length, ...plan.orbs);
             for (const item of plan.recycled) this.applyAutoRecycle(item);
             if (plan.equipmentChanges) this.recalculateStats(false, false);
-            if (plan.orbChanges) { this.lootProfile = lootProfile(sumOrbs(this.orbs)); this.orbBonuses = orbResonance(this.orbs); }
+            if (plan.orbChanges) { this.lootProfile = lootProfile(sumOrbs(this.orbs), this.skills.passiveEffects.find); this.orbBonuses = orbResonance(this.orbs); }
             if (plan.equipmentChanges || plan.orbChanges) this.pushNotice("loot", `自动装配 · 换装 ${plan.equipmentChanges} 件 · 嵌珠 ${plan.orbChanges} 颗`);
         } else {
             let inventory = this.inventory;

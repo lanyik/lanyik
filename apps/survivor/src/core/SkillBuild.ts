@@ -1,10 +1,11 @@
 import { FIRE_SKILLS, FROST_SKILLS, LIGHTNING_SKILLS, STAR_SKILLS, NO_SKILL_MODIFIERS, SKILLS, SKILL_IDS, isFireSkill, isFrostSkill, isLightningSkill, isStarSkill, isUltimate, type SkillId, type SkillModifiers } from "./Skills";
+import { PASSIVE_IDS, PASSIVES, PASSIVE_UNLOCK_LEVELS, passiveNodeId, type PassiveId } from "./PassiveSkills";
 
 export interface SkillNode {
     readonly id: string; readonly name: string; readonly description: string; readonly kind: "active" | "modifier" | "passive" | "mastery";
-    readonly skill?: SkillId; readonly modifier?: "power" | "shape" | "tempo"; readonly parent?: string; readonly parentRank: number;
+    readonly skill?: SkillId; readonly passive?: PassiveId; readonly modifier?: "power" | "shape" | "tempo"; readonly parent?: string; readonly parentRank: number;
     readonly maximum: number; readonly initial: number; readonly level: number; readonly investment: number;
-    readonly x: number; readonly y: number; readonly school: "frost" | "fire" | "lightning" | "stars" | "legacy"; readonly exclusive?: string;
+    readonly x: number; readonly y: number; readonly school: "frost" | "fire" | "lightning" | "stars" | "utility"; readonly exclusive?: string;
 }
 const nodes: SkillNode[] = [];
 const branches: readonly [SkillId, string | undefined, number, number, number, number, readonly string[]][] = [
@@ -45,7 +46,7 @@ function starModifierDescription(skill: SkillId, modifier: "power" | "shape" | "
             : skill === "bastion" ? "护盾被伤害耗尽后，每点治疗起手时最大生命的 1%；到期、替换、洗点不触发，致死伤害不能复活。"
                 : "每点延长持续时间 10%；强化期限最多十五秒，刃阵只计算完整周期。";
 }
-function addBranches(entries: typeof branches, school: Exclude<SkillNode["school"], "legacy">): void {
+function addBranches(entries: typeof branches, school: Exclude<SkillNode["school"], "utility">): void {
     for (const [skill, parent, branch, tier, level, investment, names] of entries) {
         const x = 620 + branch * 220, y = tier ? 360 + (tier - 1) * 340 : 90;
         add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description, kind: "active", skill,
@@ -130,8 +131,11 @@ add({ id: "stars.radiance", name: "耀星", description: "每点增加技能强�
 add({ id: "stars.sentinel", name: "守望", description: "每点增加星辰护盾量 10% 和庇护减伤 3 个百分点；所有直接技能伤害统一乘 90%，不降低灼烧。与耀星互斥。", kind: "mastery", parent: "shelter", parentRank: 3,
     maximum: 3, initial: 0, level: 30, investment: 28, x: 765, y: 910, school: "stars", exclusive: "stars.radiance" });
 for (const [i, skill] of SKILL_IDS.filter(id => !isFrostSkill(id) && !isFireSkill(id) && !isLightningSkill(id) && !isStarSkill(id)).entries()) add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description,
-    kind: "active", skill, parentRank: 0, maximum: skill === "dash" ? 1 : 5, initial: 1, level: SKILLS[skill].unlock, investment: 0,
-    x: 145 + (i % 3) * 220, y: 120 + Math.floor(i / 3) * 220, school: "legacy" });
+    kind: "active", skill, parentRank: 0, maximum: 10, initial: 1, level: SKILLS[skill].unlock, investment: 0,
+    x: 300 + i * 320, y: 180, school: "utility" });
+for (const [i, id] of PASSIVE_IDS.entries()) add({ id: passiveNodeId(id), passive: id, name: PASSIVES[id].name, description: PASSIVES[id].description,
+    kind: "passive", parentRank: 0, maximum: PASSIVES[id].maximum, initial: 0, level: PASSIVE_UNLOCK_LEVELS[0], investment: 0,
+    x: 300 + i % 3 * 320, y: 490 + Math.floor(i / 3) * 245, school: "utility" });
 export const SKILL_NODES: readonly SkillNode[] = Object.freeze(nodes);
 const indices = new Map(SKILL_NODES.map((node, index) => [node.id, index]));
 export function nodeIndex(id: string): number {
@@ -163,7 +167,7 @@ export function validateSkillRanks(ranks: readonly number[], level: number): str
         if (rank <= node.initial) continue;
         const reason = nodeRequirement(node, ranks, level);
         if (reason) return reason;
-        if (node.school === "legacy" && level < node.level + rank - 1) return "角色等级不足以强化该术式";
+        if (node.school === "utility" && level < node.level + rank - 1) return "角色等级不足以强化该术式";
     }
     // Investment gates must be reachable in an actual purchase order. Final totals alone
     // would let locked branches finance one another inside a forged transaction/save.

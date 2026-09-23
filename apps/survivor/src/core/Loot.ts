@@ -17,8 +17,13 @@ const QUALITY_CHECKS = [1, 0.46, 0.19, 0.05, 0.012, 0.002] as const;
 const QUALITY_FIND_CAPS = [0, 600, 400, 250, 150, 80] as const;
 export function effectiveFind(rating: number, cap: number): number { return cap * rating / (rating + cap); }
 
-export function lootProfile(ratings: FindRatings): LootProfile {
+export function lootProfile(ratings: FindRatings, permanent?: FindRatings): LootProfile {
     for (const rating of Object.values(ratings)) if (!Number.isFinite(rating) || rating < 0) throw new RangeError("Find ratings must be finite and nonnegative");
+    if (permanent) {
+        for (const rating of Object.values(permanent)) if (!Number.isFinite(rating) || rating < 0) throw new RangeError("Permanent find ratings must be finite and nonnegative");
+        ratings = { quality: ratings.quality + permanent.quality, quantity: ratings.quantity + permanent.quantity, stars: ratings.stars + permanent.stars };
+        for (const rating of Object.values(ratings)) if (!Number.isFinite(rating)) throw new RangeError("Combined find ratings must be finite");
+    }
     const qualities = Array<number>(RARITIES.length).fill(0);
     let remaining = 1;
     for (let tier = RARITIES.length - 1; tier >= 1; tier -= 1) {

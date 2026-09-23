@@ -1,5 +1,5 @@
 import { deriveStats, type DerivedStats } from "./CombatStats";
-import { BONUS_IDS, BONUS_INFO, sumEquipment, type Attributes, type Equipment, type EquippedItems } from "./Equipment";
+import { BONUS_IDS, BONUS_INFO, sumEquipment, type Attributes, type Equipment, type EquippedItems, type EquipmentBonuses } from "./Equipment";
 
 // These multipliers are already applied to the final values by deriveStats.
 // Exploration rewards have no effect on battle power.
@@ -14,6 +14,7 @@ export function battlePower(stats: DerivedStats): number {
 }
 
 export interface EquipmentContext {
+    readonly passiveBonuses?: Readonly<Partial<EquipmentBonuses>>;
     readonly level: number;
     readonly attributes: Attributes;
     readonly equipment: EquippedItems;
@@ -31,7 +32,7 @@ interface EquipmentComparison {
 
 export function compareEquipment(item: Equipment, player: EquipmentContext): EquipmentComparison {
     const current = player.equipment[item.value];
-    const stats = deriveStats(player.level, player.attributes, sumEquipment({ ...player.equipment, [item.value]: item }));
+    const stats = deriveStats(player.level, player.attributes, sumEquipment({ ...player.equipment, [item.value]: item }), player.passiveBonuses);
     const power = battlePower(stats);
     const delta = power - battlePower(player.stats);
     const scoreDelta = item.score - (current?.score ?? 0);

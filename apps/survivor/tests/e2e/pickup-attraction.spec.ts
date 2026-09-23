@@ -19,6 +19,9 @@ test("equipment and potions attract through the Worker and interpolate together 
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
     const distance = await combatWorker(page).evaluate(() => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        // Live frames before pausing can already produce loot; begin with a clean, valid character/world fixture.
+        const cp = simulation.checkpoint();
+        simulation.restore({ ...cp, nextItemId: Math.max(cp.nextItemId, 902), player: { ...cp.player, inventory: [] } });
         const fixture = simulation as unknown as { rewards: CombatRewards; entities: CombatWorld; autoCast: boolean; attackCooldown: number;
             };
         fixture.autoCast = false; fixture.attackCooldown = 1000;

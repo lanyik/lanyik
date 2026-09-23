@@ -13,9 +13,10 @@ import { validateExploration, type ExplorationSnapshot } from "./Exploration";
 import type { WorldLocation } from "./Homestead";
 import { CHALLENGE_IDS, CHALLENGE_ARENA, ChallengeTerrain, challengeSpawns, isChallenge, type ChallengeProgressMap } from "./BossChallenge";
 import { ENEMY_DEFINITIONS, enemyStats } from "./EnemyDefinitions";
+import { PASSIVE_UNLOCK_LEVELS, isPassiveId, passiveNodeId } from "./PassiveSkills";
 
 export interface CharacterCheckpoint {
-    readonly version: 9;
+    readonly version: 10;
     readonly characterId: string;
     readonly challengeRevision: number;
     readonly challenges: ChallengeProgressMap;
@@ -62,7 +63,7 @@ function assertItem(item: InventoryItem): void {
 
 /** Reject invalid/currently unsupported saves before changing a running character. No migration. */
 export function validateCharacterCheckpoint(value: CharacterCheckpoint): CharacterCheckpoint {
-    if (!value || value.version !== 9) throw new Error("角色存档版本与当前游戏不一致");
+    if (!value || value.version !== 10) throw new Error("角色存档版本与当前游戏不一致");
     if (typeof value.characterId !== "string" || !value.characterId.length || value.characterId.length > 128 || !integer(value.challengeRevision)
         || !integer(value.teleportReadyAt) || value.teleportReadyAt > value.tick + GAME_CONFIG.timing.simulationHz * 5) throw new Error("角色传送进度无效");
     if ((!isChallenge(value.location) && !["wilds", "homestead"].includes(value.location)) || !value.wildsPosition
@@ -117,6 +118,9 @@ export function validateCharacterCheckpoint(value: CharacterCheckpoint): Charact
         || !Array.isArray(s.loadout) || s.loadout.length !== GAME_CONFIG.skills.slots
         || new Set(s.loadout.filter(id => id !== null)).size !== s.loadout.filter(id => id !== null).length
         || s.loadout.some((id: SkillId | null) => id !== null && (!SKILL_IDS.includes(id) || s.ranks[nodeIndex(id)] === 0 || p.level < SKILLS[id].unlock))
+        || !Array.isArray(s.passives) || s.passives.length !== PASSIVE_UNLOCK_LEVELS.length
+        || new Set(s.passives.filter(id => id !== null)).size !== s.passives.filter(id => id !== null).length
+        || PASSIVE_UNLOCK_LEVELS.some((unlock, slot) => { const id = s.passives[slot]; return id !== null && (!isPassiveId(id) || p.level < unlock || s.ranks[nodeIndex(passiveNodeId(id))] === 0); })
         || s.loadout.filter(id => id && isUltimate(id)).length > 1 || !Array.isArray(s.readyAt) || s.readyAt.length !== SKILL_IDS.length
         || s.readyAt.some(tick => !integer(tick)) || !integer(s.recoveryUntil) || s.recoveryUntil > value.tick + 600
         || !finite(s.dashUntil) || !Number.isFinite(s.dashX) || !Number.isFinite(s.dashZ)) throw new Error("角色技能存档无效");

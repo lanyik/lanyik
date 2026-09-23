@@ -75,7 +75,7 @@ docs/
 
 | 要做的事 | 主要设计 → 需要联动的设计 | 代码起点 |
 |---|---|---|
-| 技能树、Buff、被动、伤害效果 | 当前边界读[战斗架构](game/combat-architecture.md) → [技能与效果](game/skills-and-effects.md)、[战斗与成长](game/combat-and-progression.md)；目标方案读[四系技能树与状态扩展计划](game/skill-tree-and-status.md)，顺序见[开发重点](game/development-priorities.md) | [StatusSystem](../apps/survivor/src/core/StatusSystem.ts)、[BurnSystem](../apps/survivor/src/core/BurnSystem.ts)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[SkillBuild](../apps/survivor/src/core/SkillBuild.ts)、[FrostCasting](../apps/survivor/src/core/FrostCasting.ts)、[FireCasting](../apps/survivor/src/core/FireCasting.ts)、[LightningCasting](../apps/survivor/src/core/LightningCasting.ts)、[StarCasting](../apps/survivor/src/core/StarCasting.ts)、[CombatResolution](../apps/survivor/src/core/CombatResolution.ts) |
+| 技能树、Buff、被动、伤害效果 | 当前边界读[战斗架构](game/combat-architecture.md) → [技能与效果](game/skills-and-effects.md)、[战斗与成长](game/combat-and-progression.md)；目标方案读[四系技能树与状态扩展计划](game/skill-tree-and-status.md)，顺序见[开发重点](game/development-priorities.md) | [StatusSystem](../apps/survivor/src/core/StatusSystem.ts)、[BurnSystem](../apps/survivor/src/core/BurnSystem.ts)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[SkillBuild](../apps/survivor/src/core/SkillBuild.ts)、[PassiveSkills](../apps/survivor/src/core/PassiveSkills.ts)、[FrostCasting](../apps/survivor/src/core/FrostCasting.ts)、[FireCasting](../apps/survivor/src/core/FireCasting.ts)、[LightningCasting](../apps/survivor/src/core/LightningCasting.ts)、[StarCasting](../apps/survivor/src/core/StarCasting.ts)、[CombatResolution](../apps/survivor/src/core/CombatResolution.ts) |
 | 探索迷雾、地图传送、家园往返、Boss 副本 | [探索与家园](game/exploration-and-homestead.md) → [角色存档](game/character-saves.md)、[物品合同](game/items.md)、[界面设计](game/interface-design.md) | [Exploration](../apps/survivor/src/core/Exploration.ts)、[BossChallenge](../apps/survivor/src/core/BossChallenge.ts)、[CombatSession](../apps/survivor/src/app/CombatSession.ts) |
 | 装备、自动穿戴/嵌珠、套装、连携与构筑 | [物品合同](game/items.md) → [打造与灵境](game/crafting-and-spirit.md)、[战斗架构](game/combat-architecture.md) | [Equipment](../apps/survivor/src/core/Equipment.ts)、[AutomaticLoadout](../apps/survivor/src/core/AutomaticLoadout.ts)、[Crafting](../apps/survivor/src/core/Crafting.ts)；套装/连携尚未完整实现 |
 | 怪物行为、攻击节奏与难度 | [模拟与 AI](game/simulation-and-ai.md) → [数值平衡](game/combat-balance.md)、[技能与效果](game/skills-and-effects.md) | [EnemyBehavior](../apps/survivor/src/core/EnemyBehavior.ts)、[EnemyDefinitions](../apps/survivor/src/core/EnemyDefinitions.ts)、[EnemyActions](../apps/survivor/src/core/EnemyActions.ts) |
@@ -107,7 +107,7 @@ docs/
 | [apps/survivor/src/presentation](../apps/survivor/src/presentation/) | React 界面、模型、动画、场景与 HUD | [界面设计](game/interface-design.md)、[技能与效果](game/skills-and-effects.md)、资产合同 |
 | [apps/survivor/assets](../apps/survivor/assets/) | 固定来源的资产输入与许可 | [角色资产](game/actor-assets.md)、[环境资产](game/environment-assets.md) |
 
-核心不依赖 React、Three.js、DOM、Worker 或地图基础库；表现读取模拟结果。技能树、通用 Buff、被动、套装、连携、任务和剧情的完整系统仍需按开发重点逐步接入，不能把已有 ECS 和事件流当作这些功能已经完成。
+核心不依赖 React、Three.js、DOM、Worker 或地图基础库；表现读取模拟结果。当前四系与通用树、三个可装配常驻被动槽已有具体消费者；通用 Buff/事件触发被动、套装、连携、任务和剧情的完整系统仍需按开发重点逐步接入，不能把已有 ECS 和事件流当作这些功能已经完成。
 
 安装运行见[根 README](../README.zh-CN.md)，构建与验证顺序见[测试策略](testing.md#change-based-local-validation)。
 
@@ -253,6 +253,7 @@ flowchart TB
 
 | 原始记录 | 测量阶段与当前合同 |
 |---|---|
+| [utility-passive-skills.json](game/measurements/utility-passive-skills.json) | 通用独立主动、九种常驻被动及三槽；满包全域拾取、含被动自动配装 CPU 与暂停 UI 样本、42 项浏览器验证范围 → [技能与效果](game/skills-and-effects.md)、[UI 性能](game/ui-performance.md) |
 | [star-skill-tree.json](game/measurements/star-skill-tree.json) | 完整星辰树、次数强化/护盾/净化/虚弱；896 目标刃阵的实际结算 CPU 样本、硬件 WebGL 回归条件及验证范围 → [技能与效果](game/skills-and-effects.md)、[战斗架构](game/combat-architecture.md) |
 | [combat-pipeline-optimization.json](game/measurements/combat-pipeline-optimization.json) | 标量到期按目标去重、灼烧脏列表、快照延迟分配的 Git 基线对照与严格回放；表现帧复制取舍、2K 三系持续战斗和完整背包观测 → [战斗架构](game/combat-architecture.md)、[模拟](game/simulation-and-ai.md)、[UI 性能](game/ui-performance.md)；复测入口见[验证策略](testing.md#benchmark-scope) |
 | [lightning-skill-tree.json](game/measurements/lightning-skill-tree.json) | 完整雷树、导电/静电防护与有界传导；896 目标重叠雷场/电网的查询与结算 CPU 样本、三系 UI 采样及验证范围 → [技能与效果](game/skills-and-effects.md)、[战斗架构](game/combat-architecture.md)、[UI 性能](game/ui-performance.md) |

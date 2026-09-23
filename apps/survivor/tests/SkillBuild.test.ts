@@ -66,7 +66,7 @@ test("save validation enforces the complete point ledger, six slots and status b
 });
 
 test("fire has 34 functional nodes, independent investment gates and its own exclusive masteries", () => {
-    expect(SKILL_NODES.filter(node => node.school === "fire")).toHaveLength(34); expect(SKILL_NODES).toHaveLength(139);
+    expect(SKILL_NODES.filter(node => node.school === "fire")).toHaveLength(34); expect(SKILL_NODES).toHaveLength(148);
     expect(validateSkillRanks(ranks({ icebolt: 10, fireball: 3, fireray: 1 }), 100)).not.toBeNull();
     const fire = ranks({ fireball: 10, "fireball.power": 5, "fireball.shape": 5, "fireball.tempo": 5, fireray: 5, pyroblast: 5,
         firewall: 5, meteor: 5, firedomain: 1, doom: 1, "fire.wildfire": 3,

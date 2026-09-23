@@ -17,7 +17,12 @@ export interface DerivedStats extends EquipmentBonuses {
     readonly attackRange: number;
 }
 
-export function deriveStats(level: number, attributes: Attributes, gear: EquipmentBonuses): DerivedStats {
+export function deriveStats(level: number, attributes: Attributes, gear: EquipmentBonuses, permanent?: Readonly<Partial<EquipmentBonuses>>): DerivedStats {
+    if (permanent && Object.keys(permanent).length) {
+        const combined = { ...gear };
+        for (const id of Object.keys(permanent) as (keyof EquipmentBonuses)[]) combined[id] += permanent[id]!;
+        gear = combined;
+    }
     const attackSpeed = gear.attackSpeed;
     const speedOverflow = Math.max(0, attackSpeed - STAT_LIMITS.speedBonus) + Math.max(0, gear.castSpeed - STAT_LIMITS.speedBonus);
     const baseArmor = attributes.vitality * 0.32 + gear.armor;

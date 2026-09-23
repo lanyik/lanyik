@@ -15,6 +15,9 @@ const bundle = await build({ stdin: { contents: `
     export { FireCasting } from './apps/survivor/src/core/FireCasting';
     export { LightningCasting } from './apps/survivor/src/core/LightningCasting';
     export { StarCasting } from './apps/survivor/src/core/StarCasting';
+    export { compilePassiveEffects } from './apps/survivor/src/core/PassiveSkills';
+    export { initialSkillRanks, nodeIndex } from './apps/survivor/src/core/SkillBuild';
+    export { createConsumable } from './apps/survivor/src/core/InventoryItem';
     export { CombatResolution } from './apps/survivor/src/core/CombatResolution';
     export { CombatEventKind, EffectCause } from './apps/survivor/src/core/CombatEvents';
     export { StatusKind } from './apps/survivor/src/core/StatusSystem';
@@ -229,7 +232,7 @@ function autoAvoidance() {
         p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
 }
 
-function autoLoadout() {
+function autoLoadout(passives = false) {
     const random = new current.DeterministicRandom("loadout-budget");
     const inventory = Array.from({ length: 80 }, (_, index) => current.generateEquipment(random, index + 2, 50 + index, current.BASE_LOOT_PROFILE));
     for (let index = 0; index < 48; index++) inventory.push(current.createOrb(index + 100, current.RARITIES[Math.floor(index / 4) % 6], current.ORB_TYPES[index % 4]));
@@ -237,6 +240,10 @@ function autoLoadout() {
         orbs: Array.from({ length: 6 }, (_, index) => current.createOrb(index + 200, "common", current.ORB_TYPES[index % 4])),
         level: 200, attributes: { might: 5, vitality: 5, agility: 5, spirit: 5 }, recycling: { ...current.EMPTY_RECYCLING, orb: "magic" } };
     const incoming = [current.generateEquipment(random, 300, 200, current.BASE_LOOT_PROFILE, "rainbow"), current.createOrb(301, "rainbow", "harmony")];
+    if (passives) {
+        const effects = current.compilePassiveEffects(["fortune", "bloodpact", "thorns"], () => 10);
+        input.passiveBonuses = effects.bonuses; input.passiveFind = effects.find;
+    }
     const timings = [], started = performance.now();
     for (let index = 0; index < 120; index++) {
         const before = performance.now(), plan = current.planAutomaticLoadout(input, incoming);
@@ -244,7 +251,31 @@ function autoLoadout() {
         assert.ok(plan.ok && plan.equipmentChanges > 0 && plan.orbChanges > 0, "Loadout workload must actually replace equipment and orbs");
     }
     const elapsed = performance.now() - started; timings.sort((a, b) => a - b);
-    return { msPerDecision: elapsed / 120, decisions: 120, equipment: 80, orbs: 48, unlockedSockets: 6,
+    return { msPerDecision: elapsed / 120, decisions: 120, equipment: 80, orbs: 48, unlockedSockets: 6, passives,
+        p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
+}
+
+function passivePickup() {
+    const sim = new current.CombatSimulation("passive-pickup", { x: 0, z: 0 }, undefined, undefined, "homestead"), cp = sim.checkpoint();
+    const ranks = current.initialSkillRanks(); ranks[current.nodeIndex("passive.magnet")] = 1;
+    const inventory = Array.from({ length: 80 }, (_, i) => ({ ...current.createStarterEquipment(), id: i + 2 }));
+    sim.restore({ ...cp, nextItemId: 1000, player: { ...cp.player, level: 150, inventory }, skills: { ...cp.skills, ranks, points: 148, passives: ["magnet", null, null] } });
+    const e = sim.entities, timings = []; let nextId = 1000, pickups = 0;
+    for (let i = 0; i < 32; i++) { const item = { ...current.createStarterEquipment(), id: nextId++ }; sim.rewards.groundItems.set(item.id, item); e.spawnLoot(item, 100, i); }
+    for (let pulse = 0; pulse < 120; pulse++) {
+        while (e.loot.count < current.GAME_CONFIG.combat.maxGroundEquipment) {
+            const item = current.createConsumable(nextId++, "common", "health"); sim.rewards.groundItems.set(item.id, item); e.spawnLoot(item, 100, 0);
+        }
+        while (e.experience.count < current.GAME_CONFIG.combat.maxExperienceOrbs) e.spawnExperience(100, 0, 1);
+        sim.tickValue += current.GAME_CONFIG.timing.simulationHz / current.GAME_CONFIG.skills.passivePickupHz;
+        const before = performance.now(); sim.advanceExperience(); sim.collectEquipment(); timings.push(performance.now() - before);
+        assert.equal(e.experience.count, 752, "Each pulse collects exactly 16 distant XP orbs");
+        assert.ok(e.loot.count >= 48, "Pickup attempts remain bounded even when the equipment bag is full");
+        pickups += 64 - e.loot.count;
+    }
+    assert.ok(pickups > 0, "Full equipment category cannot starve distant potions"); sim.dispose();
+    const total = timings.reduce((sum, n) => sum + n, 0); timings.sort((a, b) => a - b);
+    return { msPerDecision: total / 120, decisions: 120, groundItems: 64, experienceOrbs: 768, fullEquipmentBag: 80, pickups,
         p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
 }
 
@@ -303,7 +334,8 @@ function autoSearch() {
 }
 
 const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), iceEffects: measure(iceEffects, 3), fireEffects: measure(fireEffects, 3), lightningEffects: measure(lightningEffects, 3), starEffects: measure(starEffects, 3), terrain: measure(terrainCombat, 3),
-    autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision"), autoSearch: measure(autoSearch, 3, "Decision"), autoLoadout: measure(autoLoadout, 3, "Decision") };
+    autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision"), autoSearch: measure(autoSearch, 3, "Decision"), autoLoadout: measure(autoLoadout, 3, "Decision"),
+    passiveLoadout: measure(() => autoLoadout(true), 3, "Decision"), passivePickup: measure(passivePickup, 1, "Decision") };
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
     simulationHz: current.GAME_CONFIG.timing.simulationHz, activeAiHz: current.GAME_CONFIG.timing.activeAiHz,
@@ -314,4 +346,6 @@ if (args.includes("--check")) {
     assert.ok(results.autoAvoidance.medianMsPerDecision <= results.autoAvoidance.budgetMsPerDecision, "Automatic avoidance exceeded its decision CPU budget");
     assert.ok(results.autoSearch.medianMsPerDecision <= results.autoSearch.budgetMsPerDecision, "Expanded automatic search exceeded its decision CPU budget");
     assert.ok(results.autoLoadout.medianMsPerDecision <= results.autoLoadout.budgetMsPerDecision, "Automatic loadout exceeded its decision CPU budget");
+    assert.ok(results.passiveLoadout.medianMsPerDecision <= results.passiveLoadout.budgetMsPerDecision, "Passive loadout exceeded its decision CPU budget");
+    assert.ok(results.passivePickup.medianMsPerDecision <= results.passivePickup.budgetMsPerDecision, "Passive pickup exceeded its pulse CPU budget");
 }

@@ -221,7 +221,7 @@ test("star counts, recovery and deadlines survive validated saves and render tra
     sim.restore({ ...cp, player: { ...cp.player, level: 100 }, skills: { ...cp.skills, ranks: build, points: 99 - investedPoints(build) } });
     e.status.gainStarEnergy(e.player, 0); e.status.apply(K.Empowered, id, id, .4, 600, 0, { charges: 3 });
     e.status.apply(K.Barrier, id, id, 20, 300, 0, { recovery: 10 }); e.status.apply(K.AstralGuard, id, id, .3, 240, 0);
-    const saved = sim.checkpoint(); expect(saved.version).toBe(9);
+    const saved = sim.checkpoint(); expect(saved.version).toBe(10);
     sim.restore(saved); expect(sim.checkpoint().skills.statuses).toEqual(saved.skills.statuses);
     const frame = new RenderFrame(), packet = frame.write(sim.getRenderState()), transferred = structuredClone(packet, { transfer: [packet.buffer] });
     const state = new RenderFrame(transferred.buffer).read(transferred);

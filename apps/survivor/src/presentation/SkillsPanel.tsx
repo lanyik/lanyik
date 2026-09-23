@@ -8,6 +8,8 @@ import { SkillIcon, SkillTooltip } from "./SkillView";
 import { SkillSlot } from "./SkillSlot";
 import { useSkillDrag } from "./SkillDrag";
 import { IconTooltip, useDismissItemTooltip } from "./ItemTooltip";
+import { PassiveIcon, PassiveNumbers, PassiveSlots } from "./PassiveView";
+import { PASSIVE_UNLOCK_LEVELS, type PassiveId } from "../core/PassiveSkills";
 import { RepeatButton } from "./RepeatButton";
 
 const SCHOOLS = [
@@ -15,9 +17,8 @@ const SCHOOLS = [
     { id: "fire", name: "火焰", glyph: "✧", color: "#ffa56b", caption: "燎原灼烧 · 爆燃引爆" },
     { id: "lightning", name: "雷电", glyph: "ϟ", color: "#b6ccff", caption: "过载轰击 · 导流电网" },
     { id: "stars", name: "星辰", glyph: "✦", color: "#d4bdff", caption: "耀星强化 · 守望庇护" },
-    { id: "utility", name: "通用", glyph: "◇", color: "#8fe2c6", caption: "机动 · 脉冲 · 引力" }
+    { id: "utility", name: "通用", glyph: "◇", color: "#8fe2c6", caption: "独立主动 · 常驻契约" }
 ] as const;
-const SCHOOL_SKILLS: Readonly<Record<string, readonly SkillId[]>> = { utility: ["pulse", "vortex", "dash"] };
 const MAP_WIDTH = 1240, MAP_HEIGHT = 1250;
 // Main paths enter above icons and leave below the complete label. Side lanes stay outside the spines.
 function connection(parent: SkillNode, node: SkillNode): string {
@@ -42,9 +43,9 @@ function keyMove(event: KeyboardEvent, node: SkillNode, nodes: readonly SkillNod
     }
     if (nearest) { select(nearest.id); document.getElementById("skill-node-" + nearest.id)?.focus(); }
 }
-const SkillGraph = memo(function SkillGraph({ nodes, ranks, committed, loadout, selected, level, select }: {
+const SkillGraph = memo(function SkillGraph({ nodes, ranks, committed, loadout, passives, selected, level, select }: {
     readonly nodes: readonly SkillNode[]; readonly ranks: readonly number[]; readonly committed: readonly number[];
-    readonly loadout: readonly (SkillId | null)[];
+    readonly loadout: readonly (SkillId | null)[]; readonly passives: readonly (PassiveId | null)[];
     readonly selected: string; readonly level: number; readonly select: (id: string) => void;
 }) {
     const drag = useSkillDrag();
@@ -63,20 +64,21 @@ const SkillGraph = memo(function SkillGraph({ nodes, ranks, committed, loadout, 
         {nodes[0]?.school === "fire" && <><span className="constellation-label damage-path">燎原之径</span><span className="constellation-label control-path">爆燃之径</span></>}
         {nodes[0]?.school === "lightning" && <><span className="constellation-label damage-path">过载之径</span><span className="constellation-label control-path">导流之径</span></>}
         {nodes[0]?.school === "stars" && <><span className="constellation-label damage-path">耀星之径</span><span className="constellation-label control-path">守望之径</span></>}
+        {nodes[0]?.school === "utility" && <><span className="constellation-label utility-active-label">独立主动 · 各自成长</span><span className="constellation-label utility-passive-label">常驻契约 · 学习后装配</span></>}
         {nodes.map(node => {
             const rank = ranks[nodeIndex(node.id)], current = committed[nodeIndex(node.id)], reason = nodeRequirement(node, ranks, level);
-            const learned = rank > 0, draft = rank !== current, slot = node.kind === "active" && node.skill ? loadout.indexOf(node.skill) : -1;
-            const equipped = slot >= 0 ? `已装备 · 槽位 ${slot + 1}` : "";
+            const learned = rank > 0, draft = rank !== current, slot = node.passive ? passives.indexOf(node.passive) : node.kind === "active" && node.skill ? loadout.indexOf(node.skill) : -1;
+            const equipped = slot >= 0 ? `已装备 · ${node.passive ? "被动槽 P" : "槽位 "}${slot + 1}` : "";
             return <IconTooltip key={node.id} identity={"node:" + node.id} className="tree-node-tooltip" anchorStyle={{ left: node.x, top: node.y }} content={<div className="tree-node-preview"><h3>{node.name}</h3><b>{rank} / {node.maximum}{draft ? ` · 已学 ${current} 级` : ""}</b>{equipped && <p className="node-equipped-detail">{equipped}</p>}<p>{node.description}</p><p>{reason ?? "前置满足"}</p>{node.parent && <small>前置：{SKILL_NODES[nodeIndex(node.parent)].name} {node.parentRank} 级</small>}<p>点击查看数值与加点 · 长按 ＋ 连续提升</p></div>}>
             <button id={"skill-node-" + node.id} type="button" data-node={node.id} data-skill={node.kind === "active" ? node.skill : undefined}
-                className={"constellation-node " + node.kind + (learned ? " learned" : "") + (reason && !learned ? " locked" : "") + (draft ? " draft" : "") + (equipped ? " equipped" : "")}
+                className={"constellation-node " + node.kind + (node.passive ? " slotted-passive" : "") + (learned ? " learned" : "") + (reason && !learned ? " locked" : "") + (draft ? " draft" : "") + (equipped ? " equipped" : "")}
                 aria-pressed={selected === node.id} aria-label={node.name + " " + rank + "/" + node.maximum + (equipped ? " · " + equipped : "")}
                 onClick={() => select(node.id)} onKeyDown={event => { if (event.key === " " && node.kind === "active" && node.skill && current > 0) drag.keyboard(event, node.skill); else keyMove(event, node, nodes, select); }}
                 onPointerDown={event => { if (node.kind === "active" && node.skill && current > 0) drag.begin(event, node.skill); }}>
                 <span className="node-aura" />
-                <span className="node-emblem">{node.kind === "active" && node.skill ? <SkillIcon id={node.skill} /> : node.kind === "mastery" ? "✧" : node.kind === "passive" ? "✦" : node.modifier === "power" ? "⚔" : node.modifier === "shape" ? "⌖" : "◷"}</span>
+                <span className="node-emblem">{node.passive ? <PassiveIcon id={node.passive} /> : node.kind === "active" && node.skill ? <SkillIcon id={node.skill} /> : node.kind === "mastery" ? "✧" : node.kind === "passive" ? "✦" : node.modifier === "power" ? "⚔" : node.modifier === "shape" ? "⌖" : "◷"}</span>
                 <span className="node-name">{node.name}</span><span className="node-rank">{rank}<i> / {node.maximum}</i></span>
-                {equipped && <span className="node-equipped" aria-hidden="true">已装备 {slot + 1}</span>}
+                {equipped && <span className="node-equipped" aria-hidden="true">已装备 {node.passive ? "P" : ""}{slot + 1}</span>}
             </button></IconTooltip>;
         })}
     </div>;
@@ -95,9 +97,7 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
         if (skills.build.revision !== revision) { setDraft(skills.build.ranks); setRevision(skills.build.revision); }
     }, [skills.build, revision]);
     const theme = SCHOOLS.find(entry => entry.id === school)!;
-    const nodes = useMemo(() => school !== "utility" ? SKILL_NODES.filter(node => node.school === school)
-        : SKILL_NODES.filter(node => node.skill && node.kind === "active" && SCHOOL_SKILLS[school].includes(node.skill))
-            .map((node, i, group) => ({ ...node, x: group.length === 1 ? 620 : 460 + (i % 2) * 320, y: 130 + Math.floor(i / 2) * 235 })), [school]);
+    const nodes = useMemo(() => SKILL_NODES.filter(node => node.school === school), [school]);
     useEffect(() => {
         const element = scroller.current;
         if (element) { element.scrollLeft = Math.max(0, (MAP_WIDTH - element.clientWidth) / 2); element.scrollTop = 0; }
@@ -105,7 +105,8 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
     const node = SKILL_NODES[nodeIndex(selected)], rank = draft[nodeIndex(selected)], current = skills.build.ranks[nodeIndex(selected)];
     const cost = investedPoints(draft) - investedPoints(skills.build.ranks), available = skills.points - cost;
     const dirty = draft.some((value, i) => value !== skills.build.ranks[i]), refund = draft.some((value, i) => value < skills.build.ranks[i]);
-    const requirement = nodeRequirement(node, draft, level);
+    const requirement = nodeRequirement(node, draft, level)
+        ?? (node.school === "utility" && rank < node.maximum && level < node.level + rank ? `角色 ${node.level + rank} 级可继续强化` : null);
     const refundReason = !homestead ? "回到家园后可免费洗点（H 传送）" : skills.refundBlocked ? "请先等待施法与持续效果结束" : null;
     const invalid = validateSkillRanks(draft, level) ?? (refund ? refundReason : null);
     const oldValues = node.skill ? skillValues(node.skill, skills.ranks[node.skill], player.stats, skills.modifiers[node.skill]) : undefined;
@@ -114,7 +115,7 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
     function change(delta: number) {
         const index = nodeIndex(selected), next = [...draft], newRank = next[index] + delta;
         if (disabled || newRank < node.initial || newRank > node.maximum || delta > 0 && (available < 1 || requirement)) return;
-        if (delta > 0 && node.school === "legacy" && level < node.level + newRank - 1) return;
+        if (delta > 0 && node.school === "utility" && level < node.level + newRank - 1) return;
         next[index] = newRank;
         setDraft(delta < 0 ? reachableSkillRanks(next, level) : next);
     }
@@ -126,12 +127,12 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
         }
     }
     return <section className="skills-window constellation-window window" role="dialog" aria-label="技能" style={{ "--school-color": theme.color } as CSSProperties}>
-        <WindowHeader title="技能" icon="skills" shortcut="K" close={onClose} help={<><p>沿星图连线解锁主动与侧路。点击节点查看，右侧加减点先进入草稿，应用后才生效。</p><p>每次升级 1 点；家园免费洗点，移除前置会连带退回不满足条件的节点。洗点不刷新冷却。</p><p>拖动已学主动到六个槽位，或空格拿起、1–6 放入。重型施法前摇可被移动取消，后摇期间不能连续释放；取消不返还法力与冷却。</p></>}>
+        <WindowHeader title="技能" icon="skills" shortcut="K" close={onClose} help={<><p>沿星图连线解锁主动与侧路。点击节点查看，右侧加减点先进入草稿，应用后才生效。</p><p>每次升级 1 点；家园免费洗点，移除前置会连带退回不满足条件的节点。洗点不刷新冷却。</p><p>拖动已学主动到六个槽位，或空格拿起、1–6 放入。重型施法前摇可被移动取消，后摇期间不能连续释放；取消不返还法力与冷却。</p><p>通用页分为独立主动和可装配被动。三个固定被动槽在 50 / 100 / 150 级解锁，家园内装卸；未装配的通用被动不生效。</p></>}>
             <span className="skill-points" data-points={skills.points} aria-label={"可用点数 " + skills.points}><b>{available}</b><span>可用技能点</span></span>
         </WindowHeader>
         <nav className="school-tabs" aria-label="技能学派">{SCHOOLS.map(tab => <button key={tab.id} aria-pressed={school === tab.id} style={{ "--tab-color": tab.color } as CSSProperties}
-            onClick={() => { setSchool(tab.id); select(tab.id === "frost" ? "icebolt" : tab.id === "fire" ? "fireball" : tab.id === "lightning" ? "arc" : tab.id === "stars" ? "starbolt" : SCHOOL_SKILLS[tab.id][0]); }}>
-            <i aria-hidden="true">{tab.glyph}</i><span>{tab.name}</span>{tab.id !== "utility" && <small>完整分支</small>}</button>)}</nav>
+            onClick={() => { setSchool(tab.id); select(tab.id === "frost" ? "icebolt" : tab.id === "fire" ? "fireball" : tab.id === "lightning" ? "arc" : tab.id === "stars" ? "starbolt" : "pulse"); }}>
+            <i aria-hidden="true">{tab.glyph}</i><span>{tab.name}</span><small>{tab.id === "utility" ? "主动 / 被动" : "完整分支"}</small></button>)}</nav>
         <div className="constellation-workspace">
             <div className="constellation-stage">
                 <header className="constellation-heading"><div><span>ARCANA / {String(SCHOOLS.indexOf(theme) + 1).padStart(2, "0")}</span><h3>{theme.name}之章</h3><p>{theme.caption} · 拖动空白浏览</p></div>
@@ -141,14 +142,18 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
                     onPointerMove={event => { const start = pan.current; if (!start || start.id !== event.pointerId) return; event.currentTarget.scrollLeft = start.left + start.x - event.clientX; event.currentTarget.scrollTop = start.top + start.y - event.clientY; }}
                     onPointerUp={event => { if (pan.current?.id === event.pointerId) { pan.current = undefined; delete event.currentTarget.dataset.panning; event.currentTarget.releasePointerCapture(event.pointerId); } }}
                     onPointerCancel={event => { pan.current = undefined; delete event.currentTarget.dataset.panning; }} onLostPointerCapture={event => { pan.current = undefined; delete event.currentTarget.dataset.panning; }}>
-                    <SkillGraph nodes={nodes} ranks={draft} committed={skills.build.ranks} loadout={skills.loadout} level={level} selected={selected} select={select} /></div>
-                <div className="constellation-legend"><span>□ 主动</span><span>○ 强化</span><span>◇ 专精</span><b>{school !== "utility" ? "本系投入 " + investedPoints(draft, school as SkillNode["school"]) : "通用术式"}</b></div>
+                    <SkillGraph nodes={nodes} ranks={draft} committed={skills.build.ranks} loadout={skills.loadout} passives={skills.passives} level={level} selected={selected} select={select} /></div>
+                <div className="constellation-legend">{school === "utility" ? <><span>□ 独立主动</span><span>⬡ 可装配被动</span></> : <><span>□ 主动</span><span>○ 强化</span><span>◇ 专精</span></>}<b>{school !== "utility" ? "本系投入 " + investedPoints(draft, school as SkillNode["school"]) : "三个独立主动 · 九种常驻被动"}</b></div>
             </div>
             <aside className="constellation-details" aria-label="节点详情" ref={details}>
-                <span className="node-detail-kind">{node.kind === "active" ? "主动技能" : node.kind === "mastery" ? "互斥专精" : "被动强化"}</span>
+                <span className="node-detail-kind">{node.passive ? "常驻被动 · 需装配" : node.kind === "active" ? "主动技能" : node.kind === "mastery" ? "互斥专精" : "被动强化"}</span>
                 {node.skill && <SkillTooltip id={node.skill} player={player}><span tabIndex={0} className="node-detail-icon"><SkillIcon id={node.skill} rank={current} /></span></SkillTooltip>}
                 <h3>{node.name}</h3><div className="node-detail-rank">Lv.{current}<span> → </span><b>{rank}</b><small> / {node.maximum}</small></div>
                 <p>{node.description}</p>
+                {node.passive && <><PassiveNumbers id={node.passive} rank={current} preview={rank} /><small>数值为属性加成；仍遵守各属性上限与寻宝收益递减。仅装配后生效。</small>
+                    <div className="passive-equip-actions">{PASSIVE_UNLOCK_LEVELS.map((unlock, index) => <button key={index} disabled={disabled || !homestead || skills.refundBlocked || !current || level < unlock || skills.passives[index] === node.passive}
+                        onClick={() => dispatch({ type: "equip-passive", passive: node.passive!, slot: index })}>{skills.passives[index] === node.passive ? `已装备 P${index + 1}` : level < unlock ? `P${index + 1} · ${unlock}级解锁` : `装入被动槽 ${index + 1}`}</button>)}</div>
+                    <small>{!homestead ? "回到家园后可装卸被动" : skills.refundBlocked ? "等待施法与持续效果结束后可装卸" : !current ? "先应用构筑，再选择被动槽" : "常驻契约不占主动槽；移动到其他被动槽时交换位置"}</small></>}
                 {oldValues && preview && node.skill && <dl className="node-detail-stats"><div><dt>法力 · 当前→草稿</dt><dd>{oldValues.mana} → {preview.mana}</dd></div><div><dt>冷却</dt><dd>{oldValues.cooldown.toFixed(1)} → {preview.cooldown.toFixed(1)}s</dd></div>
                     {preview.ward > 0 ? <div><dt>吸收护盾</dt><dd>{oldValues.ward} → {preview.ward}</dd></div>
                         : node.skill === "dash" ? <div><dt>疾行距离</dt><dd>{oldValues.dashDistance.toFixed(1)} → {preview.dashDistance.toFixed(1)}</dd></div>
@@ -192,7 +197,7 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
                 <div className="node-requirements">{requirement ?? (rank === node.maximum ? "节点已达到最高等级" : "前置满足 · 每级消耗 1 点")}</div>
                 {node.parent && <button className="node-parent" onClick={() => select(node.parent!)}>↗ 查看前置：{SKILL_NODES[nodeIndex(node.parent)].name} {node.parentRank} 级</button>}
                 <div className="node-point-controls" key={selected}><RepeatButton onRepeat={() => change(-1)} disabled={disabled || rank <= node.initial} aria-label={"减少" + node.name}>−</RepeatButton><span>{rank}</span>
-                    <RepeatButton onRepeat={() => change(1)} disabled={disabled || rank >= node.maximum || available < 1 || !!requirement || node.school === "legacy" && level < node.level + rank} aria-label={"提升" + node.name}>＋</RepeatButton></div>
+                    <RepeatButton onRepeat={() => change(1)} disabled={disabled || rank >= node.maximum || available < 1 || !!requirement || node.school === "utility" && level < node.level + rank} aria-label={"提升" + node.name}>＋</RepeatButton></div>
                 <small>点击加减 1 点 · 长按连续加减</small>
                 {node.kind === "active" && current > 0 && <small className="node-drag-hint">从树上拖动已学图标，装入下方任意槽位</small>}
                 <div className="build-draft-summary"><strong>构筑草稿</strong><span>本次{cost >= 0 ? "花费" : "退回"} {Math.abs(cost)} 点</span><small>{invalid ?? (dirty ? "预览尚未应用" : "与当前构筑一致")}</small></div>
@@ -205,6 +210,7 @@ export function SkillsPanel({ player, homestead, disabled, dispatch, onClose }: 
                 <button className="apply-skill-build" disabled={disabled || !dirty || !!invalid} onClick={() => dispatch({ type: "commit-skill-build", ranks: draft, revision })}>应用构筑</button>
             </div>
             <small className="respec-hint">{refundReason ?? "家园免费洗点：退回全部已投入点数；冷却保留"}</small>
+            <PassiveSlots player={player} dispatch={dispatch} blocked={disabled || !homestead || skills.refundBlocked} />
             <div className="loadout-slots" role="group" aria-label="技能装配槽">{skills.loadout.map((_, index) => <SkillSlot key={index} index={index} player={player} panel blocked={disabled} />)}</div>
         </footer>
     </section>;

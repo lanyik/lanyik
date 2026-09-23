@@ -61,7 +61,7 @@ export function CharacterPanel({ player, disabled, dispatch, onClose }: {
                 </div>)}</div>
                 <div className="loot-summary"><span>装备爆率 <Hint label="装备爆率"><strong>寻宝分布</strong>
                     <p>普通怪 {(player.lootProfile.normalDropChance * 100).toFixed(1)}% · 精英 {(player.lootProfile.eliteDropChance * 100).toFixed(1)}%</p>
-                    <p>掉落判定后，品质从彩到白分层判断；宝珠寻宝收益递减。</p>
+                    <p>掉落判定后，品质从彩到白分层判断；宝珠与常驻被动寻宝合并后收益递减。</p>
                     {RARITIES.map((rarity, index) => <div key={rarity}>{RARITY_NAMES[rarity]}品质 {(player.lootProfile.qualities[index] * 100).toFixed(2)}%</div>)}
                     <p>{player.lootProfile.stars.map((chance, index) => `${index + 1}星 ${(chance * 100).toFixed(1)}%`).join(" · ")}</p>
                     <small>宝箱与领主保底另行生效；寻宝不提高宝珠自身掉率。</small>

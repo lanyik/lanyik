@@ -26,6 +26,7 @@ export function shareSnapshot(previous: CombatSnapshot | undefined, next: Combat
     return { ...next, player: { ...after,
         inventory: share(before.inventory, after.inventory), equipment: share(before.equipment, after.equipment),
         attributes: share(before.attributes, after.attributes), stats: share(before.stats, after.stats),
+        passiveBonuses: share(before.passiveBonuses, after.passiveBonuses),
         orbs: share(before.orbs, after.orbs), autoRecycle: share(before.autoRecycle, after.autoRecycle),
         recycled: share(before.recycled, after.recycled), spiritRealm: share(before.spiritRealm, after.spiritRealm),
         orbResonance: share(before.orbResonance, after.orbResonance), skills: share(before.skills, after.skills)

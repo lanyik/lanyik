@@ -1,5 +1,6 @@
 import { StatusKind, type SavedStatus } from "./StatusSystem";
 import { SkillBuild, SKILL_NODES } from "./SkillBuild";
+import { PASSIVE_UNLOCK_LEVELS, isPassiveId, passiveNodeId, compilePassiveEffects, NO_PASSIVE_EFFECTS, type PassiveId } from "./PassiveSkills";
 import { FireCasting } from "./FireCasting";
 import { LightningCasting } from "./LightningCasting";
 import type { SavedBurn } from "./BurnSystem";
@@ -13,7 +14,7 @@ import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 import { DEFAULT_LOADOUT, SKILLS, SKILL_IDS, SKILL_RULES, skillIndex, skillValues, isFireSkill, isFrostSkill, isLightningSkill, isStarSkill, isSupportSkill, isDamageSkill, isUltimate, mobileCast, SKILL_TIMINGS, type SkillValues, type SkillId, type SkillSnapshot } from "./Skills";
 
 /** Player skill state lives with the authority; UI and effects never decide hits. */
-export interface SkillCheckpoint { readonly points: number; readonly loadout: readonly (SkillId | null)[]; readonly ranks: readonly number[]; readonly revision: number; readonly statuses: readonly SavedStatus[]; readonly burns: readonly SavedBurn[]; readonly recoveryUntil: number; readonly readyAt: readonly number[];
+export interface SkillCheckpoint { readonly points: number; readonly loadout: readonly (SkillId | null)[]; readonly passives: readonly (PassiveId | null)[]; readonly ranks: readonly number[]; readonly revision: number; readonly statuses: readonly SavedStatus[]; readonly burns: readonly SavedBurn[]; readonly recoveryUntil: number; readonly readyAt: readonly number[];
     readonly dashUntil: number; readonly dashX: number; readonly dashZ: number }
 interface PendingCast { readonly id: SkillId; readonly stats: DerivedStats; readonly values: SkillValues; readonly started: number; readonly releaseAt: number; readonly endsAt: number; readonly channelUntil: number; readonly targetX: number; readonly targetZ: number; readonly heading: number; released: boolean }
 type OngoingId = "vortex";
@@ -32,6 +33,8 @@ export class SkillSystem {
     public get points(): number { return this.build.points; }
     public set points(value: number) { this.build.points = value; }
     public readonly loadout = [...DEFAULT_LOADOUT];
+    public readonly passives: (PassiveId | null)[] = PASSIVE_UNLOCK_LEVELS.map(() => null);
+    public passiveEffects = NO_PASSIVE_EFFECTS;
     private readonly readyAt = new Float64Array(SKILL_IDS.length);
     private dashUntil = 0;
     private dashX = 0;
@@ -42,7 +45,7 @@ export class SkillSystem {
     public get fireProjectiles() { return this.fire.projectiles; }
     public get ward(): number { return this.entities.status.amount(StatusKind.Barrier, this.entities.player, 0); }
     private get wardUntil(): number { return this.entities.status.deadline(StatusKind.Barrier, this.entities.player); }
-    public checkpoint(tick = 0): SkillCheckpoint { return { points: this.points, loadout: [...this.loadout], ranks: this.build.snapshot().ranks,
+    public checkpoint(tick = 0): SkillCheckpoint { return { points: this.points, loadout: [...this.loadout], passives: [...this.passives], ranks: this.build.snapshot().ranks,
         revision: this.build.revision, statuses: this.entities.status.save(this.entities.player, tick), burns: this.entities.status.burns.save(this.entities.player, tick), recoveryUntil: Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0),
         readyAt: Array.from(this.readyAt), dashUntil: this.dashUntil, dashX: this.dashX, dashZ: this.dashZ }; }
     public restore(state: SkillCheckpoint, tick: number): void {
@@ -50,6 +53,7 @@ export class SkillSystem {
         this.entities.effects.cancelSource(this.entities.world.ids[this.entities.player]);
         this.loadout.splice(0, this.loadout.length, ...state.loadout); this.readyAt.set(state.readyAt);
         this.build.restore(state.ranks, state.points, state.revision);
+        this.passives.splice(0, this.passives.length, ...state.passives); this.compilePassives();
         this.entities.status.restore(this.entities.player, state.statuses, tick);
         this.entities.status.burns.restore(this.entities.player, state.burns, tick);
         this.updateResilience();
@@ -58,7 +62,7 @@ export class SkillSystem {
     public snapshot(tick: number): SkillSnapshot {
         const pending = this.pending, winding = pending && tick < pending.releaseAt, channeling = pending && !winding && tick < pending.channelUntil;
         return Object.freeze({ points: this.points, refundBlocked: this.busy(tick) || this.ongoing.size > 0 || this.frost.ongoing || this.fire.ongoing || this.lightning.ongoing || this.stars.ongoing, loadout: Object.freeze([...this.loadout]), build: this.build.snapshot(), modifiers: this.build.modifiers,
-            ranks: Object.freeze(Object.fromEntries(SKILL_IDS.map(id => [id, this.build.rank(id)])) as Record<SkillId, number>),
+            passives: Object.freeze([...this.passives]), ranks: Object.freeze(Object.fromEntries(SKILL_IDS.map(id => [id, this.build.rank(id)])) as Record<SkillId, number>),
             remaining: Object.freeze(Object.fromEntries(SKILL_IDS.map((id, i) => [id, Math.max(0, this.readyAt[i] - tick) / GAME_CONFIG.timing.simulationHz])) as Record<SkillId, number>),
             ward: this.ward, wardRemaining: Math.max(0, this.wardUntil - tick) / GAME_CONFIG.timing.simulationHz, dashing: this.dashing(tick),
             recoveryRemaining: Math.max(0, Math.max(this.recoveryUntil, pending?.endsAt ?? 0) - tick) / GAME_CONFIG.timing.simulationHz,
@@ -87,8 +91,20 @@ export class SkillSystem {
             const id = this.loadout[slot]; if (id && this.build.rank(id) === 0) this.loadout[slot] = null;
         }
         this.updateResilience();
+        for (let slot = 0; slot < this.passives.length; slot++) {
+            const id = this.passives[slot]; if (id && this.build.rank(passiveNodeId(id)) === 0) this.passives[slot] = null;
+        }
+        this.compilePassives();
         return null;
     }
+    public equipPassive(id: PassiveId | null, slot: number, level: number): boolean {
+        if (!Number.isInteger(slot) || slot < 0 || slot >= this.passives.length || level < PASSIVE_UNLOCK_LEVELS[slot]
+            || id !== null && (!isPassiveId(id) || !this.build.rank(passiveNodeId(id)))) return false;
+        const previous = id === null ? -1 : this.passives.indexOf(id);
+        if (previous >= 0) this.passives[previous] = this.passives[slot];
+        this.passives[slot] = id; this.compilePassives(); return true;
+    }
+    private compilePassives(): void { this.passiveEffects = compilePassiveEffects(this.passives, id => this.build.rank(id)); }
     private updateResilience(): void {
         this.entities.status.durationScale[this.entities.player] = 1 - .04 * this.build.rank("frost.resilience") - .03 * this.build.rank("stars.resilience");
     }

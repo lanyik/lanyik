@@ -183,7 +183,7 @@ test("full population area spells, chain overlap and exact status expiry stay in
 test("save and transferable render state preserve new status deadlines, provenance and isolation", () => {
     const sim = new CombatSimulation("lightning-save"), e = (sim as unknown as { entities: CombatWorld }).entities, source = e.world.ids[e.player];
     e.status.apply(StatusKind.Conductive, 999, source, 1, 480, 0); e.status.apply(StatusKind.StaticGuard, source, source, .05, 360, 0);
-    const cp = sim.checkpoint(); expect(cp.version).toBe(9); expect(() => validateCharacterCheckpoint({ ...cp, version: 7 } as never)).toThrow();
+    const cp = sim.checkpoint(); expect(cp.version).toBe(10); expect(() => validateCharacterCheckpoint({ ...cp, version: 7 } as never)).toThrow();
     sim.restore(cp); const again = sim.checkpoint(); sim.restore(again); expect(sim.checkpoint()).toEqual(again);
     expect(e.status.source(StatusKind.Conductive, e.player)).toBe(-1); expect(e.status.staticGuardUntil[e.player]).toBe(360);
     const frame = new RenderFrame(), packet = frame.write(sim.getRenderState()), transfer = structuredClone(packet, { transfer: [packet.buffer] });

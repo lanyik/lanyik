@@ -1,6 +1,7 @@
 import type { DerivedStats } from "./CombatStats";
 import type { TypedValue } from "./ItemDefinition";
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
+import type { PassiveId } from "./PassiveSkills";
 
 export const SKILL_IDS = ["pulse", "frost", "chain", "dash", "ward", "meteor", "vortex", "blades", "icebolt", "icelance", "icestorm", "blizzard", "shatter", "absolutezero", "fireball", "fireray", "firewall", "firedomain", "pyroblast", "doom", "arc", "thunderlance", "thunderstrike", "judgment", "thunderfield", "tempest", "starbolt", "infusion", "resonance", "shelter", "bastion"] as const;
 export type SkillId = typeof SKILL_IDS[number];
@@ -78,6 +79,7 @@ export const SKILLS: Readonly<Record<SkillId, SkillDefinition>> = Object.freeze(
     bastion: Object.freeze({ type: "skill", value: "bastion", school: "星辰", role: "终极壁垒", name: "星穹壁垒", description: "展开强护盾和减伤；只替换剩余量更低的盾。回护仅在护盾被伤害耗尽后治疗，致死伤害不能复活。", color: "#ffe2a2", mana: 44, cooldown: 32, unlock: 45, automatic: true })
 });
 export interface SkillSnapshot {
+    readonly passives: readonly (PassiveId | null)[];
     readonly refundBlocked: boolean;
     readonly points: number;
     readonly loadout: readonly (SkillId | null)[];
@@ -188,11 +190,11 @@ function baseSkillValues(id: SkillId, rank: number, stats: DerivedStats, m: Skil
             dashDistance: 0, ward: 0, duration, chill: (id === "frost" ? 2 : 1) * (1 + .15 * m.winter + (["frost", "blizzard"].includes(id) ? .1 * m.tempo : 0)) * (m.shatter ? .75 : 1),
             freezeSeconds: 1 + .1 * m.winter, frozenDamage: 1 + .1 * m.shatter };
     }
-    return { mana: SKILLS[id].mana, cooldown: SKILLS[id].cooldown / (1 + stats.castSpeed),
+    return { mana: SKILLS[id].mana, cooldown: SKILLS[id].cooldown * (id === "dash" ? 1 - .03 * Math.max(0, rank - 1) : 1) / (1 + stats.castSpeed),
         damage: id === "pulse" ? 1.3 + .2 * (rank - 1) : id === "vortex" ? .3 + .05 * (rank - 1) : 0,
-        radius: id === "pulse" ? 3.2 + .15 * (rank - 1) : id === "vortex" ? 3.4 : 0,
+        radius: id === "pulse" ? 3.2 + .15 * (rank - 1) : id === "vortex" ? 3.4 + .08 * (rank - 1) : 0,
         slowSeconds: 2.5 + .3 * (rank - 1), targets: 1,
-        dashDistance: 3.8 + .35 * (rank - 1), ward: 0,
+        dashDistance: 3.8 + .2 * (rank - 1), ward: 0,
         duration: 4, chill: 0, freezeSeconds: 1, frozenDamage: 1 };
 }
 export const DEFAULT_LOADOUT: readonly (SkillId | null)[] = Object.freeze(["pulse", null, "dash", null, null, null]);

@@ -71,6 +71,12 @@ export const GAME_CONFIG = Object.freeze({
     skills: Object.freeze({
         /** 可同时装配的主动技能槽数；变更须联动快捷键、界面和存档结构。 */
         slots: 6,
+        /** 独立常驻被动槽的角色解锁等级；不占主动槽，也不对应施法快捷键。 */
+        passiveUnlockLevels: Object.freeze([50, 100, 150] as const),
+        /** 全域拾取被动的扫描频率，单位：Hz；只扫描已有定容地面池。 */
+        passivePickupHz: 10,
+        /** 每次全域扫描每类至多尝试的数量；满包计入预算并轮转扫描，沿用自动装配预算。 */
+        passivePickupBatch: 16,
         /** 每次角色升级发放的技能点；总点数校验目前也按每级 1 点，改值须同步规则。 */
         pointsPerLevel: 1,
         /** 同时保留的视觉效果记录数；满额只跳过新表现，不跳过伤害或 Buff 结算。 */

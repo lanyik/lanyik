@@ -29,7 +29,7 @@ export function InventoryPanel({ player, selectedId, onSelect, onClose, onUse, o
     const [lockMode, setLockMode] = useState(false);
     const drag = useOrbDrag();
     const dismissTooltip = useDismissItemTooltip();
-    const evaluations = useMemo(() => new Map(player.inventory.filter(item => item.type === "equipment").map(item => [item.id, compareEquipment(item, player)])), [player.inventory, player.stats, player.equipment, player.level, player.attributes]);
+    const evaluations = useMemo(() => new Map(player.inventory.filter(item => item.type === "equipment").map(item => [item.id, compareEquipment(item, player)])), [player.inventory, player.stats, player.equipment, player.level, player.attributes, player.passiveBonuses]);
     const items = player.inventory.filter(item => item.type === filter);
     const rules = GAME_CONFIG.inventory[filter];
     const selected = items.find(item => item.id === selectedId);

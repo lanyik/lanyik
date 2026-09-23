@@ -30,6 +30,23 @@
 .astral-star { fill: #9fe4ff; opacity: .3; }
 .constellation-label { position: absolute; top: 305px; color: #6990a2; letter-spacing: 7px; font-size: 10px; }
 .damage-path { left: 430px; }.control-path { left: 700px; }
+.utility-active-label, .utility-passive-label { left: 300px; width: 640px; text-align: center; color: #9dd7c8; border-bottom: 1px solid #8fe2c633; padding-bottom: 18px; }
+.utility-active-label { top: 65px; }.utility-passive-label { top: 355px; }
+.constellation-node.slotted-passive { width: 60px; height: 60px; border-radius: 50%; }
+.passive-art { width: 44px; height: 44px; flex-shrink: 0; filter: drop-shadow(0 0 6px #86d8c333); }
+.passive-slots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+.passive-slot { --passive-color: #93b8b2; display: flex; align-items: center; min-width: 0; border: 1px solid color-mix(in srgb, var(--passive-color) 35%, transparent); border-radius: 5px; background: linear-gradient(110deg, #19362f99, #0d182599); }
+.passive-slot[data-locked=true] { opacity: .55; border-style: dashed; background: #111b2388; }
+.passive-slot > .item-tooltip-anchor { flex: 1; min-width: 0; }
+.passive-slot-content { display: flex; align-items: center; gap: 5px; padding: 3px 5px; min-width: 0; outline-offset: 2px; }
+.passive-slot-content > span:last-child { min-width: 0; }.passive-slot b, .passive-slot small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 9px; }
+.passive-slot b { color: var(--passive-color); font-weight: 500; }.passive-slot small { color: #9caeb6; font-size: 8px; }
+.passive-slot .passive-art { width: 26px; height: 26px; }.passive-placeholder { width: 26px; text-align: center; color: #81b4a4; font-size: 20px; }
+.panel-passives { margin: 0 0 8px; }.panel-passives .passive-slot-content { padding: 4px 8px; }.panel-passives .passive-art { width: 30px; height: 30px; }.panel-passives b { font-size: 11px; }
+.passive-slot > button { margin-left: auto; padding: 2px 8px; border: 0; background: transparent; color: #b1ceca; }
+.passive-details { max-width: 320px; padding: 14px; line-height: 1.65; font-size: 12px; }.passive-details h3 { color: #aee7d2; margin: 0 0 8px; }.passive-details small { color: #a4b9bf; }
+.passive-numbers { font-size: 12px; margin: 12px 0; }.passive-numbers > div { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid #8fe2c61a; }.passive-numbers dt { color: #b4c8ce; }.passive-numbers dd { margin: 0; text-align: right; }
+.passive-equip-actions { display: grid; gap: 6px; margin: 12px 0; }.passive-equip-actions button { padding: 7px; border-color: #527c71; color: #b4edd7; background: #132c2c; font-size: 11px; }
 .constellation-node { position: relative; display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; padding: 0; border: 1px solid #5a798c; border-radius: 50%; background: radial-gradient(#1c3446, #0c1926); color: #afcdd7; z-index: 1; overflow: visible; transition: border-color .15s, box-shadow .15s; touch-action: none; }
 .constellation-node.active { width: 65px; height: 65px; border-radius: 12px; border-color: #779cb2; box-shadow: 0 0 0 5px #0b1724, 0 0 0 6px #43617655; }
 .constellation-node.active.learned { touch-action: none; }
@@ -75,12 +92,14 @@
 .player-buffs:empty { display: none; }
 .combat-dock .hud-power, .combat-dock .status-bar { order: -1; }
 .combat-dock .skill-slots { order: 1; }
-.combat-dock .player-buffs { order: 2; }
-.combat-dock .player-castbar { order: 3; }
+.combat-dock .passive-slots { order: 2; grid-column: 1 / -1; }
+.combat-dock .player-buffs { order: 3; }
+.combat-dock .player-castbar { order: 4; }
 .combat-dock .skill-slots { grid-template-columns: repeat(8, minmax(0, 1fr)); }.player-buffs { display: flex; flex-wrap: wrap; gap: 5px; grid-column: 1 / -1; }.player-buffs > span { border: 1px solid #50937877; color: #a2e1cc; background: #132d29; border-radius: 3px; font-size: 10px; padding: 3px 6px; }.player-buffs > span[data-beneficial=false] { color: #f3b5a5; border-color: #b0726b88; background: #321f29; }.player-buffs small { margin-left: 5px; opacity: .8; }
 .player-castbar { height: 20px; background: #112433; border: 1px solid #497b93; position: relative; overflow: hidden; margin-top: 7px; grid-column: 1 / -1; }.player-castbar i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, #345971, #669daf); transition: width .1s linear; }.player-castbar[data-phase=recovery] i { background: linear-gradient(90deg, #635334, #a78958); }.player-castbar span { position: relative; display: block; text-align: center; line-height: 18px; color: #e4f4f6; font-size: 10px; }
 @media (max-width: 1179px) { .skills-window.constellation-window { bottom: 88px; } }
 @media (max-width: 760px) {
+    .panel-passives .passive-slot-content { padding: 4px; gap: 3px; }.panel-passives .passive-art { width: 24px; height: 24px; }.panel-passives b { font-size: 10px; }.panel-passives .passive-slot > button { padding: 2px 4px; }
     .skills-window.constellation-window { top: 8px; width: calc(100vw - 16px); bottom: 80px; }
     .school-tabs { padding: 0 5px; justify-content: space-between; gap: 0; }.school-tabs button { padding: 8px 9px; gap: 5px; font-size: 11px; }.school-tabs button small { display: none; }.school-tabs button i { font-size: 18px; }
     .constellation-workspace { display: flex; flex-direction: column; overflow-y: auto; }.constellation-stage { flex: 0 0 340px; }.constellation-heading { padding: 12px 16px 4px; }.constellation-heading h3 { font-size: 20px; }.constellation-details { flex-shrink: 0; overflow: visible; border-left: 0; border-top: 1px solid #42677a66; padding: 16px; }.node-detail-icon { float: right; }.node-detail-kind { margin-bottom: 10px; }.constellation-details h3 { margin-top: 8px; }.node-detail-stats { display: grid; grid-template-columns: 1fr 1fr; column-gap: 20px; }.node-point-controls { margin: 12px 0; grid-template-columns: 50px 50px 50px; justify-content: center; }.build-draft-summary { padding-top: 10px; margin-top: 10px; }.node-drag-hint { display: none; }
@@ -95,6 +114,9 @@
     .school-tabs button { padding-block: 2px; }.school-tabs button i { font-size: 20px; }
     .constellation-heading { padding-block: 3px; }.constellation-heading p, .constellation-heading span { display: none; }
     .constellation-legend { padding-block: 5px; }
-    .constellation-window .skill-loadout { padding: 6px 14px; }.tree-build-actions { margin-bottom: 9px; }
+    .constellation-window .skill-loadout { padding: 6px 14px; display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 4px 10px; }
+    .tree-build-actions { grid-column: 1 / -1; margin-bottom: 4px; }.respec-hint { grid-column: 1 / -1; }
+    .constellation-window .panel-passives { grid-column: 2; grid-row: 3; margin: 0; }
+    .constellation-window .loadout-slots { grid-column: 1; grid-row: 3; }
     .constellation-window .loadout-slot { padding: 4px; }.constellation-window .loadout-slot .skill-art { --icon-size: 32px; }
 }

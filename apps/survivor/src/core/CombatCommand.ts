@@ -5,6 +5,7 @@ import type { SkillId } from "./Skills";
 import type { Rarity } from "./Loot";
 import type { CraftOperation } from "./Crafting";
 import type { ItemType } from "./ItemDefinition";
+import type { PassiveId } from "./PassiveSkills";
 
 export type CombatCommand =
     | { readonly type: "teleport"; readonly x: number; readonly z: number }
@@ -15,6 +16,7 @@ export type CombatCommand =
     | { readonly type: "remove-orb"; readonly socket: number }
     | { readonly type: "cast-skill"; readonly skill: SkillId }
     | { readonly type: "equip-skill"; readonly skill: SkillId; readonly slot: number }
+    | { readonly type: "equip-passive"; readonly passive: PassiveId | null; readonly slot: number }
     | { readonly type: "commit-skill-build"; readonly ranks: readonly number[]; readonly revision: number }
     | { readonly type: "toggle-autocast" }
     | { readonly type: "toggle-auto-combat" }
@@ -37,6 +39,7 @@ export function applyCombatCommand(simulation: CombatSimulation, command: Combat
         case "remove-orb": simulation.removeOrb(command.socket); break;
         case "cast-skill": simulation.castSkill(command.skill); break;
         case "equip-skill": simulation.equipSkill(command.skill, command.slot); break;
+        case "equip-passive": simulation.equipPassive(command.passive, command.slot); break;
         case "commit-skill-build": simulation.commitSkillBuild(command.ranks, command.revision); break;
         case "toggle-autocast": simulation.toggleAutoCast(); break;
         case "toggle-auto-combat": simulation.toggleAutoCombat(); break;
