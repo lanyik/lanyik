@@ -38,8 +38,10 @@ export class FrostCasting {
     private hit(id: SkillId, slot: number, tick: number, stats: DerivedStats, values: SkillValues, random: DeterministicRandom, areaControl: boolean): void {
         const { world, player, status, impacts } = this.e, source = world.ids[player], target = world.ids[slot];
         const hit = rollAttack(stats, random, values.damage);
+        const impact = impacts.count;
         impacts.ice(source, target, hit.damage, hit.critical, areaControl ? 0 : values.chill, ticksForSeconds(values.slowSeconds), ticksForSeconds(values.freezeSeconds),
             values.frozenDamage * (id === "shatter" ? 1.5 : 1), id === "shatter");
+        impacts.castStats[impact] = stats;
         if (areaControl) {
             if (id === "absolutezero") status.apply(StatusKind.Frozen, source, target, 1, tick + ticksForSeconds(values.freezeSeconds), tick);
             status.chill(source, target, values.chill, tick + ticksForSeconds(values.slowSeconds), tick, ticksForSeconds(values.freezeSeconds));

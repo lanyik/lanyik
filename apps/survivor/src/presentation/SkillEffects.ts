@@ -7,6 +7,7 @@ const COLORS = ["#bd93ff", "#7bdeff", "#ffe29a", "#80f1ce", "#8dafef", "#ff9954"
 const WHITE = new Color("#f4fcff"), TAU = Math.PI * 2;
 const FIRE = new Color("#ff792b"), HOT_FIRE = new Color("#ffce6b");
 const THUNDER = new Color("#91cbff"), HIGH_VOLTAGE = new Color("#cab5ff");
+const STAR = new Color("#cfb2ff"), STAR_GOLD = new Color("#ffe4a6"), STAR_GUARD = new Color("#a4eeec");
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
 /** Visual choreography expands authoritative facts into bounded GPU instances, never gameplay. */
@@ -125,7 +126,30 @@ export class SkillEffects {
             const y = height(x, z) + .13, r = b.radius[i];
             const fade = (1 - t) ** .7, burst = 1 - (1 - t) ** 3;
             const seed = b.started[i] * .17 + x * 2.3 + z * 1.7;
-            if (kind === EffectKind.ThunderWarning || kind === EffectKind.JudgmentWarning) {
+            if (kind === EffectKind.StarBolt) {
+                const ex = b.endX[i], ez = b.endZ[i], ey = height(ex, ez) + .7;
+                this.beam(x, y + .6, z, ex, ey, ez, .14, kind, fade * .8);
+                this.stamp(ex, ey, ez, .8 * fade, .8 * fade, t * 3, kind, fade, 4, 0, true);
+                this.stamp(ex, ey, ez, .2, .2, 0, -1, fade, 2, 0, true);
+                for (let j = 0; j < 6; j++) {
+                    const at = (j + 1) / 7, px = x + (ex - x) * at, pz = z + (ez - z) * at;
+                    this.stamp(px, y + .6 + (ey - y - .6) * at + Math.sin(at * TAU + t * 6) * .15, pz, .15, .25, j + t, kind, fade, 4, 0, true);
+                }
+            } else if (kind >= EffectKind.Infusion && kind <= EffectKind.Bastion) {
+                const ultimate = kind === EffectKind.Bastion || kind === EffectKind.Resonance;
+                const purify = kind === EffectKind.Cleanse, size = r * (purify ? burst : .5 + burst * .5);
+                this.stamp(x, y, z, size * 2.42, size * 2.42, seconds * .4, kind, fade, 5, 0, false, true);
+                this.stamp(x, y, z, r * 2.42 * burst, r * 2.42 * burst, -t, kind, fade * .8, 1, 0, false, true);
+                for (let j = 0; j < (ultimate ? 12 : 6); j++) {
+                    const angle = j * TAU / (ultimate ? 12 : 6) + t * (purify ? -.5 : 1.5), orbit = size * .85;
+                    const px = x + Math.sin(angle) * orbit, pz = z + Math.cos(angle) * orbit;
+                    const lift = purify ? .3 + burst * 2.5 : .4 + Math.sin(t * Math.PI) * (ultimate ? 2 : 1);
+                    this.stamp(px, y + lift, pz, .18 + (ultimate ? .1 : 0), .45, -angle, kind, fade, 4, 0, true);
+                    if (kind === EffectKind.Bastion) this.beam(px, y, pz, px, y + 2.7 * burst, pz, .15, kind, fade);
+                    if (kind === EffectKind.Resonance || kind === EffectKind.Infusion) this.beam(px, y + lift, pz, x, y + 1, z, .045, kind, fade * .6);
+                }
+                this.stamp(x, y + .9, z, ultimate ? 1.5 : .8, ultimate ? 1.5 : .8, -t * 2, -1, fade * .6, 4, 0, true);
+            } else if (kind === EffectKind.ThunderWarning || kind === EffectKind.JudgmentWarning) {
                 this.stamp(x, y, z, r * 2.42, r * 2.42, -t, kind, .35 + t * .45, 5, 0, false, true);
                 this.stamp(x, y, z, r * 2.42 * (1 - t), r * 2.42 * (1 - t), t, -1, .7, 1, 0, false, true);
                 for (let j = 0; j < 6; j++) {
@@ -355,7 +379,8 @@ export class SkillEffects {
         this.dummy.position.set(x - this.originX, projected ? 0 : y, z - this.originZ); this.dummy.rotation.set(0, rotation, 0);
         if (!vertical) this.dummy.rotateX(-Math.PI / 2 - pitch);
         this.dummy.scale.set(width, length, 1); this.dummy.updateMatrix(); this.mesh.setMatrixAt(i, this.dummy.matrix);
-        this.mesh.setColorAt(i, kind < 0 ? WHITE : kind >= EffectKind.ThunderLance ? kind === EffectKind.Tempest || kind === EffectKind.JudgmentImpact ? HIGH_VOLTAGE : THUNDER
+        this.mesh.setColorAt(i, kind < 0 ? WHITE : kind >= EffectKind.StarBolt ? kind === EffectKind.Bastion || kind === EffectKind.Resonance ? STAR_GOLD : kind === EffectKind.Shelter || kind === EffectKind.Cleanse ? STAR_GUARD : STAR
+            : kind >= EffectKind.ThunderLance ? kind === EffectKind.Tempest || kind === EffectKind.JudgmentImpact ? HIGH_VOLTAGE : THUNDER
             : kind >= EffectKind.FireRay ? kind === EffectKind.Doom || kind === EffectKind.Detonation ? HOT_FIRE : FIRE
             : COLORS[kind === EffectKind.IceBolt || kind === EffectKind.IceField ? EffectKind.Frost : kind]);
         this.styles.setXYZW(i, tile, rotation, alpha, shape + (projected ? 8 : 0));

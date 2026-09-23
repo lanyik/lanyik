@@ -2,7 +2,7 @@ import { MAX_ENEMIES } from "./GameConfig";
 import type { CombatWorld } from "./CombatWorld";
 
 export enum CombatEventKind { Damage, Heal, Prevented, Defeat }
-export enum EffectCause { Attack, Lifesteal, Reflection, Sacrifice, ShamanHeal, Burn }
+export enum EffectCause { Attack, Lifesteal, Reflection, Sacrifice, ShamanHeal, Burn, BarrierRecovery }
 export enum Prevention { None, Dodge, Shield, Block }
 export type CombatEventConsumer = (events: CombatEvents, index: number) => void;
 

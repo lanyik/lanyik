@@ -9,6 +9,7 @@ import type { EnemyKind } from "../../src/core/EnemyDefinitions";
 import type { SkillSystem } from "../../src/core/SkillSystem";
 import { EffectKind } from "../../src/core/CombatEffects";
 import { StatusKind } from "../../src/core/StatusSystem";
+import { nodeIndex } from "../../src/core/SkillBuild";
 import { enterWilds, advanceCombat, combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
 
 test("tree hover, bounded panning, held point allocation and one-click respec", async ({ page }, info) => {
@@ -129,6 +130,15 @@ test("constellation drafts, six slots, drag inputs and casting recovery work thr
     await expect(panel.locator(".constellation-details")).toContainText("角色 30 级解锁");
     await page.screenshot({ path: info.outputPath("skill-tree-advanced.png") });
 
+    await combatWorker(page).evaluate(indices => {
+        const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        const fixture = sim as unknown as { level: number; skills: SkillSystem; markChanged(): void };
+        const cp = fixture.skills.checkpoint(sim.tick), ranks = [...cp.ranks];
+        for (const [index, rank] of indices) ranks[index] = rank;
+        // Keep the six rendered enemy fixtures: a full character restore reconstructs the world.
+        fixture.level = 9; fixture.skills.restore({ ...cp, ranks, points: 0 }, sim.tick); fixture.markChanged();
+    }, [[nodeIndex("starbolt"), 3], [nodeIndex("starbolt.power"), 3], [nodeIndex("ward"), 1]]);
+    await advanceCombat(page);
     await panel.getByRole("button", { name: "星辰", exact: false }).click();
     const ward = panel.locator('[data-node="ward"]');
     await ward.click(); await panel.locator(".node-detail-icon").hover();

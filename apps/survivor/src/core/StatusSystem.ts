@@ -2,7 +2,7 @@ import type { EntityWorld } from "./EntityWorld";
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 import { BurnSystem } from "./BurnSystem";
 
-export enum StatusKind { Slow, Protection, Barrier, Chill, Frozen, ControlResistance, Conductive, StaticGuard, Burning }
+export enum StatusKind { Slow, Protection, Barrier, Chill, Frozen, ControlResistance, Conductive, StaticGuard, StarEnergy, Empowered, AstralGuard, Weakened, Burning }
 export enum ControlProfile { Normal, Elite, Boss }
 export const STATUS_DEFINITIONS = Object.freeze([
     { name: "减速", beneficial: false, control: true, sources: 4, maximum: .6 },
@@ -13,10 +13,16 @@ export const STATUS_DEFINITIONS = Object.freeze([
     { name: "控制抵抗", beneficial: true, control: false, sources: 1, maximum: 1 },
     { name: "导电", beneficial: false, control: false, sources: 1, maximum: 1 },
     { name: "静电防护", beneficial: true, control: false, sources: 1, maximum: .05 },
+    { name: "星能", beneficial: true, control: false, sources: 1, maximum: 3 },
+    { name: "星辰强化", beneficial: true, control: false, sources: 1, maximum: .8 },
+    { name: "星辰庇护", beneficial: true, control: false, sources: 1, maximum: .5 },
+    { name: "虚弱", beneficial: false, control: false, sources: 4, maximum: .3 },
     { name: "灼烧", beneficial: false, control: false, sources: 4, maximum: 32 }
 ] as const);
 export const MAX_SAVED_STATUSES = STATUS_DEFINITIONS.slice(0, StatusKind.Burning).reduce((sum, def) => sum + def.sources, 0);
-export interface SavedStatus { readonly kind: StatusKind; readonly source: number; readonly amount: number; readonly remaining: number }
+export interface SavedStatus { readonly kind: StatusKind; readonly source: number; readonly amount: number; readonly remaining: number; readonly charges?: number; readonly recovery?: number }
+interface StatusData { readonly charges?: number; readonly recovery?: number }
+const NO_DATA: StatusData = Object.freeze({});
 const SOURCES = 4;
 /** Independent source deadlines, bounded storage, and cheap projections for movement/actions. */
 export class StatusSystem {
@@ -29,6 +35,12 @@ export class StatusSystem {
     public readonly frozenUntil: Float64Array;
     public readonly conductiveUntil: Float64Array;
     public readonly staticGuardUntil: Float64Array;
+    public readonly starEnergy: Uint8Array;
+    public readonly empoweredUntil: Float64Array;
+    public readonly empoweredCharges: Uint8Array;
+    public readonly astralGuardUntil: Float64Array;
+    public readonly weakenedUntil: Float64Array;
+    private readonly barrierRecovery: Float64Array;
     public readonly controlProfile: Uint8Array;
     public readonly durationScale: Float64Array;
     private readonly until: Float64Array;
@@ -50,17 +62,22 @@ export class StatusSystem {
         this.slowUntil = new Float64Array(world.capacity); this.wardUntil = new Float64Array(world.capacity);
         this.frozenUntil = new Float64Array(world.capacity); this.slowScale = new Float32Array(world.capacity).fill(1);
         this.conductiveUntil = new Float64Array(world.capacity); this.staticGuardUntil = new Float64Array(world.capacity);
+        this.starEnergy = new Uint8Array(world.capacity); this.empoweredUntil = new Float64Array(world.capacity); this.empoweredCharges = new Uint8Array(world.capacity);
+        this.astralGuardUntil = new Float64Array(world.capacity); this.weakenedUntil = new Float64Array(world.capacity); this.barrierRecovery = new Float64Array(world.capacity);
         this.controlProfile = new Uint8Array(world.capacity); this.durationScale = new Float64Array(world.capacity).fill(1);
     }
     private base(kind: StatusKind, slot: number): number { return (kind * this.world.capacity + slot) * SOURCES; }
     public canAct(slot: number, tick: number): boolean { return tick >= this.frozenUntil[slot]; }
     public canMove(slot: number, tick: number): boolean { return this.canAct(slot, tick); }
-    public protection(slot: number, tick: number): number { return Math.max(this.amount(StatusKind.Protection, slot, tick), this.amount(StatusKind.StaticGuard, slot, tick)); }
-    public apply(kind: StatusKind, source: number, target: number, strength: number, until: number, tick: number): boolean {
+    public protection(slot: number, tick: number): number { return Math.max(this.amount(StatusKind.Protection, slot, tick), this.amount(StatusKind.StaticGuard, slot, tick), this.amount(StatusKind.AstralGuard, slot, tick)); }
+    public apply(kind: StatusKind, source: number, target: number, strength: number, until: number, tick: number, data: StatusData = NO_DATA): boolean {
         const def = STATUS_DEFINITIONS[kind];
         if (!Number.isInteger(kind) || !def || kind === StatusKind.Burning || !Number.isFinite(strength) || strength <= 0 || strength > def.maximum
             || !Number.isSafeInteger(tick) || tick < 0 || !Number.isSafeInteger(until) || until <= tick
-            || !Number.isSafeInteger(source) || source === 0) throw new RangeError("Invalid status application");
+            || !Number.isSafeInteger(source) || source === 0
+            || (kind === StatusKind.Empowered ? !Number.isInteger(data.charges) || data.charges! < 1 || data.charges! > 8 || until - tick > ticksForSeconds(15) : data.charges !== undefined)
+            || (data.recovery !== undefined && (kind !== StatusKind.Barrier || !Number.isFinite(data.recovery) || data.recovery < 0))
+            || kind === StatusKind.StarEnergy && (!Number.isInteger(strength) || until - tick > ticksForSeconds(8))) throw new RangeError("Invalid status application");
         const slot = this.world.resolve(target);
         if (slot < 0) return false;
         if (kind === StatusKind.Frozen) {
@@ -76,7 +93,14 @@ export class StatusSystem {
             const i = base + j;
             if (kind === StatusKind.Conductive || kind === StatusKind.StaticGuard) { chosen = i; break; }
             if (this.until[i] <= tick) { if (chosen < 0) chosen = i; }
-            else if (kind === StatusKind.Barrier) return false;
+            else if (kind === StatusKind.Barrier) { if (strength <= this.strength[i]) return false; chosen = i; break; }
+            else if (kind === StatusKind.Empowered) {
+                if (!this.canEmpower(slot, strength, data.charges!, until, tick)) return false;
+                chosen = i; break;
+            } else if (kind === StatusKind.AstralGuard) {
+                if (strength < this.strength[i]) return false;
+                chosen = i; break;
+            }
             else if (this.sources[i] === source) { chosen = i; break; }
             if (this.strength[i] < this.strength[weakest] || this.strength[i] === this.strength[weakest] && this.until[i] < this.until[weakest]) weakest = i;
         }
@@ -86,10 +110,69 @@ export class StatusSystem {
         }
         if (this.indices[chosen] < 0) { this.indices[chosen] = this.count; this.active[this.count++] = chosen; }
         this.sources[chosen] = source; this.strength[chosen] = strength; this.until[chosen] = until;
+        if (kind === StatusKind.Empowered) this.empoweredCharges[slot] = data.charges!;
+        if (kind === StatusKind.Barrier) this.barrierRecovery[slot] = data.recovery ?? 0;
         this.nextExpiry = Math.min(this.nextExpiry, until);
         // These two kinds have no movement/render projection; their consumers read the source records.
         if (kind !== StatusKind.Barrier && kind !== StatusKind.ControlResistance) this.project(slot, tick);
         return true;
+    }
+    /** Compare the entire charge instance; a weaker buff cannot refresh a stronger one. */
+    public canEmpower(slot: number, strength: number, charges: number, until: number, tick: number): boolean {
+        const current = this.amount(StatusKind.Empowered, slot, tick);
+        return strength > current || strength === current && (charges > this.empoweredCharges[slot]
+            || charges === this.empoweredCharges[slot] && until > this.deadline(StatusKind.Empowered, slot));
+    }
+    public consumeEmpowerment(slot: number, tick: number): number {
+        const amount = this.amount(StatusKind.Empowered, slot, tick);
+        if (amount && --this.empoweredCharges[slot] === 0) { this.erase(this.base(StatusKind.Empowered, slot)); this.project(slot, tick); }
+        return amount;
+    }
+    public gainStarEnergy(slot: number, tick: number): void {
+        const actor = this.world.ids[slot];
+        this.apply(StatusKind.StarEnergy, actor, actor, Math.min(3, this.amount(StatusKind.StarEnergy, slot, tick) + 1), tick + ticksForSeconds(8), tick);
+    }
+    public consumeStarEnergy(slot: number, tick: number): number {
+        const amount = this.amount(StatusKind.StarEnergy, slot, tick);
+        this.erase(this.base(StatusKind.StarEnergy, slot)); this.starEnergy[slot] = 0; return amount;
+    }
+    /** Read before absorb, then heal after health damage; lethal overflow must not resurrect. */
+    public barrierBreakRecovery(slot: number, damage: number, tick: number): number {
+        const amount = this.amount(StatusKind.Barrier, slot, tick);
+        return amount > 0 && damage >= amount ? this.barrierRecovery[slot] : 0;
+    }
+    public clearStarBenefits(slot: number, tick: number): void {
+        for (const kind of [StatusKind.StarEnergy, StatusKind.Empowered, StatusKind.AstralGuard, StatusKind.Barrier]) {
+            const i = this.base(kind, slot);
+            if (this.sources[i] === this.world.ids[slot]) this.erase(i);
+        }
+        this.project(slot, tick);
+    }
+    public hasCleansable(slot: number, tick: number): boolean {
+        return this.burnUntil[slot] > tick || [StatusKind.Frozen, StatusKind.Slow, StatusKind.Chill, StatusKind.Weakened, StatusKind.Conductive].some(kind => this.amount(kind, slot, tick) > 0);
+    }
+    /** Each scalar source or entire burn source group costs one dispel. No expiry/explosion callbacks. */
+    public cleanse(slot: number, limit: number, tick: number): number {
+        if (!Number.isInteger(limit) || limit < 0 || limit > 5) throw new RangeError("Invalid cleanse budget");
+        let removed = 0;
+        if (limit && this.amount(StatusKind.Frozen, slot, tick)) { this.consumeFreeze(slot, tick); removed++; }
+        while (removed < limit && this.burns.cleanseOne(slot, tick)) removed++;
+        while (removed < limit) {
+            let chosen = -1, chosenKind = -1, priority = Infinity;
+            for (const kind of [StatusKind.Slow, StatusKind.Chill, StatusKind.Weakened, StatusKind.Conductive]) {
+                const base = this.base(kind, slot), order = kind === StatusKind.Slow || kind === StatusKind.Chill ? 0 : 1;
+                for (let j = 0; j < STATUS_DEFINITIONS[kind].sources; j++) {
+                    const i = base + j;
+                    if (tick >= this.until[i]) continue;
+                    if (chosen < 0 || order < priority || order === priority && (this.until[i] < this.until[chosen]
+                        || this.until[i] === this.until[chosen] && (kind < chosenKind
+                            || kind === chosenKind && this.sources[i] < this.sources[chosen]))) { chosen = i; chosenKind = kind; priority = order; }
+                }
+            }
+            if (chosen < 0) break;
+            this.erase(chosen); removed++;
+        }
+        this.project(slot, tick); return removed;
     }
     public chill(source: number, target: number, amount: number, until: number, tick: number, freezeTicks: number): boolean {
         if (!Number.isFinite(amount) || amount <= 0 || !Number.isSafeInteger(freezeTicks) || freezeTicks <= 0) throw new RangeError("Invalid chill application");
@@ -165,7 +248,8 @@ export class StatusSystem {
         const entries: SavedStatus[] = [];
         for (let kind = 0; kind < StatusKind.Burning; kind++) {
             const base = this.base(kind, slot);
-            for (let j = 0; j < STATUS_DEFINITIONS[kind].sources; j++) if (tick < this.until[base + j]) entries.push({ kind, source: this.sources[base + j], amount: this.strength[base + j], remaining: this.until[base + j] - tick });
+            for (let j = 0; j < STATUS_DEFINITIONS[kind].sources; j++) if (tick < this.until[base + j]) entries.push({ kind, source: this.sources[base + j], amount: this.strength[base + j], remaining: this.until[base + j] - tick,
+                ...(kind === StatusKind.Empowered ? { charges: this.empoweredCharges[slot] } : kind === StatusKind.Barrier ? { recovery: this.barrierRecovery[slot] } : {}) });
         }
         return entries;
     }
@@ -183,6 +267,8 @@ export class StatusSystem {
             if (entry.source !== this.world.ids[slot] && !provenance.has(entry.source)) provenance.set(entry.source, -provenance.size - 1);
             this.sources[index] = entry.source === this.world.ids[slot] ? entry.source : provenance.get(entry.source)!;
             this.strength[index] = entry.amount; this.until[index] = tick + entry.remaining;
+            if (entry.kind === StatusKind.Empowered) this.empoweredCharges[slot] = entry.charges!;
+            if (entry.kind === StatusKind.Barrier) this.barrierRecovery[slot] = entry.recovery ?? 0;
             this.indices[index] = this.count; this.active[this.count++] = index;
             this.nextExpiry = Math.min(this.nextExpiry, this.until[index]);
         }
@@ -191,7 +277,8 @@ export class StatusSystem {
     public snapshot(slot: number, tick: number) {
         return STATUS_DEFINITIONS.flatMap((def, kind) => {
             const amount = this.amount(kind, slot, tick);
-            return amount ? [{ kind, name: def.name, beneficial: def.beneficial, control: def.control, amount, remaining: (this.deadline(kind, slot) - tick) / GAME_CONFIG.timing.simulationHz }] : [];
+            return amount ? [{ kind, name: def.name, beneficial: def.beneficial, control: def.control, amount, remaining: (this.deadline(kind, slot) - tick) / GAME_CONFIG.timing.simulationHz,
+                ...(kind === StatusKind.Empowered ? { charges: this.empoweredCharges[slot] } : {}) }] : [];
         });
     }
     public clear(slot: number): void {
@@ -201,6 +288,7 @@ export class StatusSystem {
             for (let j = 0; j < SOURCES; j++) this.erase(base + j);
         }
         this.slowUntil[slot] = this.wardUntil[slot] = this.frozenUntil[slot] = this.conductiveUntil[slot] = this.staticGuardUntil[slot] = 0; this.slowScale[slot] = 1;
+        this.starEnergy[slot] = this.empoweredUntil[slot] = this.empoweredCharges[slot] = this.astralGuardUntil[slot] = this.weakenedUntil[slot] = this.barrierRecovery[slot] = 0;
         this.controlProfile[slot] = ControlProfile.Normal; this.durationScale[slot] = 1;
     }
     private project(slot: number, tick: number): void {
@@ -211,6 +299,11 @@ export class StatusSystem {
         this.frozenUntil[slot] = this.deadline(StatusKind.Frozen, slot);
         this.conductiveUntil[slot] = this.deadline(StatusKind.Conductive, slot);
         this.staticGuardUntil[slot] = this.deadline(StatusKind.StaticGuard, slot);
+        this.starEnergy[slot] = this.amount(StatusKind.StarEnergy, slot, tick);
+        this.empoweredUntil[slot] = this.deadline(StatusKind.Empowered, slot);
+        if (!this.empoweredUntil[slot]) this.empoweredCharges[slot] = 0;
+        this.astralGuardUntil[slot] = this.deadline(StatusKind.AstralGuard, slot);
+        this.weakenedUntil[slot] = this.deadline(StatusKind.Weakened, slot);
     }
     private erase(i: number): void {
         const cursor = this.indices[i];

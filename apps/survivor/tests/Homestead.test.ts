@@ -67,6 +67,12 @@ test.each(["chain", "meteor", "vortex", "blades", "pulse", "frost", "ward", "das
         for (const [id, rank] of Object.entries({ fireball: 10, "fireball.power": 5, pyroblast: 3, meteor: 1 })) ranks[nodeIndex(id)] = rank;
         combat.commitSkillBuild(ranks, 0);
     }
+    if (skill === "ward" || skill === "blades") {
+        const ranks = [...state.skills.ranks];
+        const investment = skill === "ward" ? { starbolt: 3, "starbolt.power": 3, ward: 1 } : { starbolt: 10, "starbolt.power": 5, infusion: 3, blades: 1 };
+        for (const [id, rank] of Object.entries(investment)) ranks[nodeIndex(id)] = rank;
+        combat.commitSkillBuild(ranks, 0);
+    }
     combat.equipSkill(skill, 0);
     const before = combat.getSnapshot().player, discovery = combat.explorationSnapshot;
     combat.castSkill(skill);

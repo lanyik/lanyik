@@ -7,6 +7,7 @@ const CAPACITY = MAX_ENEMIES + 1;
 const FROST = new Color(0x71dfff), ICE = new Color(0xc4f5ff);
 const FIRE = new Color(0xff7625), SMOKE = new Color(0x292225), EMBER = new Color(0xffdc80);
 const ELECTRIC = new Color(0xc8c4ff), STATIC = new Color(0x78deff);
+const STAR = new Color(0xdec4ff), EMPOWERED = new Color(0xffe5a3), SHELTER = new Color(0x9fe3ee), WEAKNESS = new Color(0x9e78c8);
 type StatusMesh = InstancedMesh<BufferGeometry, MeshBasicMaterial>;
 
 /** Attached, persistent visuals rebuilt from authoritative status deadlines; no effect timers or entity cache. */
@@ -20,6 +21,9 @@ export class ActorStatusEffects {
     private readonly embers: StatusMesh;
     private readonly electricity: StatusMesh;
     private readonly staticGuard: StatusMesh;
+    private readonly starMotes: StatusMesh;
+    private readonly astralShield: StatusMesh;
+    private readonly weakness: StatusMesh;
     private readonly time = { value: 0 };
     private readonly dummy = new Object3D();
     private readonly pools: readonly StatusMesh[];
@@ -35,11 +39,15 @@ export class ActorStatusEffects {
         this.embers = this.pool(new OctahedronGeometry(1, 0), CAPACITY * 3, .9);
         this.electricity = this.pool(new PlaneGeometry(1, 1), CAPACITY * 3, .95, "electric");
         this.staticGuard = this.pool(new RingGeometry(.94, 1, 32, 1, 0, Math.PI * 1.7), CAPACITY * 2, .7);
+        this.starMotes = this.pool(new OctahedronGeometry(1, 0), CAPACITY * 11, .9);
+        this.astralShield = this.pool(new RingGeometry(.9, 1, 6), CAPACITY * 3, .55);
+        this.weakness = this.pool(new RingGeometry(.78, 1, 6, 1, 0, Math.PI * 1.6), CAPACITY * 2, .65);
         this.flames.material.blending = this.embers.material.blending = AdditiveBlending;
         this.electricity.material.blending = this.staticGuard.material.blending = AdditiveBlending;
+        this.starMotes.material.blending = this.astralShield.material.blending = AdditiveBlending;
         this.ground.material.depthTest = false;
-        this.root.add(this.ice, this.crystals, this.smoke, this.flames, this.embers, this.electricity, this.staticGuard);
-        this.pools = [this.ground, this.crystals, this.ice, this.flames, this.smoke, this.embers, this.electricity, this.staticGuard];
+        this.root.add(this.ice, this.crystals, this.smoke, this.flames, this.embers, this.electricity, this.staticGuard, this.starMotes, this.astralShield, this.weakness);
+        this.pools = [this.ground, this.crystals, this.ice, this.flames, this.smoke, this.embers, this.electricity, this.staticGuard, this.starMotes, this.astralShield, this.weakness];
     }
 
     private pool(geometry: BufferGeometry, capacity: number, opacity: number, style?: "flame" | "smoke" | "electric"): StatusMesh {
@@ -77,8 +85,21 @@ export class ActorStatusEffects {
     public actor(status: CombatRenderState["entities"]["status"], slot: number, x: number, y: number, z: number, radius: number, visibility = 1): void {
         const frozen = status.frozenUntil[slot] > this.tick, slow = status.slowUntil[slot] > this.tick, burning = status.burnUntil[slot] > this.tick;
         const conductive = status.conductiveUntil[slot] > this.tick, guarded = status.staticGuardUntil[slot] > this.tick;
-        if ((!frozen && !slow && !burning && !conductive && !guarded) || visibility <= 0) return;
+        const energy = status.starEnergy[slot], charges = status.empoweredUntil[slot] > this.tick ? status.empoweredCharges[slot] : 0;
+        const sheltered = status.astralGuardUntil[slot] > this.tick, weakened = status.weakenedUntil[slot] > this.tick;
+        if ((!frozen && !slow && !burning && !conductive && !guarded && !energy && !charges && !sheltered && !weakened) || visibility <= 0) return;
         const scale = radius / .3, color = frozen ? ICE : FROST;
+        for (let i = 0; i < energy + charges; i++) {
+            const empowered = i >= energy, index = empowered ? i - energy : i;
+            const angle = this.seconds * (empowered ? -1.4 : 1) + index * Math.PI * 2 / (empowered ? charges : energy);
+            const orbit = radius * (empowered ? 2.6 : 1.7), size = scale * (empowered ? .06 : .09);
+            this.stamp(this.starMotes, x + Math.sin(angle) * orbit, y + scale * (empowered ? 1.4 : .8) + Math.sin(angle * 2) * scale * .12,
+                z + Math.cos(angle) * orbit, size, size * 1.8, size, angle, empowered ? EMPOWERED : STAR, visibility);
+        }
+        if (sheltered) for (let i = 0; i < 3; i++) this.stamp(this.astralShield, x, y + scale * .85, z,
+            radius * 2.3, scale * .95, 1, this.seconds * .35 + i * Math.PI / 3, SHELTER, visibility, i === 2 ? Math.PI / 2 : .2);
+        if (weakened) for (let i = 0; i < 2; i++) this.stamp(this.weakness, x, y + scale * (1.5 + i * .2), z,
+            radius * (1.4 - i * .25), radius * (1.4 - i * .25), 1, -this.seconds + i, WEAKNESS, visibility, -Math.PI / 2);
         if (conductive) for (let i = 0; i < 3; i++) {
             const angle = slot * .83 + i * Math.PI * 2 / 3, pulse = .55 + .45 * Math.abs(Math.sin(this.seconds * 11 + angle));
             this.stamp(this.electricity, x + Math.sin(angle) * radius, y + .65 * scale, z + Math.cos(angle) * radius,

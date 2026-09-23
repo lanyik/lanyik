@@ -81,7 +81,7 @@ test("small upgrades retain the old equipment, and manual locking permanently re
     expect(sim.getSnapshot().player.inventory.find(item => item.id === 2)).toMatchObject({ autoEquipped: true });
     sim.setEquipmentLock(2, true);
     expect(sim.getSnapshot().player.inventory.find(item => item.id === 2)).toMatchObject({ locked: true, autoEquipped: false });
-    const checkpoint = sim.checkpoint(); expect(checkpoint.version).toBe(8); sim.restore(checkpoint);
+    const checkpoint = sim.checkpoint(); expect(checkpoint.version).toBe(9); sim.restore(checkpoint);
     expect(sim.getSnapshot().autoCombat.enabled).toBe(false);
     expect(sim.getSnapshot().player.equipment.weapon?.autoEquipped).toBe(true);
     expect(sim.getSnapshot().player.inventory.find(item => item.id === 2)).toMatchObject({ autoEquipped: false });

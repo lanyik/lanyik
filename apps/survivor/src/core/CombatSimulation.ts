@@ -225,7 +225,7 @@ export class CombatSimulation {
         }
         const recovering = recoverDefeat && this.gameOverValue;
         if (recovering) { position = CHALLENGE_SPAWN; challengeRevision++; }
-        return validateCharacterCheckpoint({ version: 8, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
+        return validateCharacterCheckpoint({ version: 9, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
             location: destination, wildsPosition, exploration: this.exploration.snapshot,
             player: travelling || point || recovering ? { ...player, inventory, ...position, ...(destination === "homestead" || recovering ? { health: this.stats.maxHealth, mana: this.stats.maxMana } : {}) } : player,
             tick: this.tickValue, kills: this.rewards.kills, openedChests: this.openedChests, nextItemId: this.rewards.nextItemId, random: this.random.state,
@@ -892,7 +892,7 @@ export class CombatSimulation {
     private readonly consumeCombatEvent: CombatEventConsumer = (events, i) => {
         combatFeedback(this.entities, events, i);
         if (events.kind[i] === CombatEventKind.Defeat) {
-            if (events.player[i]) this.autoCombat.setEnabled(false);
+            if (events.player[i]) { this.autoCombat.setEnabled(false); this.skills.cancelTravel(); this.entities.status.clear(this.entities.player); }
             if (events.player[i]) { this.gameOverValue = true; this.pushNotice("danger", this.challenge ? "挑战暂止，击杀进度已保留" : "你倒在了荒原上"); }
             else this.rewards.grant(events, i, this.random, 1 + this.stats.goldBonus + this.orbBonuses.goldBonus, this.lootProfile, this.challenge ? CHALLENGE_ARENA.experience : 1);
             if (this.challenge) { this.challengeRevisionValue++; this.refreshChests(); }

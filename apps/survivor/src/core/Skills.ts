@@ -2,7 +2,7 @@ import type { DerivedStats } from "./CombatStats";
 import type { TypedValue } from "./ItemDefinition";
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 
-export const SKILL_IDS = ["pulse", "frost", "chain", "dash", "ward", "meteor", "vortex", "blades", "icebolt", "icelance", "icestorm", "blizzard", "shatter", "absolutezero", "fireball", "fireray", "firewall", "firedomain", "pyroblast", "doom", "arc", "thunderlance", "thunderstrike", "judgment", "thunderfield", "tempest"] as const;
+export const SKILL_IDS = ["pulse", "frost", "chain", "dash", "ward", "meteor", "vortex", "blades", "icebolt", "icelance", "icestorm", "blizzard", "shatter", "absolutezero", "fireball", "fireray", "firewall", "firedomain", "pyroblast", "doom", "arc", "thunderlance", "thunderstrike", "judgment", "thunderfield", "tempest", "starbolt", "infusion", "resonance", "shelter", "bastion"] as const;
 export type SkillId = typeof SKILL_IDS[number];
 export const FROST_SKILLS: readonly SkillId[] = ["icebolt", "icelance", "icestorm", "shatter", "frost", "blizzard", "absolutezero"];
 export const isFrostSkill = (id: SkillId): boolean => FROST_SKILLS.includes(id);
@@ -10,24 +10,30 @@ export const FIRE_SKILLS: readonly SkillId[] = ["fireball", "fireray", "firewall
 export const isFireSkill = (id: SkillId): boolean => FIRE_SKILLS.includes(id);
 export const LIGHTNING_SKILLS: readonly SkillId[] = ["arc", "thunderlance", "thunderstrike", "judgment", "chain", "thunderfield", "tempest"];
 export const isLightningSkill = (id: SkillId): boolean => LIGHTNING_SKILLS.includes(id);
-export const isUltimate = (id: SkillId): boolean => id === "shatter" || id === "absolutezero" || id === "firedomain" || id === "doom" || id === "judgment" || id === "tempest";
-export const mobileCast = (id: SkillId): boolean => id === "pulse" || id === "arc" || id === "chain" || id === "icebolt" || id === "fireball" || id === "ward" || id === "dash";
+export const STAR_SKILLS: readonly SkillId[] = ["starbolt", "infusion", "blades", "resonance", "ward", "shelter", "bastion"];
+export const isStarSkill = (id: SkillId): boolean => STAR_SKILLS.includes(id);
+export const isSupportSkill = (id: SkillId): boolean => id === "ward" || id === "shelter" || id === "bastion" || id === "infusion" || id === "resonance";
+export const isDamageSkill = (id: SkillId): boolean => id !== "dash" && !isSupportSkill(id);
+export const isUltimate = (id: SkillId): boolean => id === "shatter" || id === "absolutezero" || id === "firedomain" || id === "doom" || id === "judgment" || id === "tempest" || id === "resonance" || id === "bastion";
+export const mobileCast = (id: SkillId): boolean => id === "pulse" || id === "arc" || id === "chain" || id === "icebolt" || id === "fireball" || id === "starbolt" || isSupportSkill(id) || id === "dash";
 export interface SkillModifiers { readonly power: number; readonly shape: number; readonly tempo: number;
     readonly damage: number; readonly economy: number; readonly duration: number; readonly shatter: number; readonly winter: number;
-    readonly wildfire: number; readonly combustion: number; readonly resilience: number; readonly overload: number; readonly conduction: number }
-export const NO_SKILL_MODIFIERS: SkillModifiers = Object.freeze({ power: 0, shape: 0, tempo: 0, damage: 0, economy: 0, duration: 0, shatter: 0, winter: 0, wildfire: 0, combustion: 0, resilience: 0, overload: 0, conduction: 0 });
+    readonly wildfire: number; readonly combustion: number; readonly resilience: number; readonly overload: number; readonly conduction: number;
+    readonly radiance: number; readonly sentinel: number }
+export const NO_SKILL_MODIFIERS: SkillModifiers = Object.freeze({ power: 0, shape: 0, tempo: 0, damage: 0, economy: 0, duration: 0, shatter: 0, winter: 0, wildfire: 0, combustion: 0, resilience: 0, overload: 0, conduction: 0, radiance: 0, sentinel: 0 });
 /** Windup and recovery share one actor action, even across different skill slots. */
 export const SKILL_TIMINGS: Readonly<Record<SkillId, readonly [number, number]>> = Object.freeze({
     pulse: [.18, .28], frost: [.25, .3], chain: [.2, .3], dash: [0, .25], ward: [.15, .25],
     meteor: [.45, .4], vortex: [.35, .35], blades: [.3, .3], icebolt: [.16, .22], icelance: [.3, .3],
     icestorm: [.45, .4], blizzard: [.4, .35], shatter: [.6, .5], absolutezero: [.6, .5],
     fireball: [.2, .25], fireray: [.3, .3], firewall: [.4, .35], firedomain: [.65, .5], pyroblast: [.35, .35], doom: [.7, .55],
-    arc: [.14, .22], thunderlance: [.3, .3], thunderstrike: [.45, .4], judgment: [.65, .5], thunderfield: [.4, .35], tempest: [.6, .5]
+    arc: [.14, .22], thunderlance: [.3, .3], thunderstrike: [.45, .4], judgment: [.65, .5], thunderfield: [.4, .35], tempest: [.6, .5],
+    starbolt: [.18, .24], infusion: [.2, .3], resonance: [.55, .45], shelter: [.18, .3], bastion: [.4, .4]
 });
 /** Shared gameplay rules consumed by the authority and skill descriptions. */
 export const SKILL_RULES = Object.freeze({
     dash: Object.freeze({ durationSeconds: .25 }),
-    ward: Object.freeze({ durationSeconds: 6, automaticHealthRatio: .6 }),
+    ward: Object.freeze({ automaticHealthRatio: .6 }),
     pulse: Object.freeze({ chilledMultiplier: 1.5 }),
     meteor: Object.freeze({ range: 8, delay: .9 }),
     vortex: Object.freeze({ range: 7, duration: 4, interval: .5, pull: .65, bossPullScale: .2 }),
@@ -43,10 +49,10 @@ export const SKILLS: Readonly<Record<SkillId, SkillDefinition>> = Object.freeze(
     frost: Object.freeze({ type: "skill", value: "frost", school: "冰霜", role: "范围控制", name: "霜环", description: "冰晶向外绽放，造成冰伤并积累寒意，满层尝试冻结。", color: "#7bdeff", mana: 22, cooldown: 8, unlock: 8, automatic: true }),
     chain: Object.freeze({ type: "skill", value: "chain", school: "雷霆", role: "连锁传导", name: "连锁闪电", description: "首跳寻找最近可见敌人，后续优先导电目标；逐跳衰减，同批不回跳，地形阻断电路。", color: "#ffe29a", mana: 24, cooldown: 7, unlock: 8, automatic: true }),
     dash: Object.freeze({ type: "skill", value: "dash", school: "疾风", role: "位移免伤", name: "疾风步", description: "化为疾风沿朝向穿行，疾行期间免疫直接命中伤害；已有灼烧继续结算。", color: "#80f1ce", mana: 12, cooldown: 6, unlock: 1, automatic: false }),
-    ward: Object.freeze({ type: "skill", value: "ward", school: "星辉", role: "护盾防御", name: "守护结界", description: "以星辉结成护罩，先于生命承受伤害。", color: "#8dafef", mana: 26, cooldown: 12, unlock: 2, automatic: true }),
+    ward: Object.freeze({ type: "skill", value: "ward", school: "星辰", role: "护盾防御", name: "守护结界", description: "以星辉结成护罩，先于生命承受伤害；仍有护盾时不重复施放。", color: "#8dafef", mana: 26, cooldown: 12, unlock: 8, automatic: true }),
     meteor: Object.freeze({ type: "skill", value: "meteor", school: "烈焰", role: "延迟引爆", name: "陨星坠落", description: "锁定地点后陨星砸落，命中时消费自己的灼烧，将剩余伤害转为一次爆炸。", color: "#ff9954", mana: 30, cooldown: 9, unlock: 20, automatic: true }),
     vortex: Object.freeze({ type: "skill", value: "vortex", school: "虚空", role: "持续聚怪", name: "引力涡旋", description: "在最近可见敌人脚下打开涡旋，周期伤害并将敌人拖向中心；领主抗拒大部分牵引。", color: "#c17bff", mana: 28, cooldown: 11, unlock: 3, automatic: true }),
-    blades: Object.freeze({ type: "skill", value: "blades", school: "星辉", role: "移动刃阵", name: "星环刃阵", description: "召唤随身旋转的飞刃，持续切割外围环带；贴身内圈不受伤害，走位决定覆盖。", color: "#7fffd6", mana: 24, cooldown: 10, unlock: 2, automatic: true }),
+    blades: Object.freeze({ type: "skill", value: "blades", school: "星辰", role: "移动削弱", name: "星环刃阵", description: "随身星刃切割外围环带并施加虚弱；贴身内圈不受伤害，走位决定覆盖。", color: "#b9aeff", mana: 24, cooldown: 10, unlock: 20, automatic: true }),
     icebolt: Object.freeze({ type: "skill", value: "icebolt", school: "冰霜", role: "寒意积累", name: "冰霜弹", description: "射出冰晶命中最近可见敌人，附加寒意；冰屑侧路增加分散命中的不同目标。", color: "#9deaff", mana: 9, cooldown: 2, unlock: 2, automatic: true }),
     icelance: Object.freeze({ type: "skill", value: "icelance", school: "冰霜", role: "穿刺爆发", name: "冰枪", description: "沿目标方向刺穿一条直线上的敌人，命中附加寒意。", color: "#89caff", mana: 20, cooldown: 5, unlock: 8, automatic: true }),
     icestorm: Object.freeze({ type: "skill", value: "icestorm", school: "冰霜", role: "区域伤害", name: "冰晶风暴", description: "在锁定地点降下冰晶，每半秒打击区域内敌人。", color: "#b6deff", mana: 30, cooldown: 10, unlock: 20, automatic: true }),
@@ -64,7 +70,12 @@ export const SKILLS: Readonly<Record<SkillId, SkillDefinition>> = Object.freeze(
     thunderstrike: Object.freeze({ type: "skill", value: "thunderstrike", school: "雷霆", role: "连续落雷", name: "雷霆轰击", description: "固定落点连续降下雷柱；聚焦强化同次轰击对同一目标的后续成功命中，离开范围可躲避。", color: "#a5baff", mana: 32, cooldown: 11, unlock: 20, automatic: true }),
     judgment: Object.freeze({ type: "skill", value: "judgment", school: "雷霆", role: "终极天罚", name: "天罚", description: "锁定地点后降下巨型雷柱，核心敌人承受全额伤害，其余范围目标承受一半；核心不重复吃外围伤害。", color: "#f2e9ff", mana: 45, cooldown: 30, unlock: 45, automatic: true }),
     thunderfield: Object.freeze({ type: "skill", value: "thunderfield", school: "雷霆", role: "周期电场", name: "雷暴力场", description: "固定电场周期打击并附加导电；每周期最多从场内一名敌人向外引出一条短链，同周期不重复命中。", color: "#80ddff", mana: 28, cooldown: 11, unlock: 20, automatic: true }),
-    tempest: Object.freeze({ type: "skill", value: "tempest", school: "雷霆", role: "终极电网", name: "万雷连锁", description: "释放分叉电网，优先连接导电目标；所有分支共享总目标预算与去重，伤害按传导深度衰减。", color: "#c9b3ff", mana: 46, cooldown: 30, unlock: 45, automatic: true })
+    tempest: Object.freeze({ type: "skill", value: "tempest", school: "雷霆", role: "终极电网", name: "万雷连锁", description: "释放分叉电网，优先连接导电目标；所有分支共享总目标预算与去重，伤害按传导深度衰减。", color: "#c9b3ff", mana: 46, cooldown: 30, unlock: 45, automatic: true }),
+    starbolt: Object.freeze({ type: "skill", value: "starbolt", school: "星辰", role: "蓄星削弱", name: "星辉弹", description: "星芒命中最近可见敌人并施加虚弱；同次施放成功命中至多积累一层星能，最多三层。", color: "#e0ceff", mana: 9, cooldown: 2.2, unlock: 2, automatic: true }),
+    infusion: Object.freeze({ type: "skill", value: "infusion", school: "星辰", role: "次数强化", name: "星能灌注", description: "消费星能，强化接下来数次伤害技能；每次起手仅扣一次，整次施放共享强化，纯辅助技能不消耗。", color: "#d6b0ff", mana: 18, cooldown: 12, unlock: 8, automatic: true }),
+    resonance: Object.freeze({ type: "skill", value: "resonance", school: "星辰", role: "终极强化", name: "群星共鸣", description: "赋予强力限时技能强化，可作用于冰火雷；与灌注共用一组，较弱效果不能覆盖或延长较强效果。", color: "#fff0bd", mana: 42, cooldown: 32, unlock: 45, automatic: true }),
+    shelter: Object.freeze({ type: "skill", value: "shelter", school: "星辰", role: "减伤净化", name: "星辰庇护", description: "获得星辰减伤；净化侧路在出手时驱散负面来源组，优先控制、灼烧、减速。被冻结时无法起手。", color: "#a9e8ec", mana: 24, cooldown: 14, unlock: 20, automatic: true }),
+    bastion: Object.freeze({ type: "skill", value: "bastion", school: "星辰", role: "终极壁垒", name: "星穹壁垒", description: "展开强护盾和减伤；只替换剩余量更低的盾。回护仅在护盾被伤害耗尽后治疗，致死伤害不能复活。", color: "#ffe2a2", mana: 44, cooldown: 32, unlock: 45, automatic: true })
 });
 export interface SkillSnapshot {
     readonly refundBlocked: boolean;
@@ -79,7 +90,7 @@ export interface SkillSnapshot {
     readonly build: { readonly revision: number; readonly ranks: readonly number[] };
     readonly modifiers: Readonly<Partial<Record<SkillId, SkillModifiers>>>;
     readonly action: { readonly skill: SkillId; readonly phase: "windup" | "channel" | "recovery"; readonly remaining: number; readonly duration: number } | null;
-    readonly statuses: readonly { readonly kind: number; readonly name: string; readonly beneficial: boolean; readonly control: boolean; readonly amount: number; readonly remaining: number }[];
+    readonly statuses: readonly { readonly kind: number; readonly name: string; readonly beneficial: boolean; readonly control: boolean; readonly amount: number; readonly remaining: number; readonly charges?: number }[];
 }
 export function skillIndex(id: SkillId): number {
     const index = SKILL_IDS.indexOf(id);
@@ -97,9 +108,36 @@ export interface LightningSkillValues {
 export interface SkillValues {
     readonly mana: number; readonly cooldown: number; readonly damage: number; readonly radius: number; readonly slowSeconds: number;
     readonly targets: number; readonly dashDistance: number; readonly ward: number; readonly duration: number; readonly chill: number;
-    readonly freezeSeconds: number; readonly frozenDamage: number; readonly fire?: FireSkillValues; readonly lightning?: LightningSkillValues;
+    readonly freezeSeconds: number; readonly frozenDamage: number; readonly fire?: FireSkillValues; readonly lightning?: LightningSkillValues; readonly star?: StarSkillValues;
+}
+export interface StarSkillValues {
+    readonly empowerment: number; readonly charges: number; readonly protection: number; readonly cleanse: number;
+    readonly recovery: number; readonly weakness: number; readonly weaknessSeconds: number;
 }
 export function skillValues(id: SkillId, rank: number, stats: DerivedStats, m: SkillModifiers = NO_SKILL_MODIFIERS): SkillValues {
+    const values = baseSkillValues(id, rank, stats, m);
+    return m.sentinel && isDamageSkill(id) ? { ...values, damage: values.damage * .9 } : values;
+}
+function baseSkillValues(id: SkillId, rank: number, stats: DerivedStats, m: SkillModifiers): SkillValues {
+    if (isStarSkill(id)) {
+        const ultimate = isUltimate(id), growth = Math.max(0, rank - 1), shield = id === "ward" || id === "bastion";
+        const empower = id === "infusion" || id === "resonance";
+        const duration = (id === "infusion" ? 8 : id === "resonance" ? 10 : id === "bastion" ? 8 : id === "blades" ? 4 : 6)
+            * (1 + .1 * (id === "infusion" || id === "blades" ? m.tempo : shield || id === "shelter" ? m.shape : 0));
+        return { mana: Math.max(1, Math.ceil(SKILLS[id].mana * (1 - Math.min(.5, .02 * m.economy + (["starbolt", "ward"].includes(id) ? .03 * m.tempo : 0))))),
+            cooldown: Math.max(ultimate ? 10 : .5, SKILLS[id].cooldown * (id === "resonance" ? 1 - .02 * m.tempo : 1) / (1 + stats.castSpeed)),
+            damage: (id === "starbolt" ? .8 : id === "blades" ? .24 : 0) * (1 + .06 * growth) * (1 + .04 * m.power + .03 * m.damage),
+            radius: id === "starbolt" ? 7 : id === "blades" ? 2.5 * (1 + .05 * m.shape) : 0,
+            targets: id === "starbolt" ? Math.min(6, 1 + m.shape) : 1,
+            ward: shield ? Math.round(stats.maxHealth * (id === "ward" ? .25 : .5) * (1 + (ultimate ? .12 : .06) * growth)
+                * (1 + .04 * m.power + .03 * m.damage + .05 * m.duration) * (1 + .1 * m.sentinel) * (m.radiance ? .85 : 1)) : 0,
+            duration: empower ? Math.min(15, duration) : duration, slowSeconds: 0, dashDistance: 0, chill: 0, freezeSeconds: 0, frozenDamage: 1,
+            star: { empowerment: empower ? Math.min(.8, (id === "infusion" ? .2 + .01 * growth : .35 + .03 * growth) + .02 * m.power + .05 * m.radiance) : 0,
+                charges: empower ? Math.min(8, (id === "infusion" ? 2 : 3) + m.shape) : 0,
+                protection: id === "shelter" ? Math.min(.5, .15 + .01 * growth + .02 * m.power + .03 * m.sentinel) : id === "bastion" ? .2 : 0,
+                cleanse: id === "shelter" ? m.tempo : 0, recovery: id === "bastion" ? stats.maxHealth * .01 * m.tempo : 0,
+                weakness: id === "starbolt" || id === "blades" ? .1 : 0, weaknessSeconds: 3 } };
+    }
     if (isLightningSkill(id)) {
         const ultimate = isUltimate(id), base = id === "arc" ? .9 : id === "thunderlance" ? 2 : id === "thunderstrike" ? .8 : id === "judgment" ? 5 : id === "chain" ? 1.6 : id === "thunderfield" ? .25 : 2;
         const duration = id === "thunderfield" ? 4 * (1 + .1 * m.tempo) : 0;
@@ -151,11 +189,10 @@ export function skillValues(id: SkillId, rank: number, stats: DerivedStats, m: S
             freezeSeconds: 1 + .1 * m.winter, frozenDamage: 1 + .1 * m.shatter };
     }
     return { mana: SKILLS[id].mana, cooldown: SKILLS[id].cooldown / (1 + stats.castSpeed),
-        damage: id === "pulse" ? 1.3 + .2 * (rank - 1) : id === "vortex" ? .3 + .05 * (rank - 1)
-                : id === "blades" ? .24 + .04 * (rank - 1) : 1.6 + .2 * (rank - 1),
-        radius: id === "pulse" ? 3.2 + .15 * (rank - 1) : id === "vortex" ? 3.4 : id === "blades" ? 2.5 : 4,
+        damage: id === "pulse" ? 1.3 + .2 * (rank - 1) : id === "vortex" ? .3 + .05 * (rank - 1) : 0,
+        radius: id === "pulse" ? 3.2 + .15 * (rank - 1) : id === "vortex" ? 3.4 : 0,
         slowSeconds: 2.5 + .3 * (rank - 1), targets: 1,
-        dashDistance: 3.8 + .35 * (rank - 1), ward: Math.round(stats.maxHealth * (.25 + .04 * (rank - 1))),
+        dashDistance: 3.8 + .35 * (rank - 1), ward: 0,
         duration: 4, chill: 0, freezeSeconds: 1, frozenDamage: 1 };
 }
 export const DEFAULT_LOADOUT: readonly (SkillId | null)[] = Object.freeze(["pulse", null, "dash", null, null, null]);

@@ -1,0 +1,281 @@
+{
+  "date": "2026-09-23",
+  "baselineCommit": "da766e7",
+  "scope": "Complete star tree: 34 nodes, seven active skills, bounded empowerment charges, shielding, protection, cleansing, weakness, barrier recovery and attached status visuals",
+  "node": {
+    "context": {
+      "node": "v22.16.0",
+      "platform": "win32",
+      "arch": "x64",
+      "cpu": "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+      "simulationHz": 120,
+      "activeAiHz": 30,
+      "gc": true,
+      "timing": "one warmup, five samples, simulation only; travel/terrain restore health between ticks while retaining hit settlement; no browser/GPU claim"
+    },
+    "results": {
+      "travel": {
+        "samplesMsPerTick": [
+          0.09423944444444443,
+          0.08714826388888891,
+          0.08813486111111114,
+          0.08573263888888884,
+          0.08713708333333332
+        ],
+        "medianMsPerTick": 0.08714826388888891,
+        "budgetMsPerTick": 0.5,
+        "workload": {
+          "msPerTick": 0.08713708333333332,
+          "ticks": 2880,
+          "enemies": 627,
+          "kills": 14
+        }
+      },
+      "crowded": {
+        "samplesMsPerTick": [
+          0.31952866666666674,
+          0.32441333333333355,
+          0.33970266666666704,
+          0.3307016666666671,
+          0.3247253333333341
+        ],
+        "medianMsPerTick": 0.3247253333333341,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.3247253333333341,
+          "ticks": 300,
+          "enemies": 896,
+          "projectiles": 128
+        }
+      },
+      "iceEffects": {
+        "samplesMsPerTick": [
+          0.05765499999999975,
+          0.03864187499999995,
+          0.05537833333333329,
+          0.03843937499999962,
+          0.05514937500000012
+        ],
+        "medianMsPerTick": 0.05514937500000012,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.05514937500000012,
+          "ticks": 480,
+          "enemies": 896,
+          "initialStatusInstances": 4480,
+          "hits": 14336,
+          "p95TickMs": 0.000600000000304135,
+          "p99TickMs": 1.9060999999996966,
+          "maxTickMs": 6.070199999999659
+        }
+      },
+      "fireEffects": {
+        "samplesMsPerTick": [
+          0.029314083333333275,
+          0.029521916666666734,
+          0.06240850000000023,
+          0.034602416666666615,
+          0.06172541666666651
+        ],
+        "medianMsPerTick": 0.034602416666666615,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.06172541666666651,
+          "ticks": 1200,
+          "enemies": 896,
+          "initialBurnLayers": 28672,
+          "hits": 18816,
+          "periodicHits": 38528,
+          "p95TickMs": 0.0005999999998493877,
+          "p99TickMs": 1.6775000000002365,
+          "maxTickMs": 21.659099999999853
+        }
+      },
+      "lightningEffects": {
+        "samplesMsPerTick": [
+          0.023640833333333073,
+          0.01997133333333333,
+          0.030858583333333627,
+          0.021487333333333254,
+          0.028458583333333537
+        ],
+        "medianMsPerTick": 0.023640833333333073,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.028458583333333537,
+          "ticks": 1200,
+          "enemies": 896,
+          "initialConductive": 896,
+          "hits": 19016,
+          "networkCasts": 10,
+          "queries": 234,
+          "candidates": 209348,
+          "p95TickMs": 0.0005999999998493877,
+          "p99TickMs": 0.8216999999999643,
+          "maxTickMs": 3.7275000000004184
+        }
+      },
+      "starEffects": {
+        "samplesMsPerTick": [
+          0.02310187499999993,
+          0.016205416666666868,
+          0.028810729166666722,
+          0.017408229166666445,
+          0.025028750000000363
+        ],
+        "medianMsPerTick": 0.02310187499999993,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.025028750000000363,
+          "ticks": 960,
+          "enemies": 896,
+          "directHits": 14342,
+          "p95TickMs": 0.00010000000020227162,
+          "p99TickMs": 1.144999999999527,
+          "maxTickMs": 3.4078999999992448
+        }
+      },
+      "terrain": {
+        "samplesMsPerTick": [
+          0.3035591666666672,
+          0.30493233333333286,
+          0.2965041666666669,
+          0.303734000000001,
+          0.3128564999999996
+        ],
+        "medianMsPerTick": 0.303734000000001,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.3128564999999996,
+          "coldStartMs": 262.84450000000015,
+          "ticks": 600,
+          "chunks": 110
+        }
+      },
+      "autoCombat": {
+        "samplesMsPerTick": [
+          0.2744413333333341,
+          0.27514016666666674,
+          0.2783899999999994,
+          0.2672911666666672,
+          0.2691438333333311
+        ],
+        "medianMsPerTick": 0.2744413333333341,
+        "budgetMsPerTick": 3,
+        "workload": {
+          "msPerTick": 0.2691438333333311,
+          "coldStartMs": 260.4531999999999,
+          "ticks": 600,
+          "chunks": 110
+        }
+      },
+      "autoAvoidance": {
+        "samplesMsPerDecision": [
+          1.5630574999999984,
+          1.6747741666666722,
+          1.6414574999999938,
+          1.6535916666666708,
+          1.598813333333328
+        ],
+        "medianMsPerDecision": 1.6414574999999938,
+        "budgetMsPerDecision": 3,
+        "workload": {
+          "msPerDecision": 1.598813333333328,
+          "decisions": 120,
+          "enemies": 8,
+          "liveProjectiles": 64,
+          "p95DecisionMs": 1.755699999999706,
+          "maxDecisionMs": 12.095300000000861
+        }
+      },
+      "autoSearch": {
+        "samplesMsPerDecision": [
+          0.1058141666666567,
+          0.11425499999998769,
+          0.11819000000000415,
+          0.11725500000000769,
+          0.12991000000000288
+        ],
+        "medianMsPerDecision": 0.11725500000000769,
+        "budgetMsPerDecision": 3,
+        "workload": {
+          "msPerDecision": 0.12991000000000288,
+          "decisions": 120,
+          "enemies": 896,
+          "searchRadius": 48,
+          "p95DecisionMs": 0.5199999999986176,
+          "maxDecisionMs": 1.0432000000000698
+        }
+      },
+      "autoLoadout": {
+        "samplesMsPerDecision": [
+          1.6581408333333305,
+          1.6751516666666704,
+          1.5975791666666586,
+          1.677528333333339,
+          1.6306241666666665
+        ],
+        "medianMsPerDecision": 1.6581408333333305,
+        "budgetMsPerDecision": 3,
+        "workload": {
+          "msPerDecision": 1.6306241666666665,
+          "decisions": 120,
+          "equipment": 80,
+          "orbs": 48,
+          "unlockedSockets": 6,
+          "p95DecisionMs": 1.9557999999997264,
+          "maxDecisionMs": 2.299699999999575
+        }
+      }
+    }
+  },
+  "browser": {
+    "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Ti (0x00002489) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "context": "Chromium headless, one worker, existing application Playwright suite; only launch arguments overridden locally to select available hardware",
+    "launchArgs": [
+      "--use-angle=d3d11",
+      "--ignore-gpu-blocklist",
+      "--js-flags=--expose-gc"
+    ],
+    "viewports": [
+      {
+        "width": 2560,
+        "height": 1440
+      },
+      {
+        "width": 390,
+        "height": 844
+      }
+    ],
+    "checks": [
+      "Centered 34-node star tree, hover and equipped markers",
+      "Seven spells through the real Worker, authoritative render buffers and WebGL",
+      "Star energy, empowerment charges, weakness, guard and shield attachment",
+      "Cleanse removes burn and slow; support spells do not consume empowerment",
+      "Saved v9 charge count, pause stability and expired visual cleanup",
+      "Manual inspection of wide/narrow tree and combined bastion/blade/status screenshots"
+    ],
+    "performanceClaim": "Functional and resource-boundary validation only; no browser frame-time benchmark"
+  },
+  "validation": {
+    "unitFiles": 68,
+    "unitTests": 466,
+    "browserTests": 41,
+    "browserRuns": "Full suite: 38 passed, three fixture failures; all three passed after correcting obsolete free-frost expectations, level/skill-point bookkeeping, and preserving the enemy fixture when learning ward",
+    "checks": [
+      "Application TypeScript and production build",
+      "All simulation CPU benchmark gates in an isolated run",
+      "Basic-attack balance calibration regenerated without changes",
+      "Documentation link/index gate and git diff whitespace check"
+    ],
+    "resourceChecks": "Full-population status pools, buffer transfer isolation, paused matrices, reset/disposal, and browser world replacement/Worker shutdown"
+  },
+  "limitations": [
+    "Star parameters are initial playable values; the unchanged basic-attack calibration does not validate complete mid/late-game mixed builds.",
+    "The baseline identifies the previous implementation, not a paired benchmark comparison; this record makes no speedup claim.",
+    "The star CPU scene measures 896 targets, 14,342 settled hits and 960 ticks, excluding AI, movement and GPU rendering.",
+    "The last star sample recorded P99 1.145 ms and maximum 3.4079 ms per tick; the median average does not bound every peak.",
+    "Initial concurrent SwiftShader browser and Node runs caused timeouts and exceeded automatic-avoidance/loadout CPU budgets. Browser and CPU validation were then separated; default software-rendered full E2E completion is not claimed.",
+    "Save version 9 rejects earlier versions without migration, following the development-stage save contract."
+  ]
+}

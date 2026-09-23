@@ -13,6 +13,11 @@ export function SkillIcon({ id, rank }: { readonly id: SkillId; readonly rank?: 
             <defs><radialGradient id={gradient}><stop stopColor="#fff" /><stop offset=".28" stopColor={color} /><stop offset="1" stopColor={color} stopOpacity="0" /></radialGradient></defs>
             <circle cx="32" cy="32" r="30" fill={`url(#${gradient})`} opacity=".35" />
             <g stroke={color} strokeLinecap="round" strokeLinejoin="round">
+                {id === "starbolt" && <><path d="M49 5L44 25L60 32L42 39L35 59L29 41L10 36L29 27Z" fill={color} fillOpacity=".35" strokeWidth="2" /><path d="M42 19L38 31L27 35L37 39L41 49L45 38L54 33L44 29Z" fill="#fff6dd" /><path d="M4 18L24 23M3 49L20 42M19 7L30 19" strokeWidth="2.5" /></>}
+                {id === "infusion" && <><ellipse cx="32" cy="33" rx="26" ry="12" transform="rotate(-35 32 33)" strokeWidth="2" /><ellipse cx="32" cy="33" rx="26" ry="12" transform="rotate(35 32 33)" /><path d="M32 10L38 26L52 32L38 38L32 54L26 38L12 32L26 26Z" fill={color} fillOpacity=".4" /><circle cx="32" cy="32" r="5" fill="#fff" /><circle cx="10" cy="20" r="3" fill="#fff0bb" /><circle cx="52" cy="45" r="3" fill="#fff0bb" /></>}
+                {id === "resonance" && <><circle cx="32" cy="32" r="26" strokeDasharray="4 5" strokeWidth="2" /><path d="M32 5L56 46H8Z" strokeWidth="2" /><path d="M32 59L8 18H56Z" strokeWidth="2" /><path d="M32 17L36 28L47 32L36 36L32 47L28 36L17 32L28 28Z" fill="#fff5d0" /><circle cx="32" cy="5" r="3" fill="#fff" /><circle cx="8" cy="46" r="3" fill="#fff" /><circle cx="56" cy="46" r="3" fill="#fff" /></>}
+                {id === "shelter" && <><path d="M32 5L53 14V32Q48 49 32 59Q16 49 11 32V14Z" fill={color} fillOpacity=".18" strokeWidth="2" /><path d="M32 17V45M18 31H46" stroke="#efffff" strokeWidth="5" /><path d="M5 48L10 42M54 9L59 4M52 48L58 54" strokeWidth="2" /></>}
+                {id === "bastion" && <><path d="M5 52V29Q7 6 32 5Q57 6 59 29V52Z" fill={color} fillOpacity=".18" strokeWidth="2" /><path d="M15 51V31Q16 15 32 13Q48 15 49 31V51M5 52H59M32 13V51" strokeWidth="2" /><path d="M32 21L43 27V36L32 46L21 36V27Z" fill="#fff4ca" /><path d="M7 30H16M49 30H58" strokeWidth="3" /></>}
                 {id === "arc" && <><path d="M8 48L20 33L14 27L34 8L29 28L40 31L30 45L50 36L57 48" strokeWidth="4" /><circle cx="8" cy="48" r="5" fill="#eefaff" /><path d="M23 36L12 16M36 36L53 15" strokeWidth="2" /></>}
                 {id === "thunderlance" && <><path d="M56 5L39 33L31 29L9 58L23 31L31 34Z" fill="#f5f5ff" strokeWidth="2" /><path d="M8 28L22 20L19 10M44 54L47 38L58 36M8 48L20 42" strokeWidth="2" /></>}
                 {id === "thunderstrike" && <><ellipse cx="32" cy="52" rx="26" ry="8" strokeWidth="2" /><path d="M17 6L7 25H18L11 44M36 4L24 25H37L27 51M55 9L44 29H55L47 46" strokeWidth="3" /><path d="M25 53L32 47L39 53" stroke="#fff" strokeWidth="2" /></>}
@@ -46,11 +51,13 @@ export function SkillIcon({ id, rank }: { readonly id: SkillId; readonly rank?: 
 
 export function skillSummary(id: SkillId, player: CombatSnapshot["player"]): string {
     const v = skillValues(id, player.skills.ranks[id], player.stats, player.skills.modifiers[id]);
-    return id === "dash" ? `${v.dashDistance.toFixed(2)} 距离 · 免疫直接命中` : id === "ward" ? `${v.ward} 护盾 · 持续 ${SKILL_RULES.ward.durationSeconds} 秒`
+    return id === "dash" ? `${v.dashDistance.toFixed(2)} 距离 · 免疫直接命中` : v.ward > 0 ? `${v.ward} 护盾 · 持续 ${v.duration.toFixed(1)} 秒`
+        : v.star?.empowerment ? `整次技能 +${Math.round(v.star.empowerment * 100)}% · 基础 ${v.star.charges} 次 · ${v.duration.toFixed(1)} 秒`
+        : id === "shelter" ? `${Math.round(v.star!.protection * 100)}% 减伤 · 净化 ${v.star!.cleanse} 组 · ${v.duration.toFixed(1)} 秒`
         : v.lightning ? `${Math.round(v.damage * 100)}% 伤害 · ${["thunderstrike", "thunderfield"].includes(id) ? `${v.lightning.pulses} 次打击` : id === "judgment" ? `${v.radius.toFixed(1)} 半径` : `最多 ${v.targets} 个不同目标`}`
         : v.fire && v.duration > 0 ? `每 ${v.fire.interval.toFixed(3)} 秒 ${Math.round(v.damage * 100)}% 伤害 · ${Math.floor(v.duration / v.fire.interval)} 次打击`
         : id === "icestorm" || id === "blizzard" ? `每 0.5 秒 ${Math.round(v.damage * 100)}% 伤害 · 持续 ${v.duration.toFixed(1)} 秒`
-        : id === "vortex" || id === "blades" ? `每 ${SKILL_RULES[id].interval} 秒 ${Math.round(v.damage * 100)}% 伤害 · 持续 ${SKILL_RULES[id].duration} 秒`
+        : id === "vortex" || id === "blades" ? `每 ${SKILL_RULES[id].interval} 秒 ${Math.round(v.damage * 100)}% 伤害 · 持续 ${v.duration.toFixed(1)} 秒`
         : `${Math.round(v.damage * 100)}% 伤害 · ${v.radius.toFixed(1)} 范围`;
 }
 
@@ -61,6 +68,13 @@ function SkillDetails({ id, player }: { readonly id: SkillId; readonly player: C
         <p>{d.description}</p>
         <div className="skill-tooltip-cost"><span>法力 <b>{v.mana}</b></span><span>冷却 <b>{v.cooldown.toFixed(1)} 秒</b></span></div>
         <strong className="skill-tooltip-power">{skillSummary(id, player)}</strong>
+        {v.star && <>
+            {v.star.weakness > 0 && <p>成功命中附加 {v.star.weaknessSeconds} 秒虚弱，降低直接输出 {Math.round(v.star.weakness * 100)}%；同来源刷新，不降低既有灼烧或反伤。</p>}
+            {id === "starbolt" && <p>最多 {v.targets} 个不同目标；同次成功命中至多获得一层星能，最多三层，重复获得刷新八秒期限。</p>}
+            {v.star.empowerment > 0 && <p>伤害技能成功起手扣一次，持续场与所附灼烧保留起手强化。空放和中断消耗次数，失败施放不消耗。{id === "infusion" ? "每层星能额外增加一次强化，合计最多八次。" : "与灌注共用强化组，较弱实例不能续强。"}</p>}
+            {v.star.protection > 0 && <p>减伤 {Math.round(v.star.protection * 100)}%，与其他保护取较强值。{id === "shelter" ? `出手净化 ${v.star.cleanse} 个负面来源组，灼烧同来源全部层计一组。` : "护盾破裂后，减伤保留至自身到期。"}</p>}
+            {id === "bastion" && <p>护盾被伤害耗尽后治疗 {Math.round(v.star.recovery)} 生命；致死溢出不会复活，到期、洗点和替换不触发。</p>}
+        </>}
         {id === "pulse" && <p>对仍被减速的目标造成 {SKILL_RULES.pulse.chilledMultiplier * 100}% 的本技能伤害；不消耗减速。</p>}
         {id === "meteor" && <p>锁定距离 {SKILL_RULES.meteor.range}，{SKILL_RULES.meteor.delay} 秒后命中固定落点；敌人可以离开范围。</p>}
         {v.fire && <>
@@ -81,8 +95,12 @@ function SkillDetails({ id, player }: { readonly id: SkillId; readonly player: C
             {v.lightning.protection > 0 && <p>成功命中获得三秒静电防护，减伤 {Math.round(v.lightning.protection * 100)}%；重复刷新，与其他保护取较强值。</p>}
         </>}
         {id === "dash" && <p>沿施放时朝向穿行，{SKILL_RULES.dash.durationSeconds} 秒内免疫直接命中伤害，已有灼烧继续结算。疾行期间不能转向或施放其他技能。</p>}
-        {id === "ward" && <p>护盾优先承受伤害，耗尽或 {SKILL_RULES.ward.durationSeconds} 秒后消失；护盾存在时不能刷新。</p>}
-        <p className="skill-tooltip-rule">{!d.automatic ? "仅手动施放" : id === "ward" ? `自动：生命不高于 ${SKILL_RULES.ward.automaticHealthRatio * 100}% 且没有结界` : "自动：攻击范围内存在敌人"}</p>
+        {id === "ward" && <p>护盾优先承受伤害，耗尽或 {v.duration.toFixed(1)} 秒后消失；护盾存在时不能刷新。</p>}
+        <p className="skill-tooltip-rule">{!d.automatic ? "仅手动施放" : id === "ward" ? `自动：生命不高于 ${SKILL_RULES.ward.automaticHealthRatio * 100}% 且没有护盾`
+            : id === "bastion" ? "自动：生命不高于 65% 且没有护盾"
+                : id === "shelter" ? "自动：有可净化负面状态，或生命不高于 75% 且能提高减伤"
+                    : id === "infusion" || id === "resonance" ? "自动：没有强化次数，有就绪伤害技能、可见目标，且法力足够连续施放"
+                        : "自动：攻击范围内存在敌人"}</p>
         <footer>{rank === 0 ? "在技能树学习后装配" : player.level < d.unlock ? `角色 ${d.unlock} 级解锁` : "拖动图标到技能槽装配；已有技能自动交换位置。"}<br />键盘：空格拿起，1–{GAME_CONFIG.skills.slots} 放入，Esc 取消。</footer>
     </div>;
 }

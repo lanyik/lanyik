@@ -36,21 +36,26 @@ function arena() {
         const ranks = initialSkillRanks(); ranks[nodeIndex("arc")] = 3; ranks[nodeIndex("arc.power")] = 3; ranks[nodeIndex("chain")] = 1;
         skills.points = 7; expect(skills.commitBuild(ranks, 0, 8, false, 0)).toBeNull(); skills.equip("chain", 1, 8);
     };
+    const learnStars = () => {
+        const snapshot = skills.snapshot(0), ranks = [...snapshot.build.ranks];
+        for (const [id, rank] of Object.entries({ starbolt: 10, "starbolt.power": 5, infusion: 3, blades: 1, ward: 1 })) ranks[nodeIndex(id)] = rank;
+        skills.points = 99; expect(skills.commitBuild(ranks, snapshot.build.revision, 100, false, 0)).toBeNull();
+    };
     const release = (tick: number) => skills.advanceCasting(tick, random, false, () => {});
-    return { simulation, fixture, e, skills, stats, random, spawn, learnFrost, learnMeteor, learnChain, release };
+    return { simulation, fixture, e, skills, stats, random, spawn, learnFrost, learnMeteor, learnChain, learnStars, release };
 }
 
 test("automatic casting prioritizes protection and stationary spells ahead of mobile fillers", () => {
-    const { skills, e, stats, random, spawn, release } = arena();
-    skills.equip("vortex", 5, 3); skills.equip("ward", 4, 3); spawn(2, 0);
+    const { skills, e, stats, random, spawn, release, learnStars } = arena(); learnStars();
+    skills.equip("vortex", 5, 8); skills.equip("ward", 4, 8); spawn(2, 0);
     e.vitals.mana[e.player] = 1000;
-    expect(skills.castAutomatic(0, stats, 3, random, true)).toBe(true);
+    expect(skills.castAutomatic(0, stats, 8, random, true)).toBe(true);
     expect(skills.snapshot(0).action?.skill).toBe("vortex");
     release(110); e.vitals.health[e.player] = stats.maxHealth * .4;
-    expect(skills.castAutomatic(110, stats, 3, random, false)).toBe(true);
+    expect(skills.castAutomatic(110, stats, 8, random, false)).toBe(true);
     expect(skills.snapshot(110).action?.skill).toBe("ward");
     release(170);
-    expect(skills.castAutomatic(170, stats, 3, random, false)).toBe(true);
+    expect(skills.castAutomatic(170, stats, 8, random, false)).toBe(true);
     expect(skills.snapshot(170).action?.skill).toBe("pulse");
 });
 
@@ -175,7 +180,7 @@ test("frost applies two chill stacks, projects movement until exact expiry and c
 });
 
 test("dash moves exactly 30 ticks and shield begins only after its windup, then absorbs and expires", () => {
-    const { skills, e, stats, random, release } = arena();
+    const { skills, e, stats, random, release, learnStars } = arena(); learnStars();
     e.position.heading[e.player] = 0;
     expect(skills.cast("dash", 0, stats, 1, random, true)).toBe(false);
     expect(skills.cast("dash", 0, stats, 1, random)).toBe(true);
@@ -183,15 +188,15 @@ test("dash moves exactly 30 ticks and shield begins only after its windup, then 
     for (let tick = 1; tick <= 30; tick++) expect(skills.advance(tick)).toBe(true);
     expect(e.position.z[e.player]).toBeCloseTo(3.8); expect(e.position.x[e.player]).toBe(0);
     expect(skills.advance(31)).toBe(false);
-    skills.equip("ward", 0, 2); e.vitals.mana[e.player] = 100;
-    expect(skills.cast("ward", 31, stats, 2, random, true)).toBe(false);
+    skills.equip("ward", 0, 8); e.vitals.mana[e.player] = 100;
+    expect(skills.cast("ward", 31, stats, 8, random, true)).toBe(false);
     e.vitals.health[e.player] = stats.maxHealth * .5;
-    expect(skills.cast("ward", 31, stats, 2, random, true)).toBe(true);
+    expect(skills.cast("ward", 31, stats, 8, random, true)).toBe(true);
     expect(skills.ward).toBe(0); release(49);
     const ward = skills.ward; expect(ward).toBeGreaterThan(0);
     expect(e.status.absorb(e.player, 5, 49)).toBe(0); expect(skills.ward).toBe(ward - 5);
     expect(e.status.absorb(e.player, ward, 49)).toBe(5); expect(skills.ward).toBe(0);
-    e.vitals.mana[e.player] = 100; expect(skills.cast("ward", 2000, stats, 2, random)).toBe(true); release(2018);
+    e.vitals.mana[e.player] = 100; expect(skills.cast("ward", 2000, stats, 8, random)).toBe(true); release(2018);
     e.status.advance(2737); expect(skills.ward).toBeGreaterThan(0); e.status.advance(2738); expect(skills.ward).toBe(0);
 });
 
@@ -243,10 +248,10 @@ test("vortex pulls visible targets through terrain, respects boss resistance and
 });
 
 test("blade ring follows the player, leaves an inner gap and restore cancels in-flight fields", () => {
-    const { skills, e, stats, random, spawn, release } = arena();
+    const { skills, e, stats, random, spawn, release, learnStars } = arena(); learnStars();
     const inner = spawn(.5, 0), rim = spawn(2.5, 0);
-    skills.equip("blades", 0, 2); e.vitals.mana[e.player] = 100;
-    expect(skills.cast("blades", 0, { ...stats, castSpeed: 100 }, 2, random)).toBe(true); release(12);
+    skills.equip("blades", 0, 20); e.vitals.mana[e.player] = 100;
+    expect(skills.cast("blades", 0, { ...stats, castSpeed: 100 }, 20, random)).toBe(true); release(12);
     skills.advanceOngoing(42, random, () => {});
     expect(Array.from(e.impacts.target.slice(0, e.impacts.count))).toEqual([e.world.ids[rim]]);
     expect(e.impacts.target[0]).not.toBe(e.world.ids[inner]); expect(skills.cast("blades", 43, stats, 2, random)).toBe(false);
@@ -257,7 +262,7 @@ test("blade ring follows the player, leaves an inner gap and restore cancels in-
 });
 
 test("sequential casts can overlap fields at full population without overflowing damage capacity", () => {
-    const { skills, e, stats, random, spawn, release, learnMeteor } = arena(); learnMeteor();
+    const { skills, e, stats, random, spawn, release, learnMeteor, learnStars } = arena(); learnMeteor(); learnStars();
     for (let i = 0; i < MAX_ENEMIES; i++) spawn(2.5, 0);
     for (const [slot, id] of (["meteor", "vortex", "blades"] as const).entries()) {
         skills.equip(id, slot, 20); e.vitals.mana[e.player] = 100;
@@ -268,7 +273,7 @@ test("sequential casts can overlap fields at full population without overflowing
         if (e.impacts.count) stages++; peak = Math.max(peak, e.impacts.count); e.impacts.count = 0;
     });
     expect(stages).toBe(25); expect(peak).toBe(MAX_ENEMIES);
-    e.vitals.mana[e.player] = 100; expect(skills.cast("blades", 553, stats, 3, random)).toBe(true);
+    e.vitals.mana[e.player] = 100; expect(skills.cast("blades", 553, stats, 20, random)).toBe(true);
 });
 
 test("automatic ground skills reject empty casts and pulse independently benefits from chill", () => {

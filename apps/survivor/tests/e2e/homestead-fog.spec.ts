@@ -120,9 +120,9 @@ test("home uses downloaded buildings, coastal sea, manual spells and a selectabl
     });
     expect(home.buildings).toHaveLength(4); expect(home.sea).toBe(3);
     expect(home.buildings.every(mesh => mesh.vertices > 500 && mesh.colours)).toBe(true);
-    await page.keyboard.press("Digit2");
-    await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat!.player.skills.remaining.frost)).toBeGreaterThan(0);
-    await page.screenshot({ path: info.outputPath("home-frost.png") });
+    await page.keyboard.press("Digit1");
+    await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat!.player.skills.remaining.pulse)).toBeGreaterThan(0);
+    await page.screenshot({ path: info.outputPath("home-pulse.png") });
     await page.keyboard.press("KeyH");
     const dialog = page.getByRole("dialog", { name: "世界传送" });
     await expect(dialog).toBeVisible(); await expect(page.locator(".survivor")).toHaveAttribute("data-paused", "true");
@@ -209,7 +209,8 @@ test("safe home, fog authority, strict level unlock and saved wilderness return 
     for (const level of [chosen.level, chosen.level + 1]) {
         await combatWorker(page).evaluate(level => {
             const s = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-            Object.assign(s, { level }); (s as unknown as { markChanged(): void }).markChanged();
+            const cp = s.checkpoint();
+            s.restore({ ...cp, player: { ...cp.player, level }, skills: { ...cp.skills, points: cp.skills.points + level - cp.player.level } });
         }, level);
         await advanceCombat(page);
         if (level === chosen.level) await expect(teleport).toBeDisabled();

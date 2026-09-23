@@ -14,6 +14,7 @@ const bundle = await build({ stdin: { contents: `
     export { FrostCasting } from './apps/survivor/src/core/FrostCasting';
     export { FireCasting } from './apps/survivor/src/core/FireCasting';
     export { LightningCasting } from './apps/survivor/src/core/LightningCasting';
+    export { StarCasting } from './apps/survivor/src/core/StarCasting';
     export { CombatResolution } from './apps/survivor/src/core/CombatResolution';
     export { CombatEventKind, EffectCause } from './apps/survivor/src/core/CombatEvents';
     export { StatusKind } from './apps/survivor/src/core/StatusSystem';
@@ -247,6 +248,39 @@ function autoLoadout() {
         p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
 }
 
+function starEffects() {
+    const e = new current.CombatWorld(0, 0), region = new current.RegionalWorld("star-budget", { x: 0, z: 0 }).regionAt(0, 0);
+    const stats = { ...current.deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, current.sumEquipment({})), accuracy: 2, lethalChance: 0, lifeExtraction: 0, lifesteal: 0 };
+    e.vitals.health[e.player] = e.vitals.maxHealth[e.player] = stats.maxHealth;
+    for (let i = 0; i < current.MAX_ENEMIES; i++) {
+        const angle = i * Math.PI * 2 / current.MAX_ENEMIES;
+        const slot = e.spawnEnemy({ x: Math.sin(angle) * 2.5, z: Math.cos(angle) * 2.5, kind: 0, level: 1, elite: false, boss: false, region }, { resident: true });
+        e.vitals.health[slot] = e.vitals.maxHealth[slot] = 1e6;
+    }
+    const stars = new current.StarCasting(e), resolution = new current.CombatResolution(e), random = new current.DeterministicRandom("star-budget");
+    let hits = 0;
+    const consume = (events, i) => { if (events.kind[i] === current.CombatEventKind.Damage) hits++; };
+    const settle = tick => resolution.resolve(tick, stats, random, false, consume);
+    const timings = [], ticks = current.ticksForSeconds(8), started = performance.now();
+    stars.release("starbolt", 0, stats, current.skillValues("starbolt", 1, stats, { ...current.NO_SKILL_MODIFIERS, shape: 5 }), 0, random); settle(0);
+    assert.equal(e.status.starEnergy[e.player], 1);
+    stars.release("infusion", 0, stats, current.skillValues("infusion", 1, stats), 0, random);
+    const amplified = { ...stats, damageIncrease: (1 + stats.damageIncrease) * (1 + e.status.consumeEmpowerment(e.player, 0)) - 1 };
+    stars.release("blades", 0, amplified, current.skillValues("blades", 1, stats), 0, random);
+    stars.release("bastion", 0, stats, current.skillValues("bastion", 1, stats), 0, random);
+    for (let tick = 1; tick <= ticks; tick++) {
+        const before = performance.now(); e.status.advance(tick); stars.advance(tick, random, () => settle(tick));
+        timings.push(performance.now() - before);
+    }
+    const elapsed = performance.now() - started;
+    assert.equal(hits, 6 + current.MAX_ENEMIES * 16); assert.equal(stars.ongoing, false);
+    assert.equal(e.status.save(e.player, ticks).length, 0);
+    for (let i = 0; i < e.enemies.count; i++) assert.equal(e.status.weakenedUntil[e.enemies.slots[i]], 0);
+    timings.sort((a, b) => a - b);
+    return { msPerTick: elapsed / ticks, ticks, enemies: e.enemies.count, directHits: hits,
+        p95TickMs: timings[Math.floor(timings.length * .95)], p99TickMs: timings[Math.floor(timings.length * .99)], maxTickMs: timings.at(-1) };
+}
+
 function autoSearch() {
     const entities = new current.CombatWorld(0, 0), regions = new current.RegionalWorld("wide-search-budget", { x: 0, z: 0 });
     const stats = current.deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, current.sumEquipment({}));
@@ -268,7 +302,7 @@ function autoSearch() {
         p95DecisionMs: timings[Math.floor(timings.length * .95)], maxDecisionMs: timings.at(-1) };
 }
 
-const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), iceEffects: measure(iceEffects, 3), fireEffects: measure(fireEffects, 3), lightningEffects: measure(lightningEffects, 3), terrain: measure(terrainCombat, 3),
+const results = { travel: measure(() => travel(current), .5), crowded: measure(crowded, 3), iceEffects: measure(iceEffects, 3), fireEffects: measure(fireEffects, 3), lightningEffects: measure(lightningEffects, 3), starEffects: measure(starEffects, 3), terrain: measure(terrainCombat, 3),
     autoCombat: measure(() => terrainCombat(true), 3), autoAvoidance: measure(autoAvoidance, 3, "Decision"), autoSearch: measure(autoSearch, 3, "Decision"), autoLoadout: measure(autoLoadout, 3, "Decision") };
 if (baseline) results.baselineTravel = measure(() => travel(baseline), .5);
 console.log(JSON.stringify({ context: { node: process.version, platform: platform(), arch: arch(), cpu: cpus()[0].model,
@@ -276,7 +310,7 @@ console.log(JSON.stringify({ context: { node: process.version, platform: platfor
     gc: Boolean(globalThis.gc), timing: "one warmup, five samples, simulation only; travel/terrain restore health between ticks while retaining hit settlement; no browser/GPU claim" }, results }, null, 2));
 if (args.includes("--check")) {
     assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");
-    for (const result of [results.travel, results.crowded, results.iceEffects, results.fireEffects, results.lightningEffects, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
+    for (const result of [results.travel, results.crowded, results.iceEffects, results.fireEffects, results.lightningEffects, results.starEffects, results.terrain, results.autoCombat]) assert.ok(result.medianMsPerTick <= result.budgetMsPerTick, "Survivor simulation exceeded its CPU budget");
     assert.ok(results.autoAvoidance.medianMsPerDecision <= results.autoAvoidance.budgetMsPerDecision, "Automatic avoidance exceeded its decision CPU budget");
     assert.ok(results.autoSearch.medianMsPerDecision <= results.autoSearch.budgetMsPerDecision, "Expanded automatic search exceeded its decision CPU budget");
     assert.ok(results.autoLoadout.medianMsPerDecision <= results.autoLoadout.budgetMsPerDecision, "Automatic loadout exceeded its decision CPU budget");

@@ -92,6 +92,18 @@ export class BurnSystem {
     }
 
     public isDue(tick: number): boolean { return tick >= this.nextEvent; }
+    /** Earliest ending source first, stable source ID on ties; remove all its layers without damage. */
+    public cleanseOne(slot: number, tick: number): boolean {
+        let chosen = -1;
+        for (let i = this.head[slot]; i >= 0; i = this.next[i]) if (this.expires[i] > tick
+            && (chosen < 0 || this.expires[i] < this.expires[chosen] || this.expires[i] === this.expires[chosen] && this.source[i] < this.source[chosen])) chosen = i;
+        if (chosen < 0) return false;
+        const source = this.source[chosen];
+        for (let i = this.head[slot]; i >= 0;) {
+            const next = this.next[i]; if (this.source[i] === source) this.erase(i, slot); i = next;
+        }
+        this.project(slot); return true;
+    }
     public advance(tick: number, hit: BurnHit): void {
         if (this.advancing) throw new Error("Burn settlement cannot reenter");
         if (tick < this.nextEvent) return;

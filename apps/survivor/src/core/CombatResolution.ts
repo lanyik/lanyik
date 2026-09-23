@@ -47,8 +47,11 @@ export class CombatResolution {
             if (slot < 0 || e.vitals.health[slot] <= 0 || e.vitals.health[e.player] <= 0) return;
             // Periodic damage has no accuracy, critical, on-hit, reflection or brief dodge immunity.
             const defended = slot === e.player ? incomingDamage(stats, base, false, false, false) : base;
-            const damage = e.status.absorb(slot, defended * (1 - e.status.protection(slot, at)), at);
+            const reduced = defended * (1 - e.status.protection(slot, at));
+            const recovery = e.status.barrierBreakRecovery(slot, reduced, at);
+            const damage = e.status.absorb(slot, reduced, at);
             e.vitality.damage(source, target, damage, at, EffectCause.Burn);
+            e.vitality.heal(target, target, recovery, at, EffectCause.BarrierRecovery);
             e.vitality.defeat(source, target, at, EffectCause.Burn);
             e.events.drain(consume);
         });
@@ -76,11 +79,14 @@ export class CombatResolution {
         if (frozen) rolled *= e.impacts.frozenMultiplier[impact];
         const fire = e.impacts.fireValues[impact];
         const detonation = fire?.detonation ? e.status.burns.consume(source, target) * fire.detonation : 0;
+        const attacker = world.resolve(source), weakness = attacker < 0 ? 0 : e.status.amount(StatusKind.Weakened, attacker, tick);
         const damage = e.status.absorb(slot, (outgoingDamage(stats, rolled, e.vitals.maxHealth[slot], elite, random.chance(stats.lethalChance)) + detonation)
-            * (1 - e.status.protection(slot, tick)), tick);
+            * (1 - weakness) * (1 - e.status.protection(slot, tick)), tick);
         if (detonation > 0) e.effects.add(EffectKind.Detonation, tick, p.x[slot], p.z[slot], p.radius[slot] + .9, .75, p.x[slot], p.z[slot], source);
         if (fire?.protection && world.resolve(source) === player) e.status.apply(StatusKind.Protection, source, source, fire.protection, tick + ticksForSeconds(2), tick);
         if (lightning?.protection && world.resolve(source) === player) e.status.apply(StatusKind.StaticGuard, source, source, lightning.protection, tick + ticksForSeconds(3), tick);
+        const star = e.impacts.starValues[impact];
+        if (star?.energy && !star.gainedEnergy && world.resolve(source) === player) { star.gainedEnergy = true; e.status.gainStarEnergy(player, tick); }
         const lost = vitality.damage(source, target, damage, tick, EffectCause.Attack, critical);
         vitality.heal(source, world.ids[player], lost * stats.lifesteal * (1 + stats.regenBonus), tick, EffectCause.Lifesteal);
         vitality.defeat(source, target, tick, EffectCause.Attack);
@@ -90,11 +96,14 @@ export class CombatResolution {
             if (fire?.burnDamage) e.status.burns.apply(source, target,
                 stats.damage * fire.burnDamage * (1 + stats.damageIncrease) * (1 + (elite ? stats.eliteDamage : stats.normalDamage)), tick, ticksForSeconds(fire.burnSeconds), fire.stackLimit);
             if (lightning) e.status.apply(StatusKind.Conductive, source, target, 1, tick + ticksForSeconds(lightning.conductiveSeconds), tick);
+            if (star?.values.weakness) e.status.apply(StatusKind.Weakened, source, target, star.values.weakness, tick + ticksForSeconds(star.values.weaknessSeconds), tick);
         }
     }
 
     private damagePlayer(source: number, base: number, elite: boolean, boss: boolean, tick: number, stats: DerivedStats, random: DeterministicRandom): void {
         const e = this.e, { player, vitality, world } = e, target = world.ids[player];
+        const caster = world.resolve(source);
+        if (caster >= 0) base *= 1 - e.status.amount(StatusKind.Weakened, caster, tick);
         this.damageImmunity = .55;
         if (random.chance(stats.evasion)) { this.prevent(source, player, tick, Prevention.Dodge); return; }
         if (this.shieldCooldown === 0) { this.shieldCooldown = stats.shieldRecovery; this.prevent(source, player, tick, Prevention.Shield); return; }
@@ -102,11 +111,12 @@ export class CombatResolution {
         const critical = random.chance(Math.max(0, criticalChance - stats.criticalResistance));
         const blocked = random.chance(stats.blockChance), reduced = incomingDamage(stats, base, elite, critical, blocked)
             * (1 - e.status.protection(player, tick));
+        const recovery = e.status.barrierBreakRecovery(player, reduced, tick);
         const damage = e.status.absorb(player, reduced, tick);
         const lost = vitality.damage(source, target, damage, tick, EffectCause.Attack, critical);
+        vitality.heal(target, target, recovery, tick, EffectCause.BarrierRecovery);
         if (lost === 0) this.prevent(source, player, tick, reduced === 0 && blocked ? Prevention.Block : Prevention.Shield);
         // Reflection bypasses on-hit modifiers and cannot recursively trigger lifesteal or reflection.
-        const caster = world.resolve(source);
         if (caster >= 0 && e.vitals.health[caster] > 0) {
             vitality.damage(target, source, reflectedDamage(stats, lost, e.vitals.maxHealth[caster]), tick, EffectCause.Reflection);
             vitality.defeat(target, source, tick, EffectCause.Reflection);

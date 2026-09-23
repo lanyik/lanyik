@@ -1,6 +1,6 @@
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 
-export enum EffectKind { Pulse, Frost, Lightning, Dash, Ward, Meteor, MeteorImpact, Vortex, Blades, Shatter, Heal, EnemyReave, EnemyJaws, EnemyFault, EnemyQuake, IceBolt, IceField, FireRay, FireWall, FireDomain, FireImpact, Doom, Detonation, ThunderLance, ThunderWarning, ThunderImpact, ThunderField, JudgmentWarning, JudgmentImpact, Tempest }
+export enum EffectKind { Pulse, Frost, Lightning, Dash, Ward, Meteor, MeteorImpact, Vortex, Blades, Shatter, Heal, EnemyReave, EnemyJaws, EnemyFault, EnemyQuake, IceBolt, IceField, FireRay, FireWall, FireDomain, FireImpact, Doom, Detonation, ThunderLance, ThunderWarning, ThunderImpact, ThunderField, JudgmentWarning, JudgmentImpact, Tempest, StarBolt, Infusion, Resonance, Shelter, Cleanse, Bastion }
 export const MAX_FIRE_PROJECTILES = 24;
 export function fireShotArrays(create: <T extends Float32Array | Float64Array | Uint8Array>(type: {
     readonly BYTES_PER_ELEMENT: number; new(length: number): T; new(buffer: ArrayBuffer, offset: number, count: number): T

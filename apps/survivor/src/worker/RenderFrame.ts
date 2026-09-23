@@ -23,7 +23,8 @@ function layout(buffer?: ArrayBuffer) {
         position: { x: f64(), z: f64(), previousX: f64(), previousZ: f64(), heading: f32(), radius: f32() },
         vitals: { hitFlash: f32() },
         enemy: { kind: u8(), elite: u8(), boss: u8(), homeX: f64(), homeZ: f64(), enraged: u8() },
-        status: { slowUntil: f64(), wardUntil: f64(), frozenUntil: f64(), burnUntil: f64(), burnStacks: u8(), conductiveUntil: f64(), staticGuardUntil: f64() },
+        status: { slowUntil: f64(), wardUntil: f64(), frozenUntil: f64(), burnUntil: f64(), burnStacks: u8(), conductiveUntil: f64(), staticGuardUntil: f64(),
+            starEnergy: u8(), empoweredUntil: f64(), empoweredCharges: u8(), astralGuardUntil: f64(), weakenedUntil: f64() },
         action: { kind: u8(), reach: f32(), progress: f32(), targetX: f64(), targetZ: f64() },
         projectile: { critical: u8(), faction: u8(), age: f32(), y: f64(), previousY: f64() },
         experienceValue: f64(), item: { id: f64(), rarity: u8(), kind: u8() }

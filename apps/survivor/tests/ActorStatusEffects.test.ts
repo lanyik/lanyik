@@ -6,7 +6,7 @@ import { StatusKind } from "../src/core/StatusSystem";
 import { MAX_ENEMIES } from "../src/core/GameConfig";
 
 function inspect(fx: ActorStatusEffects) {
-    return fx as unknown as Record<"ice" | "crystals" | "flames" | "smoke" | "embers" | "electricity" | "staticGuard", ActorStatusEffects["ground"]>;
+    return fx as unknown as Record<"ice" | "crystals" | "flames" | "smoke" | "embers" | "electricity" | "staticGuard" | "starMotes" | "astralShield" | "weakness", ActorStatusEffects["ground"]>;
 }
 
 test("slow and freeze attach distinct visuals, pause deterministically and expire independently", () => {
@@ -25,8 +25,10 @@ test("slow and freeze attach distinct visuals, pause deterministically and expir
 });
 
 test("status pools handle maximum population, removal and resource disposal without stale instances", () => {
-    const fx = new ActorStatusEffects(), status = { burnUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), burnStacks: new Uint8Array(MAX_ENEMIES + 1).fill(32), slowUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), frozenUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), wardUntil: new Float64Array(MAX_ENEMIES + 1), conductiveUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), staticGuardUntil: new Float64Array(MAX_ENEMIES + 1).fill(60) };
-    const { ice, crystals, flames, smoke, embers, electricity, staticGuard } = inspect(fx);
+    const fx = new ActorStatusEffects(), status = { burnUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), burnStacks: new Uint8Array(MAX_ENEMIES + 1).fill(32), slowUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), frozenUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), wardUntil: new Float64Array(MAX_ENEMIES + 1), conductiveUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), staticGuardUntil: new Float64Array(MAX_ENEMIES + 1).fill(60),
+        starEnergy: new Uint8Array(MAX_ENEMIES + 1).fill(3), empoweredUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), empoweredCharges: new Uint8Array(MAX_ENEMIES + 1).fill(8),
+        astralGuardUntil: new Float64Array(MAX_ENEMIES + 1).fill(60), weakenedUntil: new Float64Array(MAX_ENEMIES + 1).fill(60) };
+    const { ice, crystals, flames, smoke, embers, electricity, staticGuard, starMotes, astralShield, weakness } = inspect(fx);
     fx.begin(0, 0);
     for (let slot = 0; slot <= MAX_ENEMIES; slot++) fx.actor(status, slot, slot, 0, 0, .3);
     expect(ice.count).toBe(MAX_ENEMIES + 1); expect(crystals.count).toBe((MAX_ENEMIES + 1) * 3);
@@ -34,10 +36,13 @@ test("status pools handle maximum population, removal and resource disposal with
     expect(flames.instanceMatrix.array.every(Number.isFinite)).toBe(true);
     expect(electricity.count).toBe((MAX_ENEMIES + 1) * 3); expect(staticGuard.count).toBe((MAX_ENEMIES + 1) * 2);
     expect(electricity.instanceMatrix.array.every(Number.isFinite)).toBe(true); expect(staticGuard.instanceMatrix.array.every(Number.isFinite)).toBe(true);
+    expect(starMotes.count).toBe((MAX_ENEMIES + 1) * 11); expect(astralShield.count).toBe((MAX_ENEMIES + 1) * 3); expect(weakness.count).toBe((MAX_ENEMIES + 1) * 2);
+    for (const mesh of [starMotes, astralShield, weakness]) expect(mesh.instanceMatrix.array.every(Number.isFinite)).toBe(true);
     fx.begin(1, 1 / 120); fx.actor(status, 0, 0, 0, 0, .3, 0);
     expect(ice.count).toBe(0); expect(crystals.count).toBe(0); expect(fx.ground.count).toBe(0);
     expect(flames.count).toBe(0); expect(smoke.count).toBe(0); expect(embers.count).toBe(0);
     expect(electricity.count).toBe(0); expect(staticGuard.count).toBe(0);
-    const disposed = [fx.ground, ice, crystals, flames, smoke, embers, electricity, staticGuard].flatMap(mesh => [vi.spyOn(mesh, "dispose"), vi.spyOn(mesh.geometry, "dispose"), vi.spyOn(mesh.material, "dispose")]);
+    expect(starMotes.count).toBe(0); expect(astralShield.count).toBe(0); expect(weakness.count).toBe(0);
+    const disposed = [fx.ground, ice, crystals, flames, smoke, embers, electricity, staticGuard, starMotes, astralShield, weakness].flatMap(mesh => [vi.spyOn(mesh, "dispose"), vi.spyOn(mesh.geometry, "dispose"), vi.spyOn(mesh.material, "dispose")]);
     fx.dispose(); for (const spy of disposed) expect(spy).toHaveBeenCalledOnce();
 });

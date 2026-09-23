@@ -1,6 +1,6 @@
 import { ATTRIBUTE_IDS, BONUS_IDS, EQUIPMENT_SLOTS } from "./Equipment";
 import type { PlayerSnapshot } from "./CombatState";
-import { GAME_CONFIG } from "./GameConfig";
+import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 import { POTION_RARITIES, POTION_TYPES, type InventoryItem } from "./InventoryItem";
 import { RARITIES } from "./Loot";
 import { SKILL_IDS, SKILLS, isUltimate, type SkillId } from "./Skills";
@@ -15,7 +15,7 @@ import { CHALLENGE_IDS, CHALLENGE_ARENA, ChallengeTerrain, challengeSpawns, isCh
 import { ENEMY_DEFINITIONS, enemyStats } from "./EnemyDefinitions";
 
 export interface CharacterCheckpoint {
-    readonly version: 8;
+    readonly version: 9;
     readonly characterId: string;
     readonly challengeRevision: number;
     readonly challenges: ChallengeProgressMap;
@@ -62,7 +62,7 @@ function assertItem(item: InventoryItem): void {
 
 /** Reject invalid/currently unsupported saves before changing a running character. No migration. */
 export function validateCharacterCheckpoint(value: CharacterCheckpoint): CharacterCheckpoint {
-    if (!value || value.version !== 8) throw new Error("角色存档版本与当前游戏不一致");
+    if (!value || value.version !== 9) throw new Error("角色存档版本与当前游戏不一致");
     if (typeof value.characterId !== "string" || !value.characterId.length || value.characterId.length > 128 || !integer(value.challengeRevision)
         || !integer(value.teleportReadyAt) || value.teleportReadyAt > value.tick + GAME_CONFIG.timing.simulationHz * 5) throw new Error("角色传送进度无效");
     if ((!isChallenge(value.location) && !["wilds", "homestead"].includes(value.location)) || !value.wildsPosition
@@ -122,7 +122,10 @@ export function validateCharacterCheckpoint(value: CharacterCheckpoint): Charact
         || !finite(s.dashUntil) || !Number.isFinite(s.dashX) || !Number.isFinite(s.dashZ)) throw new Error("角色技能存档无效");
     if (!Array.isArray(s.statuses) || s.statuses.length > MAX_SAVED_STATUSES || s.statuses.some(entry => !entry || !integer(entry.kind)
         || !STATUS_DEFINITIONS[entry.kind] || entry.kind === StatusKind.Burning || !Number.isSafeInteger(entry.source) || entry.source === 0 || !finite(entry.amount, Number.MIN_VALUE)
-        || entry.amount > STATUS_DEFINITIONS[entry.kind].maximum || !integer(entry.remaining, 1) || entry.remaining > 7200)
+        || entry.amount > STATUS_DEFINITIONS[entry.kind].maximum || !integer(entry.remaining, 1) || entry.remaining > 7200
+        || (entry.kind === StatusKind.Empowered ? !integer(entry.charges!, 1) || entry.charges! > 8 || entry.remaining > ticksForSeconds(15) : entry.charges !== undefined)
+        || (entry.recovery !== undefined && (entry.kind !== StatusKind.Barrier || !finite(entry.recovery)))
+        || entry.kind === StatusKind.StarEnergy && (!integer(entry.amount, 1) || entry.remaining > ticksForSeconds(8)))
         || new Set(s.statuses.map(entry => `${entry.kind}:${entry.source}`)).size !== s.statuses.length
         || STATUS_DEFINITIONS.some((def, kind) => s.statuses.filter(entry => entry.kind === kind).length > def.sources)) throw new Error("角色状态存档无效");
     if (!Array.isArray(s.burns) || s.burns.length > BURN_SOURCES * BURN_LAYERS || s.burns.some(entry => !entry

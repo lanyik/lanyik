@@ -1,10 +1,10 @@
-import { FIRE_SKILLS, FROST_SKILLS, LIGHTNING_SKILLS, NO_SKILL_MODIFIERS, SKILLS, SKILL_IDS, isFireSkill, isFrostSkill, isLightningSkill, isUltimate, type SkillId, type SkillModifiers } from "./Skills";
+import { FIRE_SKILLS, FROST_SKILLS, LIGHTNING_SKILLS, STAR_SKILLS, NO_SKILL_MODIFIERS, SKILLS, SKILL_IDS, isFireSkill, isFrostSkill, isLightningSkill, isStarSkill, isUltimate, type SkillId, type SkillModifiers } from "./Skills";
 
 export interface SkillNode {
     readonly id: string; readonly name: string; readonly description: string; readonly kind: "active" | "modifier" | "passive" | "mastery";
     readonly skill?: SkillId; readonly modifier?: "power" | "shape" | "tempo"; readonly parent?: string; readonly parentRank: number;
     readonly maximum: number; readonly initial: number; readonly level: number; readonly investment: number;
-    readonly x: number; readonly y: number; readonly school: "frost" | "fire" | "lightning" | "legacy"; readonly exclusive?: string;
+    readonly x: number; readonly y: number; readonly school: "frost" | "fire" | "lightning" | "stars" | "legacy"; readonly exclusive?: string;
 }
 const nodes: SkillNode[] = [];
 const branches: readonly [SkillId, string | undefined, number, number, number, number, readonly string[]][] = [
@@ -33,13 +33,25 @@ function lightningModifierDescription(skill: SkillId, modifier: "power" | "shape
                 : skill === "thunderfield" ? "每点延长电场持续时间 10%。" : skill === "tempest" ? "每点提高后跳保留比例 2 个百分点，最高 95%，不放大首跳。"
                     : "每点减少本技能基础冷却 2%。";
 }
+function starModifierDescription(skill: SkillId, modifier: "power" | "shape" | "tempo"): string {
+    if (modifier === "power") return skill === "infusion" || skill === "resonance" ? "每点增加技能强化倍率 2 个百分点，最终最多额外 80%。"
+        : skill === "shelter" ? "每点增加减伤 2 个百分点，最终最多 50%；与其他保护取较强值。"
+            : skill === "ward" || skill === "bastion" ? "每点增加本技能护盾量 4%。" : "每点增加本技能直接伤害 4%。";
+    if (modifier === "shape") return skill === "starbolt" ? "每点多命中一个不同目标，最多六个；同次施放仍至多获得一层星能。"
+        : skill === "infusion" || skill === "resonance" ? "每点增加一次强化；含星能额外次数最多八次。"
+            : skill === "blades" ? "每点增加刃阵半径 5%，内圈同样向外移动。" : "每点延长本技能护盾或减伤持续时间 10%。";
+    return skill === "starbolt" || skill === "ward" ? "每点减少法力消耗 3%。"
+        : skill === "resonance" ? "每点减少基础冷却 2%。" : skill === "shelter" ? "每点在出手时净化一个负面来源组，最多五个；不移除控制抵抗。"
+            : skill === "bastion" ? "护盾被伤害耗尽后，每点治疗起手时最大生命的 1%；到期、替换、洗点不触发，致死伤害不能复活。"
+                : "每点延长持续时间 10%；强化期限最多十五秒，刃阵只计算完整周期。";
+}
 function addBranches(entries: typeof branches, school: Exclude<SkillNode["school"], "legacy">): void {
     for (const [skill, parent, branch, tier, level, investment, names] of entries) {
         const x = 620 + branch * 220, y = tier ? 360 + (tier - 1) * 340 : 90;
         add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description, kind: "active", skill,
             parent, parentRank: tier === 3 ? 5 : tier ? 3 : 0, maximum: isUltimate(skill) ? 5 : 10, initial: 0, level, investment, x, y, school });
         for (const [index, modifier] of (["power", "shape", "tempo"] as const).entries()) {
-            const description = school === "lightning" ? lightningModifierDescription(skill, modifier) : school === "fire" ? fireModifierDescription(skill, modifier) : modifier === "power" ? "每点使本技能伤害增加 4%。"
+            const description = school === "stars" ? starModifierDescription(skill, modifier) : school === "lightning" ? lightningModifierDescription(skill, modifier) : school === "fire" ? fireModifierDescription(skill, modifier) : modifier === "power" ? "每点使本技能伤害增加 4%。"
                 : modifier === "shape" ? ["icebolt", "icelance"].includes(skill) ? "每点增加 1 个不同命中目标。" : "每点增加本技能作用范围 5%。"
                 : skill === "icebolt" ? "每点减少本技能法力消耗 3%。" : skill === "icelance" || skill === "shatter" ? "每点减少本技能基础冷却 2%。"
                     : skill === "icestorm" ? "每点延长冰晶风暴 10%。" : skill === "absolutezero" ? "每点延长所附寒意 10%。" : "每点增加本技能寒意积累 10%。";
@@ -97,7 +109,27 @@ add({ id: "lightning.overload", name: "过载", description: "每点增加 12% �
     maximum: 3, initial: 0, level: 30, investment: 28, x: 475, y: 910, school: "lightning", exclusive: "lightning.conduction" });
 add({ id: "lightning.conduction", name: "导流", description: "每点增加一个电弧/连锁/电场短链/电网目标及 5% 后跳距离；直接雷伤统一乘 85%。与过载互斥。", kind: "mastery", parent: "thunderfield", parentRank: 3,
     maximum: 3, initial: 0, level: 30, investment: 28, x: 765, y: 910, school: "lightning", exclusive: "lightning.overload" });
-for (const [i, skill] of SKILL_IDS.filter(id => !isFrostSkill(id) && !isFireSkill(id) && !isLightningSkill(id)).entries()) add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description,
+addBranches([
+    ["starbolt", undefined, 0, 0, 2, 0, ["星芒", "星屑", "节流"]],
+    ["infusion", "starbolt", -1, 1, 8, 6, ["增幅", "蓄星", "恒定"]],
+    ["blades", "infusion", -1, 2, 20, 18, ["刃芒", "环域", "回旋"]],
+    ["resonance", "blades", -1, 3, 45, 40, ["共振", "续辉", "周转"]],
+    ["ward", "starbolt", 1, 1, 8, 6, ["厚壁", "持守", "节流"]],
+    ["shelter", "ward", 1, 2, 20, 18, ["坚壁", "久护", "净化"]],
+    ["bastion", "shelter", 1, 3, 45, 40, ["穹顶", "延展", "回护"]]
+], "stars");
+for (const [i, [id, name, description]] of ([
+    ["stars.study", "星辰研习", "每点增加星辰直接伤害和护盾量 3%；不放大强化或减伤百分比。"],
+    ["stars.economy", "星能节流", "每点减少全部星辰技能法力消耗 2%。"],
+    ["stars.duration", "充盈护盾", "每点增加星辰护盾量 5%，与研习及专属护盾威力相加。"],
+    ["stars.resilience", "星体坚韧", "每点缩短自身受到的减速、寒意与冻结时间 3%；与寒冰韧性相加，不提供元素抗性。"]
+] as const).entries()) add({ id, name, description, kind: "passive", parentRank: 0, maximum: 5, initial: 0, level: 2,
+    investment: [2, 6, 12, 18][i], x: 620, y: 420 + i * 165, school: "stars" });
+add({ id: "stars.radiance", name: "耀星", description: "每点增加技能强化 5 个百分点；星辰护盾生成量统一乘 85%。与守望互斥。", kind: "mastery", parent: "blades", parentRank: 3,
+    maximum: 3, initial: 0, level: 30, investment: 28, x: 475, y: 910, school: "stars", exclusive: "stars.sentinel" });
+add({ id: "stars.sentinel", name: "守望", description: "每点增加星辰护盾量 10% 和庇护减伤 3 个百分点；所有直接技能伤害统一乘 90%，不降低灼烧。与耀星互斥。", kind: "mastery", parent: "shelter", parentRank: 3,
+    maximum: 3, initial: 0, level: 30, investment: 28, x: 765, y: 910, school: "stars", exclusive: "stars.radiance" });
+for (const [i, skill] of SKILL_IDS.filter(id => !isFrostSkill(id) && !isFireSkill(id) && !isLightningSkill(id) && !isStarSkill(id)).entries()) add({ id: skill, name: SKILLS[skill].name, description: SKILLS[skill].description,
     kind: "active", skill, parentRank: 0, maximum: skill === "dash" ? 1 : 5, initial: 1, level: SKILLS[skill].unlock, investment: 0,
     x: 145 + (i % 3) * 220, y: 120 + Math.floor(i / 3) * 220, school: "legacy" });
 export const SKILL_NODES: readonly SkillNode[] = Object.freeze(nodes);
@@ -153,13 +185,16 @@ export function reachableSkillRanks(ranks: readonly number[], level: number): nu
 }
 export function compileSkillModifiers(ranks: readonly number[]): Readonly<Partial<Record<SkillId, SkillModifiers>>> {
     const rank = (id: string) => ranks[nodeIndex(id)];
-    return Object.freeze(Object.fromEntries([...FROST_SKILLS, ...FIRE_SKILLS, ...LIGHTNING_SKILLS].map(id => {
-        const school = isLightningSkill(id) ? "lightning" : isFireSkill(id) ? "fire" : "frost";
+    return Object.freeze(Object.fromEntries([...FROST_SKILLS, ...FIRE_SKILLS, ...LIGHTNING_SKILLS, ...STAR_SKILLS, "pulse", "vortex"].map(value => {
+        const id = value as SkillId;
+        if (!isFrostSkill(id) && !isFireSkill(id) && !isLightningSkill(id) && !isStarSkill(id)) return [id, Object.freeze({ ...NO_SKILL_MODIFIERS, sentinel: rank("stars.sentinel") })];
+        const school = isStarSkill(id) ? "stars" : isLightningSkill(id) ? "lightning" : isFireSkill(id) ? "fire" : "frost";
         return [id, Object.freeze({ ...NO_SKILL_MODIFIERS, power: rank(`${id}.power`), shape: rank(`${id}.shape`), tempo: rank(`${id}.tempo`),
-            damage: rank(`${school}.study`), economy: rank(`${school}.economy`), duration: rank(`${school}.duration`),
+            damage: rank(`${school}.study`), economy: rank(`${school}.economy`), duration: rank(`${school}.duration`), sentinel: rank("stars.sentinel"),
             ...(school === "frost" ? { shatter: rank("frost.shatter"), winter: rank("frost.winter") }
                 : school === "fire" ? { wildfire: rank("fire.wildfire"), combustion: rank("fire.combustion"), resilience: rank("fire.resilience") }
-                    : { overload: rank("lightning.overload"), conduction: rank("lightning.conduction"), resilience: rank("lightning.resilience") }) })];
+                    : school === "lightning" ? { overload: rank("lightning.overload"), conduction: rank("lightning.conduction"), resilience: rank("lightning.resilience") }
+                        : { radiance: rank("stars.radiance"), resilience: rank("stars.resilience") }) })];
     })));
 }
 /** Only committed progression lives here. Cast state and cooldowns belong to SkillSystem. */

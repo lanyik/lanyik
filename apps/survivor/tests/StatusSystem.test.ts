@@ -55,12 +55,12 @@ test("simultaneous expiry publishes every target before subsequent movement, hit
     status.advance(420); expect(slots.map(s => status.save(s, 420))).toEqual([[], [], []]);
 });
 
-test("barriers reject refresh, clamp absorption, and can be reapplied immediately on depletion", () => {
+test("barriers reject equal or weaker refresh, clamp absorption, and can be reapplied immediately on depletion", () => {
     const world = new EntityWorld(1), status = new StatusSystem(world), slot = world.create(1), id = world.ids[slot];
     expect(status.apply(Kind.Barrier, id, id, 10, 20, 0)).toBe(true);
     for (const damage of [-1, NaN, Infinity]) expect(() => status.absorb(slot, damage, 0)).toThrow(RangeError);
     expect(status.amount(Kind.Barrier, slot, 0)).toBe(10);
-    expect(status.apply(Kind.Barrier, id, id, 100, 30, 1)).toBe(false);
+    expect(status.apply(Kind.Barrier, id, id, 10, 30, 1)).toBe(false);
     expect(status.absorb(slot, 7, 1)).toBe(0);
     expect(status.amount(Kind.Barrier, slot, 1)).toBe(3);
     expect(status.absorb(slot, 8, 2)).toBe(5);

@@ -16,7 +16,7 @@ import { CombatText } from "./CombatText";
 import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
 import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
 import type { DerivedStats } from "./CombatStats";
-import type { FireSkillValues, LightningSkillValues } from "./Skills";
+import type { FireSkillValues, LightningSkillValues, StarSkillValues } from "./Skills";
 
 export const Component = Object.freeze({ Position: 1, Vitals: 2, Player: 4, Enemy: 8, Projectile: 16, Experience: 32, GroundItem: 64, Hostile: 128 });
 export enum Faction { Player, Enemy }
@@ -29,6 +29,7 @@ interface ProjectileLaunch {
 }
 
 export interface LightningFocus { readonly ids: Float64Array; readonly hits: Uint8Array }
+export interface StarImpact { readonly values: StarSkillValues; readonly energy: boolean; gainedEnergy: boolean }
 class DamageBuffer {
     public count = 0;
     public readonly source = new Float64Array(MAX_ENEMIES + MAX_PROJECTILES);
@@ -47,6 +48,7 @@ class DamageBuffer {
     public readonly fireVolley: (Map<number, number> | undefined)[] = new Array(MAX_ENEMIES + MAX_PROJECTILES);
     public readonly lightningValues: (LightningSkillValues | undefined)[] = new Array(MAX_ENEMIES + MAX_PROJECTILES);
     public readonly lightningFocus: (LightningFocus | undefined)[] = new Array(MAX_ENEMIES + MAX_PROJECTILES);
+    public readonly starValues: (StarImpact | undefined)[] = new Array(MAX_ENEMIES + MAX_PROJECTILES);
 
     public add(source: number, target: number, damage: number, elite = 0, boss = 0, critical = 0): void {
         if (this.count === this.source.length) throw new Error("Damage event capacity exhausted");
@@ -59,6 +61,7 @@ class DamageBuffer {
         this.castStats[i] = this.fireValues[i] = undefined;
         this.fireVolley[i] = undefined;
         this.lightningValues[i] = this.lightningFocus[i] = undefined;
+        this.starValues[i] = undefined;
     }
 
     public ice(source: number, target: number, damage: number, critical: boolean, chill: number, chillTicks: number, freezeTicks: number, multiplier: number, consume: boolean): void {
@@ -73,11 +76,16 @@ class DamageBuffer {
     }
     public clear(): void {
         this.castStats.fill(undefined, 0, this.count); this.fireValues.fill(undefined, 0, this.count); this.fireVolley.fill(undefined, 0, this.count);
-        this.lightningValues.fill(undefined, 0, this.count); this.lightningFocus.fill(undefined, 0, this.count); this.count = 0;
+        this.lightningValues.fill(undefined, 0, this.count); this.lightningFocus.fill(undefined, 0, this.count);
+        this.starValues.fill(undefined, 0, this.count); this.count = 0;
     }
     public lightning(source: number, target: number, damage: number, critical: boolean, stats: DerivedStats, values: LightningSkillValues, focus?: LightningFocus): void {
         const i = this.count;
         this.add(source, target, damage, 0, 0, Number(critical)); this.castStats[i] = stats; this.lightningValues[i] = values; this.lightningFocus[i] = focus;
+    }
+    public star(source: number, target: number, damage: number, critical: boolean, stats: DerivedStats, context: StarImpact): void {
+        const i = this.count;
+        this.add(source, target, damage, 0, 0, Number(critical)); this.castStats[i] = stats; this.starValues[i] = context;
     }
 }
 
