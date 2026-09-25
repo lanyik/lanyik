@@ -17,6 +17,16 @@
 
 世界切换的顺序固定为：关闭旧 scope → 取消 streamer/Worker 请求 → 反向卸载渲染层 → 释放 source → 等待旧会话 drain。清理回调不经过发布闸门，因为旧资源即使在 closing 状态也必须被释放。
 
+### 渲染会话与区块租约
+
+[RenderWorldController](../src/rendering/RenderWorldController.ts) 拥有一次会话的 source、residency、streamer 与 lifecycle；摄像机、输入、拾取和公开 API 留在 HexMap，渲染通过宿主回调接入。替换时先停止请求和释放租约，再卸载渲染层，最后释放源；调用者通过当前 controller/residency 取得会话能力，不能长期保留旧世界入口。
+
+图层宿主记录挂载中已添加的对象，mount 失败回滚；unmount、unload 和 dispose 即使部分失败也继续清理，最后聚合为 WorldRenderLayerLifecycleError。挂载状态必须显式记录，支持部分成功后的幂等释放，不能靠场景里是否还存在对象推断。
+
+[ChunkResidencyCoordinator](../src/world/ChunkResidencyCoordinator.ts) 按 WorldSource 共享，同一规范区块合并一次加载，但每个消费者取得独立、可重复释放的 lease。取消一个等待者不能取消其他消费者；最后一份租约释放后才向源归还区块。渲染、路径查询和应用使用同一协调器，不各建一套引用计数。
+
+协调器统计租约但不决定淘汰策略：摄像机保留范围由 streamer 决定，路径和应用请求由各自所有者决定期限。dispose 使租约失效；只有拥有源的调用方可要求一并 disposeSource。单个租约消费者不能关闭共享协调器。
+
 ## 2. 统一持久化边界
 
 `GenerationCheckpointCoordinator` 是权威存档入口。每次存档先在应用提供的

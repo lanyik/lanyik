@@ -129,8 +129,8 @@ real module Worker crash and verifies that the bounded pool replaces it before
 serving the next request.
 
 The data-driven overview request transfers a versioned, bounded RGBA raster.
-Current generation/descriptor/Worker/chunk versions belong to the
-[world-style version contract](world-style-generation-v1.md#104-当前版本与基线).
+Generation/descriptor/Worker/chunk version ownership follows the
+[world-style version contract](world-style-generation-v1.md#编辑刷新与版本); current values live in the corresponding source constants.
 An overview transport change alone does not change generated tile semantics.
 Work already accepted by a Worker client or pool rejects with
 `AbortError` when its owning source is disposed; Worker crashes, invalid

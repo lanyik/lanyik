@@ -70,8 +70,8 @@ basin can saturate earlier. It neither triples every river nor triples water are
 
 The reviewed default warp frequency/amplitude are 0.08 / 3.75, source-region
 spacing is 16, ocean frequency multiplier is 1.4 and ocean threshold is 0.46.
-`WORLD_WATER_STYLE_RANGES` supplies both the panel and API validation; the full
-bounds/default/step table is in [section 6.7 of the style design](../world-style-generation-v1.md#67-水体作者参数).
+`WORLD_WATER_STYLE_RANGES` supplies both the panel and API validation; bounds,
+defaults and steps are defined in [WorldStyleProfile](../../src/world/WorldStyleProfile.ts).
 Tributary/main radius intervals are disjoint so every slider combination is valid.
 Warp amplitude remains below half a coarse step, with a 3.90 authoring ceiling;
 the old hidden 3.5 clamp is removed. Reduced lattices in small toroidal worlds
@@ -127,8 +127,8 @@ valid and unchanged.
   `waterStyle.riverLength`, partitioning chunks, overview resolvers, persistence
   and navigation through the descriptor fingerprint. Earlier meanings and
   missing fields are rejected without migration or per-field defaulting.
-  Current generator, descriptor, Worker and chunk versions belong to the
-  [version contract](../world-style-generation-v1.md#104-当前版本与基线).
+  Version ownership follows the
+  [version contract](../world-style-generation-v1.md#编辑刷新与版本); current values live in the corresponding source constants.
   Whole river-window tests protect both baseline and extended-length results.
 
 ## Overview path and budget

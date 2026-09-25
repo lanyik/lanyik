@@ -2,6 +2,8 @@
 
 导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
 
+美术方向是现代暗黑奇幻，以免费、可离线构建和随源码合法分发的资源为基础。新增资产先核对许可、原始归属与构建复现，再检查比例、材质响应和轮廓是否符合场景样板；不因资源分辨率更高就直接替换。动作、声音与美术统一的未完成事项只维护在[开发重点](development-priorities.md)。
+
 对应 `scripts/lib/survivor-environment.mjs`、`src/objects/Forest.ts`、`TerrainMesh.ts`、`TerrainArrayTexture.ts`、`terrainMaterial.ts` 和 `SunLight.ts`。源文件及哈希固定于 `assets/environment/sources.json`。
 
 演示与游戏共用的原始地形图集、图集描述和战争迷雾纹理由 [public/textures/sources.json](../../public/textures/sources.json) 登记字节数、SHA-256 与仓库来源提交。这三份是继承的演示输入，不套用后续扫描素材的 CC0 标记；原有第三方许可与归属文本保持原样。游戏构建复用现有 `sourceReader` 校验三份输入，只复制 `war-fog.jpg`，另生成 `terrain.png`、`land-atlas.json` 和 `terrain-surface.bin`。不再整目录复制演示纹理；已无消费者的旧草地、云、烟雾、纸张、山丘光照和盾牌图片已移除。根 `public/` 的演示脚本、模型、截图和受跟踪构建产物仍各有消费者。
