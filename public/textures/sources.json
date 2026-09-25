@@ -1,0 +1,20 @@
+[
+  {
+    "file": "land-atlas.json",
+    "bytes": 455,
+    "sha256": "96eaef3528e64c58d4cb44f7f5c49db68ed783f84fe889a9dbe9238625fff82f",
+    "source": "git:712f0ddd599809f67dbb920bd9905cc3aeea8aa1:public/textures/land-atlas.json"
+  },
+  {
+    "file": "terrain.png",
+    "bytes": 1164080,
+    "sha256": "2ab570eef088e6da2083e890870fe14da9cfce31b5bcfacce768f9db7ea588b9",
+    "source": "git:6c53dcfb4d44b1e163c813e13cfda6eb12f393dd:public/textures/terrain.png"
+  },
+  {
+    "file": "war-fog.jpg",
+    "bytes": 139071,
+    "sha256": "f6f091e6915680c02be4b4a0ba5895f1c2cbb2cf11eab7abce8aa1342da34191",
+    "source": "git:6087428743d8544621da43506a35fce48b34a967:public/textures/war-fog.jpg"
+  }
+]

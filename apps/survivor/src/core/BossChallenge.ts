@@ -22,7 +22,7 @@ export function createChallengeScroll(id: number, value: ChallengeId, size = 1):
     if (!isChallenge(value) || !Number.isSafeInteger(size) || size < 1 || size > 99) throw new RangeError("Invalid challenge scroll");
     return Object.freeze({ id, type: "scroll", value, size, rarity: "rainbow", name: `${CHALLENGES[value].name}传送卷轴` });
 }
-export interface ChallengeEnemy { readonly x: number; readonly z: number; readonly health: number }
+interface ChallengeEnemy { readonly x: number; readonly z: number; readonly health: number }
 export interface ChallengeProgress {
     readonly level: number;
     readonly round: number;

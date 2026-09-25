@@ -135,11 +135,11 @@ flowchart TB
     item -. 图标、事务与比较 .-> ui
     ui --> perf["UI 性能<br/>ui-performance.md"]
     combat -. 后续扩展 .-> plan["开发重点：计划<br/>development-priorities.md"]
-    plan --> tree["四系技能树与状态：四系切片已接入<br/>skill-tree-and-status.md"]
+    plan --> tree["技能树与状态：四系与通用已接入<br/>skill-tree-and-status.md"]
     tree -. 施放与效果接点 .-> skill
     tree -. 来源与结算接点 .-> combat
     tree -. 树状交互方案 .-> ui
-    tree -. 新格式接入计划 .-> save
+    tree -. 后续效果的保存策略 .-> save
     skill -. 动作与反馈 .-> actor
     terrain -. 同源高度与树干 .-> env
 ```
@@ -154,7 +154,7 @@ flowchart TB
 | [combat-and-progression.md](game/combat-and-progression.md) | 地域、玩法驻留、奖励来源、寻宝算法、经验与属性公式 | [CombatSimulation](../apps/survivor/src/core/CombatSimulation.ts)、[CombatStats](../apps/survivor/src/core/CombatStats.ts)、[RegionalWorld](../apps/survivor/src/core/RegionalWorld.ts)、[CombatRewards](../apps/survivor/src/core/CombatRewards.ts) |
 | [combat-balance.md](game/combat-balance.md) | 参考装备、承伤与击杀时间的数值期望及校准局限 | [EnemyDefinitions](../apps/survivor/src/core/EnemyDefinitions.ts)、[CombatBalance 测试](../apps/survivor/tests/CombatBalance.test.ts)、[报告脚本](../scripts/report-combat-balance.mjs) |
 | [skills-and-effects.md](game/skills-and-effects.md) | 技能装配、等级、释放、怪物攻击特性、特效与飘字 | [SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[EnemyActions](../apps/survivor/src/core/EnemyActions.ts)、[CombatFeedback](../apps/survivor/src/core/CombatFeedback.ts)、[SkillEffects](../apps/survivor/src/presentation/SkillEffects.ts)、[ActorStatusEffects](../apps/survivor/src/presentation/ActorStatusEffects.ts) |
-| [skill-tree-and-status.md](game/skill-tree-and-status.md) | **分阶段扩展计划**：四系切片已实现；完整 Buff/被动协议与全量调校继续扩展 | `SkillBuild`、`FrostCasting`、`FireCasting`、`LightningCasting`、`StarCasting`、`SkillSystem`、`StatusSystem`、`BurnSystem` 和 `SkillsPanel`；当前规则归技能与战斗架构合同 |
+| [skill-tree-and-status.md](game/skill-tree-and-status.md) | **扩展计划**：四系与通用树已实现；待完成全量调校及具体消费者需要的 Buff/触发被动协议 | `SkillBuild`、`FrostCasting`、`FireCasting`、`LightningCasting`、`StarCasting`、`SkillSystem`、`PassiveSkills`、`StatusSystem`、`BurnSystem` 和 `SkillsPanel`；当前规则归技能与战斗架构合同 |
 | [items.md](game/items.md) | 装备生成与比较、物品身份、背包/穿戴/入包事务、分类回收、图标与地面表现 | [InventoryItem](../apps/survivor/src/core/InventoryItem.ts)、[Inventory](../apps/survivor/src/core/Inventory.ts)、[EquipmentEvaluation](../apps/survivor/src/core/EquipmentEvaluation.ts)、[Recycling](../apps/survivor/src/core/Recycling.ts) |
 | [crafting-and-spirit.md](game/crafting-and-spirit.md) | 词条打造、宝珠精炼/共鸣、打造事务与确认窗、永久灵境成长 | [Crafting](../apps/survivor/src/core/Crafting.ts)、[Orbs](../apps/survivor/src/core/Orbs.ts)、[SpiritRealm](../apps/survivor/src/core/SpiritRealm.ts) |
 | [character-saves.md](game/character-saves.md) | 角色检查点、自动/手动槽、灵境独立存储及读档重建边界 | [CharacterCheckpoint](../apps/survivor/src/core/CharacterCheckpoint.ts)、[CharacterRepository](../apps/survivor/src/app/CharacterRepository.ts)、[SpiritRepository](../apps/survivor/src/worker/SpiritRepository.ts) |
@@ -277,6 +277,7 @@ flowchart TB
 | 文件 | 用途与边界 |
 |---|---|
 | [LICENSE](../LICENSE) | 项目代码许可；不替代各素材包自带许可 |
+| [共用演示纹理来源](../public/textures/sources.json) | 原始地形图集、图集描述和战争迷雾的仓库来源及哈希；游戏只显式读取三份输入，构建归[环境资产](game/environment-assets.md) |
 | [scripts/vendor/README.md](../scripts/vendor/README.md) | EZ-Tree 离线生成器固定版本与复现方式；[上游许可](../scripts/vendor/ez-tree-LICENSE.txt) |
 | [texture-attribution.md](../apps/survivor/assets/environment/texture-attribution.md) | 环境资源保留的上游纹理归属记录，不是游戏当前全部加载纹理清单 |
 | [技能素材来源](../apps/survivor/assets/effects/sources.json)、[Kenney 原始许可](../apps/survivor/assets/effects/kenney-LICENSE.txt) | 六张粒子输入的下载地址、包/文件哈希和 CC0 许可；构建及消费者归[技能与效果](game/skills-and-effects.md) |

@@ -49,7 +49,7 @@ export function SkillIcon({ id, rank }: { readonly id: SkillId; readonly rank?: 
     </IconFrame>;
 }
 
-export function skillSummary(id: SkillId, player: CombatSnapshot["player"]): string {
+function skillSummary(id: SkillId, player: CombatSnapshot["player"]): string {
     const v = skillValues(id, player.skills.ranks[id], player.stats, player.skills.modifiers[id]);
     return id === "dash" ? `${v.dashDistance.toFixed(2)} 距离 · 免疫直接命中` : v.ward > 0 ? `${v.ward} 护盾 · 持续 ${v.duration.toFixed(1)} 秒`
         : v.star?.empowerment ? `整次技能 +${Math.round(v.star.empowerment * 100)}% · 基础 ${v.star.charges} 次 · ${v.duration.toFixed(1)} 秒`

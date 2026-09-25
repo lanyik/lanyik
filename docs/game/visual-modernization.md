@@ -36,7 +36,7 @@
 | [Grass005](https://ambientcg.com/view?id=Grass005)、[Forest Ground 04](https://polyhaven.com/a/forest_ground_04)、[Rocky Terrain](https://polyhaven.com/a/rocky_terrain) | CC0 | 固定 1K 原图和 SHA-256，离线制作草/土/岩材质与岩石守卫材质；移除未使用的 Rocky Terrain 02 |
 | 本项目程序化蛛兽、岩石守卫 | 项目代码许可；岩石贴图 CC0 | 模型与动作由构建代码生成，甲壳纹理由代码生成 |
 | 已有 Quaternius 角色/动画 | 游侠与动作 CC0；Bestiary 为 QAL | 保留原许可证；不把项目全部素材统称为 CC0 |
-| [Kenney Particle Pack](https://kenney.nl/assets/particle-pack) | CC0 | 六张透明粒子离线合并图集，火焰、烟尘、斩痕、旋涡用于八技能编排；[来源清单](../../apps/survivor/assets/effects/sources.json)保留包与文件哈希 |
+| [Kenney Particle Pack](https://kenney.nl/assets/particle-pack) | CC0 | 六张透明粒子离线合并图集，供当前四系与通用技能复用；[来源清单](../../apps/survivor/assets/effects/sources.json)保留包与文件哈希，具体编排归[技能表现](skills-and-effects.md) |
 
 [Poly Haven 许可](https://polyhaven.com/license)允许商用与再分发；元数据服务为 [Public API](https://github.com/Poly-Haven/Public-API)（Powered by Poly Haven）。正常构建及游戏运行不请求素材站点。
 

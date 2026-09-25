@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, cp } from "node:fs/promises";
+import { mkdir, writeFile, cp } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Box3, Group, Mesh, MeshStandardMaterial } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
@@ -96,8 +96,12 @@ export async function prepareSurvivorEnvironment(input, output, root) {
     await prepareTrees(read, output);
     for (const file of ["ez-tree-LICENSE.txt", "texture-attribution.md"]) await writeFile(resolve(output, "environment", file), await read(file));
     await cp(resolve(input, "sources.json"), resolve(output, "environment/sources.json"));
-    const atlas = JSON.parse(await readFile(resolve(root, "public/textures/land-atlas.json"), "utf8"));
-    const atlasPath = resolve(root, "public/textures/terrain.png"), cell = 512, patches = [];
+    // Shared demo inputs are explicit and verified; never publish the whole source directory.
+    const readShared = await sourceReader(resolve(root, "public/textures"));
+    await mkdir(resolve(output, "textures"), { recursive: true });
+    await writeFile(resolve(output, "textures/war-fog.jpg"), await readShared("war-fog.jpg"));
+    const atlas = JSON.parse((await readShared("land-atlas.json")).toString("utf8"));
+    const atlasImage = await readShared(atlas.image), cell = 512, patches = [];
     // Pack the eight semantic cells, removing the source atlas's eight holes.
     // Two 8-layer arrays now cost the same GPU memory as the old 16-layer color array.
     const names = Object.keys(atlas.textures).map(name => name === "_plains" ? "soil" : name);
@@ -111,7 +115,7 @@ export async function prepareSurvivorEnvironment(input, output, root) {
         const source = scanned[name];
         const image = source
             ? sharp(await read(source[0])).resize(cell, cell).modulate({ saturation: .7, brightness: .95 })
-            : sharp(atlasPath).extract({ left: position.cellX * atlas.cellSize, top: position.cellY * atlas.cellSize, width: atlas.cellSize, height: atlas.cellSize }).resize(cell, cell);
+            : sharp(atlasImage).extract({ left: position.cellX * atlas.cellSize, top: position.cellY * atlas.cellSize, width: atlas.cellSize, height: atlas.cellSize }).resize(cell, cell);
         const location = { left: textures[name].cellX * cell, top: textures[name].cellY * cell };
         patches.push({ input: await image.png().toBuffer(), ...location });
         // RG normal XY, B perceptual roughness, A occlusion. Unscanned entries

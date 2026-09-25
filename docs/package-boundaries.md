@@ -68,5 +68,5 @@ The server binds to loopback port 3000 and opens the browser after listening.
 It stays in the same terminal until Ctrl+C; dependency or port-binding
 failure stops startup and keeps the error visible without stopping other processes.
 The batch file uses CRLF line endings and ASCII console messages.
-The game has its own [`run.bat`](../run.bat) entry on port 5173, described in
+The game has its own [`run.bat`](../run.bat) production preview entry on port 4174, described in
 [App development](./app-development.md#构建与验证).

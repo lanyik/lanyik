@@ -23,4 +23,3 @@ apps/survivor/assets/actors/**/*.gltf -text
 apps/survivor/assets/actors/**/*.bin -text
 
 public/** linguist-vendored
-webpack.config.js linguist-vendored

@@ -4,7 +4,7 @@ import { MAX_ENEMIES, ticksForSeconds } from "./GameConfig";
 export const BURN_INTERVAL = ticksForSeconds(.5);
 export const BURN_SOURCES = 4, BURN_LAYERS = 8;
 export interface SavedBurn { readonly source: number; readonly amount: number; readonly remaining: number; readonly nextIn: number }
-export type BurnHit = (source: number, target: number, damage: number, tick: number) => void;
+type BurnHit = (source: number, target: number, damage: number, tick: number) => void;
 
 /** Independent layers retain their source and damage snapshot. Only populated records are scanned. */
 export class BurnSystem {

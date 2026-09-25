@@ -22,7 +22,6 @@ if (application !== expectedApplication || dirname(output) !== application) {
 
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
-await cp(resolve(root, "public/textures"), resolve(output, "textures"), { recursive: true });
 await prepareSurvivorEnvironment(resolve(application, "assets/environment"), output, root);
 await prepareSurvivorActors(resolve(application, "assets/actors"), resolve(output, "actors"), resolve(application, "src/core/ActorSockets.generated.ts"));
 await prepareSurvivorCreatures(resolve(application, "assets/environment"), resolve(output, "actors"));

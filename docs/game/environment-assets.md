@@ -4,6 +4,8 @@
 
 对应 `scripts/lib/survivor-environment.mjs`、`src/objects/Forest.ts`、`TerrainMesh.ts`、`TerrainArrayTexture.ts`、`terrainMaterial.ts` 和 `SunLight.ts`。源文件及哈希固定于 `assets/environment/sources.json`。
 
+演示与游戏共用的原始地形图集、图集描述和战争迷雾纹理由 [public/textures/sources.json](../../public/textures/sources.json) 登记字节数、SHA-256 与仓库来源提交。这三份是继承的演示输入，不套用后续扫描素材的 CC0 标记；原有第三方许可与归属文本保持原样。游戏构建复用现有 `sourceReader` 校验三份输入，只复制 `war-fog.jpg`，另生成 `terrain.png`、`land-atlas.json` 和 `terrain-surface.bin`。不再整目录复制演示纹理；已无消费者的旧草地、云、烟雾、纸张、山丘光照和盾牌图片已移除。根 `public/` 的演示脚本、模型、截图和受跟踪构建产物仍各有消费者。
+
 家园使用 [Quaternius Medieval Village](https://quaternius.com/packs/medievalvillage.html) 的 CC0 成品模型：Inn、Blacksmith、House_1、Well。原始 OBJ、MTL、作者许可原文和逐文件下载地址、字节数、SHA-256 保存在 [homestead 来源清单](../../apps/survivor/assets/homestead/sources.json)。不再用 Box/Cone 拼房屋。
 
 `scripts/lib/survivor-homestead.mjs` 由资产准备脚本调用，校验所有输入，去除 Blender 导出的独立辅助线（避免 OBJLoader 把完整物体识别为线），保留建筑三角形及线性 MTL Kd 颜色，合并为每模型一份带顶点色的索引几何。统一居中并落地，按最大水平跨度分别归一化到 8/7/6/2 游戏单位；包围盒写入 `HomesteadModels.generated.ts`，供碰撞与布景共享，渲染几何写入 `.assets/homestead/models.json`，许可及来源清单随包发布。运行时无 OBJ/MTL 解析器、额外纹理或外网请求，四份几何共用一份 Standard 材质。

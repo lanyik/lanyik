@@ -33,9 +33,8 @@ export default defineConfig({
     // CommonJS entry never tries to require() an ESM subpath at runtime.
     external: [/^three$/],
     // The worker is served directly by the demo and therefore cannot retain
-    // bare npm specifiers. Bundling this small geometry predicate also keeps
-    // the exported worker entry self-contained for consumers.
-    noExternal: [/^three\/examples\//, /^robust-point-in-polygon$/],
+    // bare npm specifiers. Its geometry helpers are bundled with the entry.
+    noExternal: [/^three\/examples\//],
     outExtension({ format }) {
         return { js: format === "esm" ? ".mjs" : ".cjs" };
     }

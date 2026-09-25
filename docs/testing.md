@@ -69,7 +69,8 @@ Game tests consume the built library. After a clean install or changes to librar
 code/assets, first run `npm run app:prepare`. Thereafter
 `npm run build --workspace @preview/survivor` typechecks and builds the app without
 rebuilding unchanged inputs. `npm run app:build` includes the preparation step.
-Do not race tests or typechecks against a command that replaces their `dist` inputs.
+Do not race tests or typechecks against a command that replaces their `dist` or
+`apps/survivor/.assets` inputs; finish asset preparation before starting game tests.
 
 For lifecycle changes, in PowerShell:
 
