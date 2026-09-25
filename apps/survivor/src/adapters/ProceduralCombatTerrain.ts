@@ -72,10 +72,10 @@ export class ProceduralCombatTerrain implements CombatTerrain {
     }
 
     public isClear(x: number, z: number, radius: number): boolean {
-        return !this.contact(x, z, radius);
+        return !this.contact(x, z, radius, true);
     }
 
-    private contact(x: number, z: number, radius: number): SurfaceContact | undefined {
+    private contact(x: number, z: number, radius: number, testOnly = false): SurfaceContact | undefined {
         this.contactDepth = -Infinity;
         const minX = Math.floor((x - radius) / CHUNK), maxX = Math.floor((x + radius) / CHUNK);
         const minZ = Math.floor((z - radius) / CHUNK), maxZ = Math.floor((z + radius) / CHUNK);
@@ -89,6 +89,8 @@ export class ProceduralCombatTerrain implements CombatTerrain {
                 const dz = z - Math.max(oz + iz * CELL, Math.min(oz + (iz + 1) * CELL, z));
                 if (dx * dx + dz * dz > radius * radius) continue;
                 const distance = Math.hypot(dx, dz);
+                // Clearance needs any contact; movement needs the deepest contact and its normal.
+                if (testOnly && distance <= radius) return this.contactResult;
                 if (distance > 0) this.recordContact(dx / distance, dz / distance, radius - distance, false);
                 else {
                     const lx = x - (ox + ix * CELL), lz = z - (oz + iz * CELL);
@@ -101,6 +103,7 @@ export class ProceduralCombatTerrain implements CombatTerrain {
                 const dx = x - tree.x, dz = z - tree.z, combined = radius + .2 * tree.scale;
                 if (dx * dx + dz * dz > combined * combined) continue;
                 const distance = Math.hypot(dx, dz);
+                if (testOnly && distance <= combined) return this.contactResult;
                 this.recordContact(distance > 0 ? dx / distance : 1, distance > 0 ? dz / distance : 0, combined - distance, true);
             }
         }

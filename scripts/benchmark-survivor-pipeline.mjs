@@ -7,12 +7,14 @@ import assert from "node:assert/strict";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const baseline = process.argv[2];
-if (!baseline || !/^[a-f0-9]{7,40}$/.test(baseline) || process.argv.length !== 3) throw new Error("Usage: node --expose-gc scripts/benchmark-survivor-pipeline.mjs <baseline-commit>");
+const replayOnly = process.argv[3] === "--replay-only";
+if (!baseline || !/^[a-f0-9]{7,40}$/.test(baseline) || process.argv.length !== (replayOnly ? 4 : 3)) throw new Error("Usage: node --expose-gc scripts/benchmark-survivor-pipeline.mjs <baseline-commit> [--replay-only]");
 const contents = `
 export { EntityWorld } from './apps/survivor/src/core/EntityWorld';
 export { StatusSystem, StatusKind } from './apps/survivor/src/core/StatusSystem';
 export { BurnSystem } from './apps/survivor/src/core/BurnSystem';
 export { CombatSimulation } from './apps/survivor/src/core/CombatSimulation';
+export { ProceduralCombatTerrain } from './apps/survivor/src/adapters/ProceduralCombatTerrain';
 export { shareSnapshot } from './apps/survivor/src/app/ShareSnapshot';
 export { RenderFrame } from './apps/survivor/src/worker/RenderFrame';
 export { ENTITY_CAPACITY, MAX_ENEMIES } from './apps/survivor/src/core/GameConfig';`;
@@ -21,7 +23,7 @@ async function runtime(ref) {
         plugins: ref ? [{ name: "committed-source", setup(builder) {
             builder.onLoad({ filter: /\.ts$/ }, ({ path }) => ({ contents: execFileSync("git", ["show", `${ref}:${relative(root, path).replaceAll("\\", "/")}`], { cwd: root, encoding: "utf8", maxBuffer: 8e6 }), loader: "ts" }));
         } }] : [] });
-    return import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
+    return import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text + `\n//# sourceURL=survivor-pipeline-${ref ?? "current"}.mjs`).toString("base64")}`);
 }
 const runtimes = { baseline: await runtime(baseline), current: await runtime() };
 const summarize = values => {
@@ -124,18 +126,39 @@ function render(r) {
     sim.dispose(); return { bytes: r.RenderFrame.bytes, write: summarize(write), bind: summarize(bind), simulatedRoundtrip: summarize(transfer), copyKernels: copies };
 }
 const results = {};
+if (!replayOnly) {
 for (const [name, scenario] of Object.entries({ status896: r => statusExpiry(r, 896), status32: r => statusExpiry(r, 32), burn896: r => burns(r, 896), burn1: r => burns(r, 1), snapshotEqual: r => snapshots(r, false), snapshotChanged: r => snapshots(r, true) })) {
     results[name] = {};
     for (const [version, r] of Object.entries(runtimes)) { globalThis.gc?.(); results[name][version] = scenario(r); }
 }
 globalThis.gc?.();
 results.render = render(runtimes.current);
-// Exact deterministic gameplay replay; revision is also required to match.
-const simulations = Object.values(runtimes).map(r => new r.CombatSimulation("pipeline-replay"));
-for (let tick = 0; tick < 1200; tick++) for (const sim of simulations) { sim.health = sim.stats.maxHealth; sim.step({ x: 1, z: 0, active: true }); }
-assert.deepEqual(simulations[0].checkpoint(), simulations[1].checkpoint());
-assert.deepEqual(simulations[0].getSnapshot(), simulations[1].getSnapshot());
-simulations.forEach(sim => sim.dispose());
+}
+// Compare independent builds, including RNG checkpoints, entity arrays and regional layouts.
+const replay = [];
+for (const scenario of ["open", "terrain", "automatic"]) {
+    const seed = scenario === "open" ? "pipeline-replay" : "rift-ember-1";
+    const ticks = scenario === "open" ? 1200 : 600;
+    const simulations = Object.values(runtimes).map(r => new r.CombatSimulation(seed, { x: 0, z: 0 }, undefined,
+        scenario === "open" ? undefined : new r.ProceduralCombatTerrain(seed)));
+    if (scenario === "automatic") simulations.forEach(sim => sim.toggleAutoCombat());
+    const capture = sim => ({ checkpoint: sim.checkpoint(), snapshot: sim.getSnapshot(),
+        components: Object.fromEntries(["world", "position", "vitals", "enemy", "action", "projectile", "item", "status"].map(name =>
+            [name, Object.fromEntries(Object.entries(sim.entities[name]).filter(([, value]) => ArrayBuffer.isView(value) || typeof value === "number"))])),
+        chunks: [...sim.world.chunks.values()].map(c => ({ key: c.key, spawns: c.spawns, spawned: c.spawned, chest: c.chest,
+            chestOpened: c.chestOpened, labels: c.navigation.labels, reached: c.navigation.reached })) });
+    try {
+        assert.deepEqual(capture(simulations[1]), capture(simulations[0]), `${scenario}: initial state differs`);
+        for (let tick = 1; tick <= ticks; tick++) {
+            for (const sim of simulations) {
+                sim.health = sim.stats.maxHealth;
+                sim.step(scenario === "automatic" ? { x: 0, z: 0, active: false } : { x: 1, z: scenario === "open" ? 0 : .4, active: true });
+            }
+            if (tick % 60 === 0) assert.deepEqual(capture(simulations[1]), capture(simulations[0]), `${scenario}: state differs at tick ${tick}`);
+        }
+        replay.push({ scenario, ticks, comparedEveryTicks: 60, checkpointSnapshotEntitiesAndLayoutEqual: true });
+    } finally { simulations.forEach(sim => sim.dispose()); }
+}
 console.log(JSON.stringify({ capturedAt: new Date().toISOString(), baseline, environment: { cpu: cpus()[0].model, node: process.version, platform: platform() },
     scope: "Node CPU only; expiry setup and snapshot structured clone excluded; render roundtrip uses synchronous structuredClone, not browser scheduling or GPU; copy kernels do not compact the protocol.",
-    replay: { ticks: 1200, checkpointAndSnapshotEqual: true }, results }, null, 2));
+    replay, results }, null, 2));

@@ -6,19 +6,22 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { relative } from "node:path";
 import { BenchmarkProbe, latencyOverruns, summarizeLatencies, summarizeLatencyRounds } from "./lib/benchmark-latency.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
-if (args.some(arg => arg !== "--check" && arg !== "--profile" && !["--baseline=", "--scenarios=", "--output="].some(prefix => arg.startsWith(prefix)))) {
-    throw new Error("Usage: benchmark-survivor.mjs [--check] [--baseline=module] [--scenarios=name,...] [--profile] [--output=file.json]");
+if (args.some(arg => arg !== "--check" && arg !== "--profile" && !["--baseline=", "--runtime-ref=", "--scenarios=", "--output="].some(prefix => arg.startsWith(prefix)))) {
+    throw new Error("Usage: benchmark-survivor.mjs [--check] [--baseline=module] [--runtime-ref=commit] [--scenarios=name,...] [--profile] [--output=file.json]");
 }
-for (const prefix of ["--baseline=", "--scenarios=", "--output="]) {
+for (const prefix of ["--baseline=", "--runtime-ref=", "--scenarios=", "--output="]) {
     const matches = args.filter(arg => arg.startsWith(prefix));
     if (matches.length > 1 || matches.some(arg => arg.length === prefix.length)) throw new Error(`Invalid ${prefix} argument`);
 }
 if (args.includes("--check")) assert.ok(globalThis.gc, "Use node --expose-gc for benchmark gates");
 const baselinePath = args.find(arg => arg.startsWith("--baseline="))?.slice("--baseline=".length);
+const runtimeRef = args.find(arg => arg.startsWith("--runtime-ref="))?.slice("--runtime-ref=".length);
+if (runtimeRef && !/^[a-f0-9]{7,40}$/.test(runtimeRef)) throw new Error("--runtime-ref requires a commit hash");
 const bundle = await build({ stdin: { contents: `
     export { CombatSimulation } from './apps/survivor/src/core/CombatSimulation';
     export { CombatWorld, Faction, ActorAction } from './apps/survivor/src/core/CombatWorld';
@@ -47,7 +50,11 @@ const bundle = await build({ stdin: { contents: `
     export { advanceProjectiles, moveEnemies, advanceEnemyActions } from './apps/survivor/src/core/CombatSystems';
     export { ticksForSeconds, GAME_CONFIG, MAX_ENEMIES } from './apps/survivor/src/core/GameConfig';
     export { ProceduralCombatTerrain } from './apps/survivor/src/adapters/ProceduralCombatTerrain';
-`, resolveDir: root }, bundle: true, write: false, platform: "node", format: "esm" });
+`, resolveDir: root }, bundle: true, write: false, platform: "node", format: "esm",
+    plugins: runtimeRef ? [{ name: "committed-runtime", setup(builder) {
+        builder.onLoad({ filter: /\.ts$/ }, ({ path }) => ({ contents: execFileSync("git", ["show", `${runtimeRef}:${relative(root, path).replaceAll("\\", "/")}`],
+            { cwd: root, encoding: "utf8", maxBuffer: 8e6 }), loader: "ts" }));
+    } }] : [] });
 const current = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
 const baseline = baselinePath ? await import(pathToFileURL(baselinePath).href) : undefined;
 
@@ -409,6 +416,7 @@ const failures = selected.filter(name => {
 });
 const report = { schemaVersion: 2, capturedAt: new Date().toISOString(),
     sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+    runtimeSource: runtimeRef ? { commit: execFileSync("git", ["rev-parse", runtimeRef], { cwd: root, encoding: "utf8" }).trim() } : { worktree: true },
     sourceHashes: Object.fromEntries(["scripts/benchmark-survivor.mjs", "scripts/lib/benchmark-latency.mjs"].map(path =>
         [path, createHash("sha256").update(readFileSync(new URL("../" + path, import.meta.url))).digest("hex")])),
     runtimeBundleHash: createHash("sha256").update(bundle.outputFiles[0].text).digest("hex"),

@@ -148,6 +148,9 @@ claims. Workload counters must match the corresponding uninstrumented fixtures.
 Profiles are limited to those four scenarios; no timers or hooks enter the production
 simulation, Worker protocol or UI. The committed [tail-latency sample](game/measurements/performance-tail-latency.json)
 records one machine and artificial pressure workloads, not a full-capacity browser guarantee.
+For a same-harness comparison, `--runtime-ref=<commit-hash>` bundles the committed
+TypeScript runtime through Git reads; installed dependencies and built library inputs
+stay the same. The report identifies that runtime separately from the benchmark source.
 
 The query benchmark includes candidate preparation, copy, transfer and join costs,
 with the stationary index built before timing. It measures real Node threads, not
@@ -157,9 +160,12 @@ serial execution. Configuration and thresholds belong to the simulation contract
 
 `node --expose-gc scripts/benchmark-survivor-pipeline.mjs <baseline-commit>` builds
 the committed baseline through Git reads without replacing the worktree. It times
-expiry events and snapshot sharing separately, checks an exact 1,200-tick replay,
+expiry events and snapshot sharing separately, checks an exact 1,200-tick open-terrain replay,
 and compares native render copies with sparse slot writes. Snapshot cloning and
 status setup are excluded from their respective timings; this is Node CPU evidence.
+`--replay-only` skips timings. Replay also covers 600 ticks each of procedural-terrain
+travel and automatic combat, comparing checkpoints (including RNG), UI snapshots,
+entity component arrays and regional layouts every 60 ticks against the baseline.
 `node scripts/benchmark-survivor-combat.mjs <preview-url>` observes the complete
 2560×1440 browser path with a valid mixed-school build, moving/resting input,
 durable enemies and replenished player vitals. It retains real casting, AI, hit

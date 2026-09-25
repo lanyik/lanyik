@@ -18,6 +18,17 @@ function terrainWith(isClear: CombatTerrain["isClear"]): CombatTerrain {
 }
 const divided = terrainWith((x, _z, radius) => Math.abs(x - 2) > radius);
 
+test("nearest placement preserves row-major ties, body clearance and exclusions when searching outward", () => {
+    const navigation = new EncounterNavigation(terrainWith((_x, _z, radius) => radius <= .6), -12, -12);
+    expect(navigation.nearest(-6, -6, .3)).toEqual({ x: -6.25, z: -6.25, component: 1 });
+    expect(navigation.nearest(-20, -20, .3)).toEqual({ x: -11.75, z: -11.75, component: 1 });
+    expect(navigation.nearest(20, 20, .3)).toEqual({ x: -.25, z: -.25, component: 1 });
+    expect(navigation.nearest(-6, -6, .7)).toBeUndefined();
+    expect(navigation.nearest(-6, -6, .3, 0, [{ x: -6.25, z: -6.25, radius: .1 }], x => x < -6))
+        .toEqual({ x: -6.25, z: -5.75, component: 1 });
+    expect(navigation.nearest(-6, -6, .3, 0, [], () => false)).toBeUndefined();
+});
+
 test("a clear but enclosed pocket cannot host a key encounter", () => {
     const terrain = terrainWith((x, z, radius) => {
         const d = Math.hypot(x - 6, z - 6);

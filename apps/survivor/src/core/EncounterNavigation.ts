@@ -4,7 +4,7 @@ import { WORLD_VIEW } from "./WorldView";
 
 export const ENCOUNTER_CELL = .5;
 export const ENCOUNTER_EDGE = WORLD_VIEW.chunkSize / ENCOUNTER_CELL;
-const CELLS = ENCOUNTER_EDGE ** 2, PLAYER_RADIUS = GAME_CONFIG.combat.playerRadius;
+const CELLS = ENCOUNTER_EDGE ** 2, PLAYER_RADIUS = GAME_CONFIG.combat.playerRadius, CLEAR_RADIUS = PLAYER_RADIUS + ENCOUNTER_CELL / 2;
 interface Occupant { readonly x: number; readonly z: number; readonly radius: number }
 
 /** Conservative walking components owned and retired with a content chunk. No per-actor path search. */
@@ -16,7 +16,7 @@ export class EncounterNavigation {
     constructor(private readonly terrain: CombatTerrain, public readonly x: number, public readonly z: number) {
         const clear = new Uint8Array(CELLS), queue = new Uint16Array(CELLS);
         // The half-cell margin certifies the entire cardinal edge, not only its two endpoints.
-        for (let cell = 0; cell < CELLS; cell++) clear[cell] = Number(terrain.isClear(this.cellX(cell), this.cellZ(cell), PLAYER_RADIUS + ENCOUNTER_CELL / 2));
+        for (let cell = 0; cell < CELLS; cell++) clear[cell] = Number(terrain.isClear(this.cellX(cell), this.cellZ(cell), CLEAR_RADIUS));
         for (let cell = 0; cell < CELLS; cell++) {
             if (!clear[cell] || this.labels[cell]) continue;
             const component = this.borders.length, border: number[] = [];
@@ -62,14 +62,31 @@ export class EncounterNavigation {
     public nearest(x: number, z: number, radius: number, component = 0, occupied: readonly Occupant[] = [],
         accept?: (x: number, z: number) => boolean): { x: number; z: number; component: number } | undefined {
         let best = -1, distance = Infinity;
-        for (let cell = 0; cell < CELLS; cell++) {
-            const label = this.labels[cell];
-            if (!label || !this.borders[label].length || (component && label !== component)) continue;
-            const px = this.cellX(cell), pz = this.cellZ(cell), d = (x - px) ** 2 + (z - pz) ** 2;
-            if (d >= distance || (accept && !accept(px, pz))) continue;
-            if (occupied.some(other => (other.x - px) ** 2 + (other.z - pz) ** 2 < (radius + other.radius) ** 2)) continue;
-            if (!this.terrain.isClear(px, pz, radius)) continue;
-            distance = d; best = cell;
+        const cx = Math.max(0, Math.min(ENCOUNTER_EDGE - 1, Math.floor((x - this.x) / ENCOUNTER_CELL)));
+        const cz = Math.max(0, Math.min(ENCOUNTER_EDGE - 1, Math.floor((z - this.z) / ENCOUNTER_CELL)));
+        for (let ring = 0; ring < ENCOUNTER_EDGE; ring++) {
+            const minX = Math.max(0, cx - ring), maxX = Math.min(ENCOUNTER_EDGE - 1, cx + ring);
+            const minZ = Math.max(0, cz - ring), maxZ = Math.min(ENCOUNTER_EDGE - 1, cz + ring);
+            for (let iz = minZ; iz <= maxZ; iz++) {
+                const fullRow = Math.abs(iz - cz) === ring;
+                const firstX = fullRow ? minX : cx >= ring ? cx - ring : cx + ring;
+                for (let ix = firstX; ix <= maxX; ix += fullRow ? 1 : Math.max(1, ring * 2)) {
+                    const cell = iz * ENCOUNTER_EDGE + ix, label = this.labels[cell];
+                    if (!label || !this.borders[label].length || (component && label !== component)) continue;
+                    const px = this.cellX(cell), pz = this.cellZ(cell), d = (x - px) ** 2 + (z - pz) ** 2;
+                    if (d > distance || (d === distance && cell >= best) || (accept && !accept(px, pz))) continue;
+                    if (occupied.some(other => (other.x - px) ** 2 + (other.z - pz) ** 2 < (radius + other.radius) ** 2)) continue;
+                    // A labelled node already certifies every smaller body on this static terrain.
+                    if (radius > CLEAR_RADIUS && !this.terrain.isClear(px, pz, radius)) continue;
+                    distance = d; best = cell;
+                }
+            }
+            // Every unvisited node lies beyond one of these four sides. Strict comparison preserves ties by cell index.
+            const outside = Math.min(minX > 0 ? Math.abs(x - (this.x + (minX - .5) * ENCOUNTER_CELL)) : Infinity,
+                maxX < ENCOUNTER_EDGE - 1 ? Math.abs(x - (this.x + (maxX + 1.5) * ENCOUNTER_CELL)) : Infinity,
+                minZ > 0 ? Math.abs(z - (this.z + (minZ - .5) * ENCOUNTER_CELL)) : Infinity,
+                maxZ < ENCOUNTER_EDGE - 1 ? Math.abs(z - (this.z + (maxZ + 1.5) * ENCOUNTER_CELL)) : Infinity);
+            if (outside * outside > distance || minX === 0 && maxX === ENCOUNTER_EDGE - 1 && minZ === 0 && maxZ === ENCOUNTER_EDGE - 1) break;
         }
         return best < 0 ? undefined : { x: this.cellX(best), z: this.cellZ(best), component: this.labels[best] };
     }
