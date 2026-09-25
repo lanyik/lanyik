@@ -199,7 +199,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
                 onEquip={() => session.dispatch({ type: "equip", itemId: snapshot.upgrades[0].id })}
                 onDismiss={() => session.dispatch({ type: "dismiss-upgrade", itemId: snapshot.upgrades[0].id })} />}
             {panels.travel && <WorldTravelPanel combat={combat} exploration={snapshot.exploration!} attach={attachRegionMap} initial={travelDestination}
-                busy={snapshot.travelling || snapshot.saveStatus.busy || combat.gameOver} close={() => close("travel")} travel={travel} />}
+                busy={snapshot.travelling || combat.gameOver} saving={snapshot.saveStatus.busy} close={() => close("travel")} travel={travel} />}
             {combat.gameOver && !panels.system && <div className="state-overlay death"><div><small>本次狩猎结束</small><h1>你已倒下</h1><p>坚持 {formatTime(combat.elapsedMs)} · 击杀 {combat.kills} · 达到 {player.level} 级</p><button onClick={() => session.dispatch({ type: "restart" })}>{isChallenge(combat.world.location) ? "继续本轮挑战" : "再次踏入荒原"}<kbd>R</kbd></button><button onClick={() => toggle("system")}>读取存档</button><button onClick={() => void onHome()}>返回主界面</button></div></div>}
         </>}
         {(snapshot.status === "loading" || snapshot.travelling) && <div className="state-overlay loading" role="status"><div className="loading-rune" /><div><small>RIFT / 旅程</small><h1>{snapshot.travelling ? "正在前往目的地" : "世界正在苏醒"}</h1><p>准备地域与角色资源…</p></div></div>}

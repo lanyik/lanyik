@@ -8,15 +8,15 @@ import { RegionMap } from "./RegionMap";
 import { WorldTravelGraph } from "./WorldTravelGraph";
 import { WindowHeader } from "./WindowChrome";
 
-export function WorldTravelPanel({ combat, exploration, attach, initial, busy, close, travel }: {
-    combat: CombatSnapshot; exploration: ExplorationSnapshot; attach: AttachRegionMap; initial?: WorldLocation; busy: boolean;
+export function WorldTravelPanel({ combat, exploration, attach, initial, busy, saving, close, travel }: {
+    combat: CombatSnapshot; exploration: ExplorationSnapshot; attach: AttachRegionMap; initial?: WorldLocation; busy: boolean; saving: boolean;
     close(): void; travel(destination: WorldLocation, point?: { x: number; z: number }): void;
 }) {
     const [selected, setSelected] = useState<WorldLocation>(initial ?? combat.world.location);
     const location = combat.world.location, challenge = isChallenge(selected), progress = challenge ? combat.challenges[selected] : undefined;
     const scrolls = combat.player.inventory.reduce((count, item) => count + (item.type === "scroll" && item.value === selected ? item.size : 0), 0);
     const needsScroll = challenge && selected !== location && (!progress || progress.claimed);
-    const locked = busy || combat.gameOver || needsScroll && !scrolls;
+    const locked = busy || saving || combat.gameOver || needsScroll && !scrolls;
     const preview = useMemo<CombatSnapshot>(() => {
         if (selected === combat.world.location) return combat;
         const run = isChallenge(selected) ? combat.challenges[selected] : undefined;

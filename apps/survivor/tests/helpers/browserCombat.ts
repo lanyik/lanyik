@@ -27,7 +27,7 @@ export function combatWorker(page: Page) {
 export async function pauseCombat(page: Page): Promise<void> {
     await page.evaluate(async () => {
         const session = window.survivorApplication!.session;
-        session.dispatch({ type: "toggle-pause" });
+        if (!session.isPaused) session.dispatch({ type: "toggle-pause" });
         await session.settled;
     });
 }

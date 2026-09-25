@@ -114,7 +114,7 @@ test("Worker disposal owns an initializing simulation and suppresses its late re
     const pending = host.receive({ type: "init", id: 1, seed: "dispose-loading", start: origin, ports: [] });
     await entered.promise; expect(messages).toEqual([]);
     host.dispose(); pause.resume(); await pending;
-    expect(dispose).toHaveBeenCalled(); expect(messages).toEqual([]);
+    expect(dispose).toHaveBeenCalledTimes(1); expect(messages).toEqual([]);
 });
 
 test("saved positions prepare only their target window; dash ticks remain identical across a boundary", async () => {
@@ -155,4 +155,50 @@ test("default Worker initialization yields real tasks and accounts for the wait 
         expect(message.update.stats.simulationYieldMs).toBe(0);
         expect(message.update.tick).toBe(0);
     } finally { host.dispose(); }
+});
+
+test.each(["init", "teleport", "crossing", "ahead"] as const)("%s generation failure closes its owner once and never publishes incomplete state", async phase => {
+    const seed = `failed-${phase}`, source = new CombatSimulation(seed);
+    (source as unknown as { exploration: Exploration }).exploration.discover(360, 0);
+    const saved = source.checkpoint(); source.dispose();
+    const checkpoint = { ...saved, player: { ...saved.player, x: phase === "crossing" ? 5.99 : phase === "ahead" ? 3.1 : 0 } };
+    let failing = phase === "init";
+    const dispose = vi.fn(), messages: CombatResponse[] = [], repository = new MemorySpiritRepository();
+    const close = vi.spyOn(repository, "close");
+    const host = new CombatWorkerHost(message => messages.push(message), repository,
+        (seed, start, realm, location) => new CombatSimulation(seed, start, realm, { ...OPEN_TERRAIN, dispose }, location, seed,
+            async () => { if (failing) throw new Error("generation task failed"); }));
+    await host.receive({ type: "init", id: 1, seed, start: origin, checkpoint, ports: [] });
+    if (phase !== "init") {
+        expect(messages.map(message => message.type)).toEqual(["state"]);
+        messages.length = 0; failing = true;
+        await host.receive({ type: "advance", id: 2, batch: { steps: phase === "teleport" ? 0 : 1,
+            input: { x: 1, z: 0, active: true }, commands: phase === "teleport" ? [{ type: "teleport", x: 360, z: 0 }] : [] } });
+    }
+    expect(messages).toEqual([{ type: "error", id: phase === "init" ? 1 : 2, message: "generation task failed" }]);
+    expect(dispose).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1);
+    host.dispose();
+    await host.receive({ type: "advance", id: 3, batch: { steps: 0, commands: [], input: { x: 0, z: 0, active: false } } });
+    expect(messages).toHaveLength(1);
+    expect(dispose).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1);
+});
+
+test.each(["teleport", "crossing", "ahead"] as const)("disposal while %s generation is suspended suppresses late completion", async phase => {
+    const seed = `cancel-${phase}`, source = new CombatSimulation(seed);
+    (source as unknown as { exploration: Exploration }).exploration.discover(360, 0);
+    const saved = source.checkpoint(); source.dispose();
+    const checkpoint = { ...saved, player: { ...saved.player, x: phase === "crossing" ? 5.99 : phase === "ahead" ? 3.1 : 0 } };
+    const pause = deferred(), entered = deferred(), dispose = vi.fn(), messages: CombatResponse[] = [];
+    let hold = false;
+    const host = new CombatWorkerHost(message => messages.push(message), new MemorySpiritRepository(),
+        (seed, start, realm, location) => new CombatSimulation(seed, start, realm, { ...OPEN_TERRAIN, dispose }, location, seed,
+            () => { if (!hold) return Promise.resolve(); entered.resume(); return pause.promise; }));
+    await host.receive({ type: "init", id: 1, seed, start: origin, checkpoint, ports: [] });
+    expect(messages.map(message => message.type)).toEqual(["state"]);
+    messages.length = 0; hold = true;
+    const pending = host.receive({ type: "advance", id: 2, batch: { steps: phase === "teleport" ? 0 : 1,
+        input: { x: 1, z: 0, active: true }, commands: phase === "teleport" ? [{ type: "teleport", x: 360, z: 0 }] : [] } });
+    await entered.promise; expect(messages).toEqual([]);
+    host.dispose(); pause.resume(); await pending;
+    expect(messages).toEqual([]); expect(dispose).toHaveBeenCalledTimes(1);
 });

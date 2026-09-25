@@ -307,6 +307,7 @@ export class CombatSimulation {
         this.markChanged();
     }
     public dispose(): void {
+        if (this.closed) return;
         this.closed = true; this.autoCombat.setEnabled(false); this.failedLoadoutReceipts.clear(); this.failedLoadoutContext = undefined;
         this.world.dispose();
         this.entities.terrain.dispose();

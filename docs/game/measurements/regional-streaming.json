@@ -34734,5 +34734,66 @@
     "developmentServer": "Fresh Vite server on port 5173; check:app:dev passed real unbundled Worker pickup, sampled minimap, skill dragging and shader checks.",
     "homeRetest": "Failed before reaching the adjusted quiescence barrier: selecting wilderness left the preview label at homestead for 20 seconds. No application exception in the trace; GPU ReadPixels stall warnings occurred. This expanded UI flow remains unresolved, not counted as passed.",
     "benchmarkHelpers": "5 passed"
+  },
+  "followUpAudit": {
+    "capturedAt": "2026-09-25 11:41:58 UTC",
+    "sourceParent": "423f710",
+    "scope": "Failure and timeout audit of the regional-streaming change. Earlier verification above remains historical; this follow-up records the fixes and targeted reruns, not a new CPU benchmark or full application E2E acceptance.",
+    "findings": [
+      {
+        "issue": "Autosave disabled destination browsing and could swallow a click between pointer down and up.",
+        "baseline": "The App, WorldTravelPanel and bootstrap sources are identical at dba85c8 and 423f710. Rebundling the dba85c8 travel UI in the same controlled session fixture reproduces the lost selection.",
+        "before": {
+          "reference": "dba85c8 travel UI",
+          "disabledDuringSave": true,
+          "selectedAfterRelease": false,
+          "preview": "灯火营地"
+        },
+        "after": {
+          "reference": "fixed travel UI",
+          "disabledDuringSave": false,
+          "selectedAfterRelease": true,
+          "preview": "荒野"
+        },
+        "fix": "Separate browsing from transaction availability: autosave blocks travel submission and its keyboard shortcut, while selecting a destination and closing the panel remain available.",
+        "regression": "travel-panel.spec.ts holds a real session persistence promise between mouse down and up. It failed on disabled browsing before the fix and passes after the fix."
+      },
+      {
+        "issue": "Simulation generation failure disposed terrain internally and again through the Worker owner; repeated Host closure also closed repositories again.",
+        "reproduction": "Fault injection during initialization, teleport, boundary crossing and ahead preparation each observed two terrain-dispose calls before the fix.",
+        "fix": "CombatSimulation and CombatWorkerHost disposal now return immediately when already closed; failure remains fatal.",
+        "regression": "RegionalStreaming.test.ts covers all four generation-failure paths and disposal during suspended initialization, teleport, crossing and ahead preparation. Each owner closes once; failed or disposed work publishes no partial or late state."
+      },
+      {
+        "issue": "Quiescence requires stopping continuous tick submission; software rendering also exhausted whole-test budgets without a Worker error.",
+        "observations": "A 120-second fog-drag run timed out in mouse.down after approximately 70 seconds entering wilds and approximately 3.7 seconds per mouse driver round trip. A later 540-second repeated-world run completed all three round trips and their assertions, then timed out before the final refresh.",
+        "testChanges": "Pause helper preserves an already paused session. Remove redundant drag interpolation while retaining six real drags and the independent 100-event coalescing check. All three save/load round trips remain, through public session.travel; initial entry, final exit and refresh restoration retain UI input.",
+        "deadlines": "Homestead/fog whole-test budget is 360 seconds and the repeated-world journey is 540 seconds. Each API travel retains a 45-second deadline. UI action/load and production Worker timeout settings are unchanged.",
+        "result": "All four homestead/fog cases pass across focused runs; the repeated-world case completed in the runner's reported 8.1 minutes."
+      }
+    ],
+    "verification": {
+      "unit": {
+        "files": 70,
+        "tests": 496,
+        "result": "passed"
+      },
+      "typecheck": "passed",
+      "appBuild": "passed",
+      "browser": {
+        "totalCasesPassed": 9,
+        "homesteadAndFog": "3 passed in the expanded rerun; the final repeated-world case passed separately after reducing driver round trips.",
+        "productionWorker": "1 passed: real production entry, saved-position initialization and far teleport with complete publications.",
+        "startup": "3 passed: graphics failure/retry and disposal during two stalled asset loads.",
+        "travelSaveRace": "1 passed: controlled pointer/save interleaving, blocked travel, close/resume and retained selection."
+      },
+      "foundationSoak": {
+        "iterations": 500,
+        "result": "passed",
+        "testSeconds": 44.8
+      },
+      "documentation": "37 Markdown files passed; code/design correspondence reviewed.",
+      "limitations": "Targeted correctness and lifecycle acceptance only. The entire application browser suite was not run, and this does not establish target-device frame rate or remove the previously measured cold-start slice costs."
+    }
   }
 }

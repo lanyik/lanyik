@@ -34,7 +34,17 @@ Worker mocks are scoped to their own suite and restored after each test.
 Browser combat fixtures advance through the session's normal in-flight barrier;
 they do not bypass it with direct transport calls, which could race an automatic
 save during slow screenshots. Production Worker entry points expose no fixture state.
-Pause continuous simulation before awaiting quiescence for a scripted teleport.
+Pause continuous simulation before awaiting quiescence for a scripted teleport;
+the pause helper preserves an already paused session. Fog dragging keeps real
+pointer capture and endpoint movement; the separate 100-event burst checks frame
+coalescing without redundant browser round trips. The travel-interface fixture
+holds a real session's persistence promise between pointer down and up to verify
+that autosave cannot swallow destination selection; WebGL journeys remain separate.
+Full-resolution homestead/fog journeys allow 360 seconds in software rendering;
+the repeated world-replacement journey allows 540 seconds. These are total test
+budgets, not relaxed action, loading, Worker-response or performance limits.
+Repeated save/load journeys call the public session travel transaction and verify
+every return; initial entry, final exit and post-refresh restoration still use UI input.
 The assembled HUD/resource journey uses the test Worker's damage-immunity fixture so
 software-rendered layout checks cannot kill its actor before keyboard assertions.
 Combat death and automatic-combat shutdown remain separate gameplay/Worker checks.

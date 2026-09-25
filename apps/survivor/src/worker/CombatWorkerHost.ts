@@ -152,6 +152,7 @@ export class CombatWorkerHost {
     }
 
     public dispose(): void {
+        if (this.closed) return;
         this.closed = true; this.pool?.dispose(); this.simulation?.dispose();
         this.generationChannel?.port1.close(); this.generationChannel?.port2.close();
         this.generationChannel = undefined;
