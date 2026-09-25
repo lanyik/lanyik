@@ -168,6 +168,8 @@ travel and automatic combat, comparing checkpoints (including RNG), UI snapshots
 entity component arrays and regional layouts every 60 ticks against the baseline.
 An interleaved burn replay also compares admission, replacement, consumption, cleanse,
 callback reapplication, entity reuse, ordered damage events and individual saved layers.
+Avoidance replay compares 288 candidate scores across positive/negative chunk boundaries,
+curved shots, different heights, early score limits and reused projectile slots.
 `node scripts/benchmark-survivor-combat.mjs <preview-url>` observes the complete
 2560×1440 browser path with a valid mixed-school build, moving/resting input,
 durable enemies and replenished player vitals. It retains real casting, AI, hit

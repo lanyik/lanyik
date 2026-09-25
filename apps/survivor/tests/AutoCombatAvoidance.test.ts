@@ -14,10 +14,11 @@ const rest = { x: 0, z: 0, active: false };
 const stats = deriveStats(1, { might: 5, vitality: 5, agility: 5, spirit: 5 }, sumEquipment({}));
 const region = new RegionalWorld("avoidance", { x: 0, z: 0 }).regionAt(0, 0);
 
-test("forecast endpoint reuse retains grazing contact and resets when a projectile slot is reused", () => {
+test.each([0, Math.PI / 2, Math.PI, Math.PI * 1.5])("forecast bounds retain grazing contact and reset on slot reuse (heading %s)", heading => {
     const e = new CombatWorld(0, 0), threats = new AutoCombatThreats(e);
     const spawn = (z: number) => {
-        e.spawnProjectile(0, Faction.Enemy, -4, z, 5, 0, 1, 2, { height: .8 });
+        const cos = Math.cos(heading), sin = Math.sin(heading);
+        e.spawnProjectile(0, Faction.Enemy, -4 * cos - z * sin, -4 * sin + z * cos, 5 * cos, 5 * sin, 1, 2, { height: .8 });
         const slot = e.hostileProjectiles.slots[0]; e.position.radius[slot] = .2; return slot;
     };
     const first = spawn(.619); threats.sense(1);

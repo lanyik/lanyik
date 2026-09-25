@@ -158,8 +158,14 @@ export class AutoCombatThreats {
                 const wholeStart = from === step * STEP, wholeEnd = to === (step + 1) * STEP;
                 const ax = wholeStart ? this.pathX[step] : this.xAt(from), az = wholeStart ? this.pathZ[step] : this.zAt(from);
                 const bx = wholeEnd ? this.pathX[step + 1] : this.xAt(to), bz = wholeEnd ? this.pathZ[step + 1] : this.zAt(to);
-                const radial = segmentCircleHit(this.boltX[base + step] - ax, this.boltZ[base + step] - az,
-                    this.boltX[base + step + 1] - bx, this.boltZ[base + step + 1] - bz, 0, 0, PLAYER_RADIUS + this.radii[bolt] + MARGIN);
+                const rx0 = this.boltX[base + step] - ax, rz0 = this.boltZ[base + step] - az;
+                const rx1 = this.boltX[base + step + 1] - bx, rz1 = this.boltZ[base + step + 1] - bz;
+                const reach = PLAYER_RADIUS + this.radii[bolt] + MARGIN;
+                // A relative segment entirely outside one side of the body's bounds cannot contact it.
+                // Keep equality for tangency and test both endpoints so crossings are never discarded.
+                if (rx0 > reach && rx1 > reach || rx0 < -reach && rx1 < -reach
+                    || rz0 > reach && rz1 > reach || rz0 < -reach && rz1 < -reach) continue;
+                const radial = segmentCircleHit(rx0, rz0, rx1, rz1, 0, 0, reach);
                 if (radial === Infinity) continue;
                 const radius = this.radii[bolt];
                 const groundA = wholeStart ? this.groundAt(step) : e.terrain.height(ax, az);

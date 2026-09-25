@@ -8,8 +8,12 @@ import { WORLD_VIEW } from "../core/WorldView";
 const CHUNK = WORLD_VIEW.chunkSize, CELL = .5, EDGE = CHUNK / CELL, MAX_CHUNKS = WORLD_VIEW.navigationChunks;
 const MAX_SLOPE = Math.tan(40 * Math.PI / 180);
 interface TerrainChunk { readonly blocked: Uint8Array; readonly heights: Float64Array; readonly waters: Uint8Array;
-    readonly trees: readonly { x: number; z: number; scale: number }[] }
+    readonly trees: readonly { x: number; z: number; scale: number; baseHeight?: number }[] }
 const isWater = (tile: TileInfo) => tile.type === Land.sea || tile.type === Land.coastal || tile.modifiers?.includes("lake") || tile.modifiers?.includes("river");
+function interpolateHeight(chunk: TerrainChunk, gx: number, gz: number, ix: number, iz: number): number {
+    const fx = gx - ix, fz = gz - iz, a = iz * (EDGE + 1) + ix, h = chunk.heights;
+    return (h[a] * (1 - fx) + h[a + 1] * fx) * (1 - fz) + (h[a + EDGE + 1] * (1 - fx) + h[a + EDGE + 2] * fx) * fz;
+}
 
 /** Bounded CPU cache. Generation runs once per chunk; movement only reads masks and nearby trunks. */
 export class ProceduralCombatTerrain implements CombatTerrain {
@@ -29,8 +33,7 @@ export class ProceduralCombatTerrain implements CombatTerrain {
         const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), chunk = this.chunk(cx, cz);
         const gx = (x - cx * CHUNK) / CELL, gz = (z - cz * CHUNK) / CELL;
         const ix = Math.min(EDGE - 1, Math.floor(gx)), iz = Math.min(EDGE - 1, Math.floor(gz));
-        const fx = gx - ix, fz = gz - iz, a = iz * (EDGE + 1) + ix, h = chunk.heights;
-        return (h[a] * (1 - fx) + h[a + 1] * fx) * (1 - fz) + (h[a + EDGE + 1] * (1 - fx) + h[a + EDGE + 2] * fx) * fz;
+        return interpolateHeight(chunk, gx, gz, ix, iz);
     }
 
     public traceAttack(sx: number, sy: number, sz: number, ex: number, ey: number, ez: number, radius: number): number {
@@ -42,7 +45,7 @@ export class ProceduralCombatTerrain implements CombatTerrain {
                     const reach = radius + .2 * tree.scale;
                     if (tree.x < Math.min(sx, ex) - reach || tree.x > Math.max(sx, ex) + reach
                         || tree.z < Math.min(sz, ez) - reach || tree.z > Math.max(sz, ez) + reach) continue;
-                    const bottom = this.height(tree.x, tree.z);
+                    const bottom = tree.baseHeight ??= this.height(tree.x, tree.z);
                     first = Math.min(first, segmentCylinderHit(sx, sy, sz, ex, ey, ez, tree.x, tree.z, bottom - radius, bottom + 2.5 * tree.scale + radius, reach));
                 }
             }
@@ -65,10 +68,11 @@ export class ProceduralCombatTerrain implements CombatTerrain {
 
     private aboveGround(x: number, y: number, z: number, radius: number): boolean {
         const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK), c = this.chunk(cx, cz);
-        const ix = Math.min(EDGE - 1, Math.floor((x - cx * CHUNK) / CELL)), iz = Math.min(EDGE - 1, Math.floor((z - cz * CHUNK) / CELL));
+        const gx = (x - cx * CHUNK) / CELL, gz = (z - cz * CHUNK) / CELL;
+        const ix = Math.min(EDGE - 1, Math.floor(gx)), iz = Math.min(EDGE - 1, Math.floor(gz));
         const a = iz * (EDGE + 1) + ix;
         const water = c.waters[a] && c.waters[a + 1] && c.waters[a + EDGE + 1] && c.waters[a + EDGE + 2];
-        return Boolean(water) || y - radius > this.height(x, z);
+        return Boolean(water) || y - radius > interpolateHeight(c, gx, gz, ix, iz);
     }
 
     public isClear(x: number, z: number, radius: number): boolean {

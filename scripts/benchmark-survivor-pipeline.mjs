@@ -15,6 +15,8 @@ export { StatusSystem, StatusKind } from './apps/survivor/src/core/StatusSystem'
 export { BurnSystem } from './apps/survivor/src/core/BurnSystem';
 export { CombatSimulation } from './apps/survivor/src/core/CombatSimulation';
 export { ProceduralCombatTerrain } from './apps/survivor/src/adapters/ProceduralCombatTerrain';
+export { CombatWorld, Faction } from './apps/survivor/src/core/CombatWorld';
+export { AutoCombatThreats } from './apps/survivor/src/core/AutoCombatThreats';
 export { shareSnapshot } from './apps/survivor/src/app/ShareSnapshot';
 export { RenderFrame } from './apps/survivor/src/worker/RenderFrame';
 export { ENTITY_CAPACITY, MAX_ENEMIES } from './apps/survivor/src/core/GameConfig';`;
@@ -161,6 +163,32 @@ function replayBurns(r) {
 }
 assert.deepEqual(replayBurns(runtimes.current), replayBurns(runtimes.baseline), "Burn events, admission, removal or layer snapshots differ");
 replay.push({ scenario: "burns", targets: 32, ticks: 600, eventsAdmissionAndLayersEqual: true });
+function replayAvoidance(r) {
+    const scores = [];
+    for (const [x, z] of [[0, 0], [12.01, -12.01], [-12.01, 12.01]]) {
+        const terrain = new r.ProceduralCombatTerrain("rift-ember-1"), e = new r.CombatWorld(x, z, terrain);
+        try {
+            for (let i = 0; i < 64; i++) {
+                const angle = i * Math.PI / 32, dx = Math.sin(angle), dz = Math.cos(angle);
+                e.spawnProjectile(0, r.Faction.Enemy, x + dx * 6, z + dz * 6, -dx * 4.5, -dz * 4.5, 1, 2,
+                    { height: terrain.height(x + dx * 6, z + dz * 6) + (i % 3 ? .8 : 4), turnRate: i % 2 ? .65 : -.65 });
+            }
+            const threats = new r.AutoCombatThreats(e);
+            for (let pass = 0; pass < 2; pass++) {
+                threats.sense(pass + 1);
+                for (let direction = 0; direction < 16; direction++) for (const limit of [0, .4, Infinity]) {
+                    const angle = direction * Math.PI / 8;
+                    scores.push(threats.risk(Math.sin(angle), Math.cos(angle), 5, 6, .4, -.2, limit));
+                }
+                for (let i = e.hostileProjectiles.count - 1; i >= 0; i -= 2) e.remove(e.hostileProjectiles.slots[i]);
+                e.spawnProjectile(0, r.Faction.Enemy, x - 4, z + .4, 5, 0, 1, 2, { height: terrain.height(x, z) + .8 });
+            }
+        } finally { terrain.dispose(); }
+    }
+    return scores;
+}
+assert.deepEqual(replayAvoidance(runtimes.current), replayAvoidance(runtimes.baseline), "Avoidance risk differs");
+replay.push({ scenario: "avoidance", positions: 3, decisions: 288, curvedHeightClippedAndReusedScoresEqual: true });
 for (const scenario of ["open", "terrain", "automatic"]) {
     const seed = scenario === "open" ? "pipeline-replay" : "rift-ember-1";
     const ticks = scenario === "open" ? 1200 : 600;
