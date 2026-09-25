@@ -56,6 +56,7 @@ export interface RuntimePerformanceSnapshot extends FramePerformanceSnapshot {
     readonly pendingRequests: number;
     readonly executeMs: number | undefined;
     readonly queryWaitMs: number | undefined;
+    readonly generationYieldMs: number | undefined;
     readonly roundTripMs: number | undefined;
     readonly transportMs: number | undefined;
 }
@@ -89,11 +90,11 @@ export class FramePerformance {
         this.gpu.add(frame.gpuFrameMs);
     }
     public message(ms: number): void { this.messages.add(ms); }
-    public simulation(stats: Pick<CombatWorkerStats, "steps" | "simulationMs" | "queryWaitMs">): void {
+    public simulation(stats: Pick<CombatWorkerStats, "steps" | "simulationMs" | "queryWaitMs" | "simulationYieldMs">): void {
         if (stats.steps === 0) return;
         this.steps += stats.steps;
         this.simulationMs += stats.simulationMs;
-        this.simulationWaitMs += stats.queryWaitMs;
+        this.simulationWaitMs += stats.queryWaitMs + stats.simulationYieldMs;
     }
     public longFrame(duration: number, blocking: number, layout: number): void {
         this.longFrames++; this.longMax = Math.max(this.longMax, duration);

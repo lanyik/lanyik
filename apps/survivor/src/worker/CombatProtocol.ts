@@ -22,6 +22,7 @@ export interface CombatAdvance {
 export interface CombatWorkerStats {
     readonly steps: number;
     readonly simulationMs: number;
+    readonly simulationYieldMs: number;
     readonly queries: readonly WorkerActivitySnapshot[];
     readonly queryWorkers: number;
     readonly parallelBatches: number;
@@ -29,6 +30,7 @@ export interface CombatWorkerStats {
     readonly batchMs: number;
     readonly executeMs: number;
     readonly queryWaitMs: number;
+    readonly generationYieldMs: number;
     readonly frameBytes: number;
 }
 export interface CombatUpdate {

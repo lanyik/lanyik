@@ -95,6 +95,7 @@ flowchart TB
 - [游戏原始测量目录](game/measurements/)：各阶段的环境、原始样本与回放；文件名定位主题，当前适用范围以所属设计为准。
 - [战斗校准报告](game/measurements/combat-balance.json)、[管线对照](game/measurements/combat-pipeline-optimization.json)、[被动接入测量](game/measurements/utility-passive-skills.json)：数值、CPU 和 UI 是不同口径，不能互相代替。
 - [CPU 尾延迟记录](game/measurements/performance-tail-latency.json)、[首轮优化对照](game/measurements/performance-tail-optimization.json)：逐轮分位、峰值序号、超预算统计、独立阶段/GC 诊断及旧版回放对照；复现命令见测试策略，不作为浏览器帧率证明。
+- [玩法区块分批记录](game/measurements/regional-streaming.json)：提前准备前后 CPU 对照、异步切片/等待与确定性回放，保留 P99 和均值代价及冷启动限制。
 
 <a id="assets"></a>
 

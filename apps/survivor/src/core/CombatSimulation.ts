@@ -80,6 +80,7 @@ export class CombatSimulation {
     private readonly movingLoot = new Float64Array(GAME_CONFIG.combat.maxGroundEquipment);
     private movingLootCount = 0;
     private awaitingQueries = false;
+    private initialized = false;
     private movementX = 0;
     private movementZ = 0;
     private closed = false;
@@ -160,13 +161,14 @@ export class CombatSimulation {
     private readonly renderState: CombatRenderState;
 
     constructor(private readonly seed: string | number, private readonly start = { x: 0, z: 0 }, spiritRealm: SpiritRealm = EMPTY_SPIRIT_REALM,
-        terrain: CombatTerrain = OPEN_TERRAIN, private readonly location: WorldLocation = "wilds", private characterId = String(seed)) {
+        terrain: CombatTerrain = OPEN_TERRAIN, private readonly location: WorldLocation = "wilds", private characterId = String(seed),
+        private readonly yieldWorld?: () => Promise<void>) {
         validatePosition(start.x, start.z);
         this.wildsPosition = { ...start };
         const spirit = validateSpiritRealm(spiritRealm);
         for (const id of ATTRIBUTE_IDS) this.attributes[id] += spirit.attributes[id];
         this.random = new DeterministicRandom(`${String(seed)}:combat`);
-        this.world = new RegionalWorld(seed, start, terrain);
+        this.world = new RegionalWorld(seed, start, terrain, Boolean(yieldWorld));
         this.entities = new CombatWorld(start.x, start.z, terrain);
         this.playerRenderState.entitySlot = this.entities.player;
         this.resolution = new CombatResolution(this.entities);
@@ -187,12 +189,39 @@ export class CombatSimulation {
         this.stats = this.calculateStats();
         this.health = this.entities.vitals.maxHealth[this.entities.player] = this.stats.maxHealth;
         this.mana = this.stats.maxMana;
-        if (location === "wilds") {
+        this.initialized = !yieldWorld || location !== "wilds";
+        if (location === "wilds" && this.initialized) {
             this.exploration.discover(start.x, start.z);
             this.world.synchronize(start.x, start.z);
             this.world.updateAccess(start.x, start.z);
             this.spawnEnemies(); this.refreshChests();
         }
+    }
+
+    /** The Worker owns the instance before awaiting preparation, so disposal cancels pending generation. */
+    public async initialize(checkpoint?: CharacterCheckpoint): Promise<void> {
+        if (this.closed || this.awaitingQueries) throw new Error("Simulation is closed or awaiting required work");
+        const state = checkpoint && validateCharacterCheckpoint(checkpoint);
+        if (state && (state.seed !== String(this.seed) || state.location !== this.location
+            || state.origin.x !== this.start.x || state.origin.z !== this.start.z)) throw new Error("角色存档世界或位置无效");
+        this.awaitingQueries = true;
+        try {
+            if (this.yieldWorld && this.location === "wilds") {
+                const point = state?.player ?? this.start;
+                await this.world.prepareRequired(point.x, point.z, this.yieldWorld);
+                if (this.closed) throw new Error("Simulation closed during world preparation");
+            }
+            if (state) this.restoreState(state);
+            else if (!this.initialized) {
+                this.exploration.discover(this.start.x, this.start.z);
+                this.world.synchronize(this.start.x, this.start.z);
+                this.world.updateAccess(this.start.x, this.start.z);
+                this.spawnEnemies(); this.refreshChests();
+                this.cachedSnapshot = undefined;
+            }
+            this.initialized = true;
+        } catch (error) { this.dispose(); throw error; }
+        finally { this.awaitingQueries = false; }
     }
 
     public get tick(): number { return this.tickValue; }
@@ -201,7 +230,7 @@ export class CombatSimulation {
     public get explorationSnapshot() { return this.exploration.snapshot; }
     public get challengeRevision(): number { return this.challengeRevisionValue; }
     public checkpoint(destination: WorldLocation = this.location, point?: { x: number; z: number }, targetTerrain?: CombatTerrain, recoverDefeat = false): CharacterCheckpoint {
-        if ((this.gameOverValue && !recoverDefeat) || this.closed || this.awaitingQueries) throw new Error("当前角色状态不可保存");
+        if ((this.gameOverValue && !recoverDefeat) || this.closed || !this.initialized || this.awaitingQueries) throw new Error("当前角色状态不可保存");
         const { stats: _stats, skills: _skills, passiveBonuses: _passiveBonuses, battlePower: _power, equipmentPower: _equipmentPower, lootProfile: _loot, orbResonance: _resonance, experienceToLevel: _nextLevel, ...player } = this.getSnapshot().player;
         const wildsPosition = this.location === "wilds" ? { x: this.playerX, z: this.playerZ } : { ...this.wildsPosition };
         const travelling = destination !== this.location, skills = this.skills.checkpoint(this.tickValue);
@@ -235,6 +264,10 @@ export class CombatSimulation {
             skills: travelling || recovering ? { ...skills, dashUntil: 0, dashX: 0, dashZ: 0 } : skills });
     }
     public restore(checkpoint: CharacterCheckpoint): void {
+        if (this.closed || this.awaitingQueries || this.yieldWorld) throw new Error("Restore requires an idle immediate simulation; use initialize for scheduled loading");
+        this.restoreState(checkpoint);
+    }
+    private restoreState(checkpoint: CharacterCheckpoint): void {
         const state = validateCharacterCheckpoint(checkpoint), p = state.player;
         if (state.seed !== String(this.seed) || state.location !== this.location || state.origin.x !== this.start.x || state.origin.z !== this.start.z
             || !this.entities.terrain.isClear(p.x, p.z, GAME_CONFIG.combat.playerRadius)) throw new Error("角色存档世界或位置无效");
@@ -275,18 +308,36 @@ export class CombatSimulation {
     }
     public dispose(): void {
         this.closed = true; this.autoCombat.setEnabled(false); this.failedLoadoutReceipts.clear(); this.failedLoadoutContext = undefined;
+        this.world.dispose();
         this.entities.terrain.dispose();
     }
 
     public teleport(x: number, z: number): void {
+        if (this.yieldWorld) throw new Error("Scheduled simulations require asynchronous teleportation");
+        if (this.canTeleport(x, z)) this.commitTeleport(x, z);
+    }
+    public async teleportAsync(x: number, z: number): Promise<void> {
+        if (!this.canTeleport(x, z)) return;
+        this.awaitingQueries = true;
+        try {
+            if (this.yieldWorld && this.location === "wilds") await this.world.prepareRequired(x, z, this.yieldWorld);
+            if (this.closed) throw new Error("Simulation closed during teleport preparation");
+            this.commitTeleport(x, z);
+        } catch (error) { this.dispose(); throw error; }
+        finally { this.awaitingQueries = false; }
+    }
+    private canTeleport(x: number, z: number): boolean {
         validatePosition(x, z);
-        if (this.closed || this.awaitingQueries) throw new Error("Simulation is closed or awaiting required queries");
-        if (this.gameOverValue) return;
+        if (this.closed || !this.initialized || this.awaitingQueries) throw new Error("Simulation is closed or awaiting required work");
+        if (this.gameOverValue) return false;
         const error = this.location === "wilds" ? this.teleportError(x, z) : undefined;
-        if (error) { this.pushNotice("info", error); return; }
+        if (error) { this.pushNotice("info", error); return false; }
         if (!this.entities.terrain.isClear(x, z, GAME_CONFIG.combat.playerRadius)) {
-            this.pushNotice("info", "目标位置无法落脚，请选择平坦陆地"); return;
+            this.pushNotice("info", "目标位置无法落脚，请选择平坦陆地"); return false;
         }
+        return true;
+    }
+    private commitTeleport(x: number, z: number): void {
         if (this.location === "wilds") this.exploration.discover(x, z);
         if (this.location === "wilds" && this.world.regionAt(x, z).level > this.level) this.teleportReadyAt = this.tickValue + GAME_CONFIG.timing.simulationHz * 5;
         this.playerX = this.previousPlayerX = x; this.playerZ = this.previousPlayerZ = z;
@@ -304,7 +355,8 @@ export class CombatSimulation {
     public step(input: MovementInput): void;
     public step(input: MovementInput, executor: ProjectileExecutor): Promise<void>;
     public step(input: MovementInput, executor?: ProjectileExecutor): void | Promise<void> {
-        if (this.closed || this.awaitingQueries) throw new Error("Simulation is closed or awaiting required queries");
+        if (this.closed || !this.initialized || this.awaitingQueries) throw new Error("Simulation is closed or awaiting required queries");
+        if (this.yieldWorld && !executor) throw new Error("Scheduled simulations require an asynchronous step executor");
         if (!input || !Number.isFinite(input.x) || !Number.isFinite(input.z)) {
             throw new RangeError("Movement input must contain finite coordinates");
         }
@@ -334,6 +386,14 @@ export class CombatSimulation {
             if (this.tickValue % REGENERATION_TICKS === 0) this.mana = Math.min(this.stats.maxMana, this.mana + this.stats.manaRegen);
             return executor ? Promise.resolve() : undefined;
         }
+        if (executor) return this.finishAsyncStep(executor, input.active);
+        this.commitMovementWorld();
+        advanceProjectiles(this.entities);
+        this.finishStep(input.active);
+        this.prepareAhead();
+    }
+
+    private commitMovementWorld(): void {
         if (this.location === "wilds") {
             if (this.playerX !== this.previousPlayerX || this.playerZ !== this.previousPlayerZ) this.exploration.discover(this.playerX, this.playerZ);
             const shifted = this.world.synchronize(this.playerX, this.playerZ);
@@ -342,19 +402,27 @@ export class CombatSimulation {
             this.updateCurrentRegion();
         }
         this.fireWeapon();
-        if (executor) return this.finishAsyncStep(executor, input.active);
-        advanceProjectiles(this.entities);
-        this.finishStep(input.active);
+    }
+    private prepareAhead(): boolean {
+        return this.location === "wilds" && this.world.prepareAhead(this.playerX, this.playerZ,
+            this.playerX - this.previousPlayerX, this.playerZ - this.previousPlayerZ);
     }
 
     private async finishAsyncStep(executor: ProjectileExecutor, manualMovement: boolean): Promise<void> {
         this.awaitingQueries = true;
         try {
+            if (this.yieldWorld && this.location === "wilds") await this.world.prepareRequired(this.playerX, this.playerZ, this.yieldWorld);
+            if (this.closed) throw new Error("Simulation closed during world preparation");
+            this.commitMovementWorld();
             await advanceProjectiles(this.entities, executor);
             if (this.closed) throw new Error("Simulation closed during required queries");
             this.finishStep(manualMovement);
+            if (this.prepareAhead() && this.yieldWorld) {
+                await this.yieldWorld();
+                if (this.closed) throw new Error("Simulation closed during world preparation");
+            }
         } catch (error) {
-            this.closed = true;
+            this.dispose();
             throw error;
         } finally { this.awaitingQueries = false; }
     }

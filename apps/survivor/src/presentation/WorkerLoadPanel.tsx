@@ -37,6 +37,7 @@ export const WorkerLoadPanel = memo(function WorkerLoadPanel({ workers, performa
                 <div><dt>长帧阻塞 / 渲染尾段</dt><dd>{ms(perf?.blockingMaxMs)} / {ms(perf?.layoutMaxMs)}</dd></div>
                 <div><dt>最近模拟执行</dt><dd>{ms(perf?.executeMs)}</dd></div>
                 <div><dt>最近查询等待</dt><dd>{ms(perf?.queryWaitMs)}</dd></div>
+                <div><dt>最近区块让出</dt><dd>{ms(perf?.generationYieldMs)}</dd></div>
                 <div><dt>最近通信 / 调度</dt><dd>{ms(perf?.transportMs)}</dd></div>
                 <div><dt>最近完整往返</dt><dd>{ms(perf?.roundTripMs)}</dd></div>
                 <div><dt>在途批次 / 积压 tick</dt><dd>{perf ? `${perf.pendingRequests} / ${perf.pendingSteps}` : "—"}</dd></div>

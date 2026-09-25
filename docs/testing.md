@@ -34,6 +34,7 @@ Worker mocks are scoped to their own suite and restored after each test.
 Browser combat fixtures advance through the session's normal in-flight barrier;
 they do not bypass it with direct transport calls, which could race an automatic
 save during slow screenshots. Production Worker entry points expose no fixture state.
+Pause continuous simulation before awaiting quiescence for a scripted teleport.
 The assembled HUD/resource journey uses the test Worker's damage-immunity fixture so
 software-rendered layout checks cannot kill its actor before keyboard assertions.
 Combat death and automatic-combat shutdown remain separate gameplay/Worker checks.
@@ -151,6 +152,21 @@ records one machine and artificial pressure workloads, not a full-capacity brows
 For a same-harness comparison, `--runtime-ref=<commit-hash>` bundles the committed
 TypeScript runtime through Git reads; installed dependencies and built library inputs
 stay the same. The report identifies that runtime separately from the benchmark source.
+
+Gameplay streaming CPU samples include one prefetch job per moving tick in the
+explicit immediate runner. Cache growth now occurs before residency changes and
+may include a window not reached by the end of a replay; compare authoritative
+state separately from these intentionally changed cache counters. Preparation is
+included in the independent stage profile, not hidden as untimed setup.
+`node --expose-gc scripts/benchmark-survivor-streaming.mjs <output.json>` additionally
+runs the scheduled path through real Node MessageChannel tasks: one warmup and five
+rounds of startup, 600 travel/automatic ticks and far teleport. It retains wall time,
+yield wait and uninterrupted slice timings, and compares checkpoints/RNG, snapshots,
+entity arrays and regional layouts with the immediate runner outside timed operations.
+Slice timing is diagnostic instrumentation; startup includes construction and the
+teleport destination is validated before measurement. It does not establish browser
+input latency. The [regional streaming record](game/measurements/regional-streaming.json)
+also retains the same-harness pre-change comparison and historical runtime replay.
 
 The query benchmark includes candidate preparation, copy, transfer and join costs,
 with the stationary index built before timing. It measures real Node threads, not

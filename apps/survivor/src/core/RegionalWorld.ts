@@ -90,9 +90,70 @@ export class RegionalWorld {
     private centerZ = Infinity;
     private accessCell = "";
     private topologyChanged = true;
+    private readonly prepared = new Map<string, RegionalChunk>();
+    private pending: { x: number; z: number; key: string }[] = [];
+    private pendingIndex = 0;
+    private preparationX = Infinity;
+    private preparationZ = Infinity;
+    private preparing = false;
+    private closed = false;
 
     constructor(private readonly seed: string | number, private readonly origin: { readonly x: number; readonly z: number },
-        private readonly terrain: CombatTerrain = OPEN_TERRAIN) {}
+        private readonly terrain: CombatTerrain = OPEN_TERRAIN, private readonly scheduled = false) {}
+    public get preparation() { return { pending: this.pending.length - this.pendingIndex, prepared: this.prepared.size }; }
+
+    /** Required generation waits without advancing gameplay or publishing a partial resident window. */
+    public async prepareRequired(x: number, z: number, yieldTask: () => Promise<void>): Promise<void> {
+        if (this.closed || this.preparing) throw new Error("Regional preparation is closed or already running");
+        const cx = Math.floor((x - this.origin.x + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE);
+        const cz = Math.floor((z - this.origin.z + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE);
+        if (cx === this.centerX && cz === this.centerZ) return;
+        this.preparing = true;
+        try {
+            this.selectPreparation(cx, cz);
+            while (this.prepareNext()) {
+                await yieldTask();
+                if (this.closed) throw new Error("Regional preparation closed while yielding");
+            }
+        } finally { this.preparing = false; }
+    }
+
+    /** Prepare at most one chunk per tick for the nearest boundary in the actual direction of travel. */
+    public prepareAhead(x: number, z: number, dx: number, dz: number): boolean {
+        if (this.closed || this.preparing) throw new Error("Regional preparation is closed or already running");
+        if (!dx && !dz) return false;
+        const lx = x - this.origin.x - this.centerX * COMBAT_CHUNK_SIZE, lz = z - this.origin.z - this.centerZ * COMBAT_CHUNK_SIZE;
+        const cx = this.centerX + (Math.abs(lx) >= COMBAT_CHUNK_SIZE / 4 && lx * dx > 0 ? Math.sign(lx) : 0);
+        const cz = this.centerZ + (Math.abs(lz) >= COMBAT_CHUNK_SIZE / 4 && lz * dz > 0 ? Math.sign(lz) : 0);
+        this.selectPreparation(cx, cz);
+        return this.prepareNext();
+    }
+
+    private selectPreparation(cx: number, cz: number): void {
+        if (cx === this.preparationX && cz === this.preparationZ) return;
+        this.preparationX = cx; this.preparationZ = cz; this.pending = []; this.pendingIndex = 0;
+        for (const [key, chunk] of this.prepared) if (Math.max(Math.abs(chunk.x - cx), Math.abs(chunk.z - cz)) > RETAINED_CHUNK_RADIUS
+            || this.chunks.has(key)) this.prepared.delete(key);
+        for (let ring = 0; ring <= RETAINED_CHUNK_RADIUS; ring++) {
+            for (let dx = -ring; dx <= ring; dx++) for (let dz = -ring; dz <= ring; dz++) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
+                const key = `${cx + dx},${cz + dz}`;
+                if (!this.chunks.has(key) && !this.prepared.has(key)) this.pending.push({ x: cx + dx, z: cz + dz, key });
+            }
+        }
+    }
+    private prepareNext(): boolean {
+        if (this.pendingIndex === this.pending.length) return false;
+        const next = this.pending[this.pendingIndex], chunk = this.createChunk(next.x, next.z);
+        chunk.resident = false; chunk.band = "unloaded";
+        this.prepared.set(next.key, chunk); this.pendingIndex++;
+        return true;
+    }
+    public dispose(): void {
+        this.closed = true;
+        for (const chunk of this.chunks.values()) chunk.resident = false;
+        this.chunks.clear(); this.prepared.clear(); this.pending = []; this.pendingIndex = 0;
+    }
     public chunkX(x: number): number { return this.origin.x - COMBAT_CHUNK_HALF_SIZE + x * COMBAT_CHUNK_SIZE; }
     public chunkZ(z: number): number { return this.origin.z - COMBAT_CHUNK_HALF_SIZE + z * COMBAT_CHUNK_SIZE; }
 
@@ -154,9 +215,14 @@ export class RegionalWorld {
             : distance <= RETAINED_CHUNK_RADIUS ? "retained" : "unloaded";
     }
     public synchronize(x: number, z: number): boolean {
+        if (this.closed || this.preparing) throw new Error("Regional world is closed or preparing");
         const cx = Math.floor((x - this.origin.x + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE);
         const cz = Math.floor((z - this.origin.z + COMBAT_CHUNK_HALF_SIZE) / COMBAT_CHUNK_SIZE);
         if (cx === this.centerX && cz === this.centerZ) return false;
+        this.selectPreparation(cx, cz);
+        if (this.scheduled && this.pendingIndex < this.pending.length) throw new Error("Required regional chunks have not been prepared");
+        // Immediate simulations explicitly drain the same jobs for deterministic offline tests.
+        while (this.prepareNext()) { /* no event loop in the immediate runner */ }
         this.centerX = cx;
         this.centerZ = cz;
         this.topologyChanged = true;
@@ -168,9 +234,16 @@ export class RegionalWorld {
             for (let dx = -ring; dx <= ring; dx += 1) for (let dz = -ring; dz <= ring; dz += 1) {
                 if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
                 const key = `${cx + dx},${cz + dz}`;
-                if (!this.chunks.has(key)) this.chunks.set(key, this.createChunk(cx + dx, cz + dz));
+                if (!this.chunks.has(key)) {
+                    const chunk = this.prepared.get(key)!;
+                    chunk.resident = true;
+                    chunk.band = this.residencyAt(this.chunkX(chunk.x) + COMBAT_CHUNK_HALF_SIZE, this.chunkZ(chunk.z) + COMBAT_CHUNK_HALF_SIZE);
+                    this.chunks.set(key, chunk);
+                }
             }
         }
+        this.prepared.clear(); this.pending = []; this.pendingIndex = 0;
+        this.preparationX = this.preparationZ = Infinity;
         return true;
     }
 

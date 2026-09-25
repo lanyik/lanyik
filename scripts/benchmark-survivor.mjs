@@ -224,6 +224,8 @@ function terrainCombat(automatic = false, createProbe) {
     probe?.attach(simulation.autoCombat, "update", "autoDecision");
     probe?.attach(simulation.world, "synchronize", "worldResidency");
     probe?.attach(simulation.world, "createChunk", "worldChunkConstruction");
+    // Committed baselines before regional streaming have no preparation stage.
+    if (simulation.world.prepareAhead) probe?.attach(simulation.world, "prepareAhead", "worldPreparation");
     probe?.attach(simulation.world, "updateAccess", "encounterAccess");
     probe?.attach(simulation, "reconcileRegions", "reconcileRegions");
     probe?.attach(simulation, "spawnEnemies", "spawnEnemies");

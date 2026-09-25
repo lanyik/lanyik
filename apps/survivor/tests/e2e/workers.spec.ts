@@ -75,6 +75,7 @@ test("reports each worker's load, decays paused samples and fits the narrow HUD"
     const performance = await page.evaluate(() => window.survivorApplication!.session.getSnapshot().performance!);
     expect(performance.frameP95Ms).toBeGreaterThan(0); expect(performance.mainMs).toBeGreaterThan(0);
     expect(performance.queryWaitMs).toBeGreaterThanOrEqual(0);
+    expect(performance.generationYieldMs).toBeGreaterThanOrEqual(0);
     await expect(monitor.locator("[data-worker]")).toHaveCount(5);
     await expect.poll(() => monitor.locator("[data-worker]").evaluateAll(rows => rows.every(row =>
         Number(row.getAttribute("data-completed")) > 0 && row.querySelector(".worker-load-time")!.textContent!.includes("ms")))).toBe(true);

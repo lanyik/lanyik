@@ -135,6 +135,8 @@ test("home uses downloaded buildings, coastal sea, manual spells and a selectabl
     await page.screenshot({ path: info.outputPath("world-travel.png") });
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0); await expect(page.locator(".survivor")).toHaveAttribute("data-paused", "false");
+    // settled waits for quiescence; ongoing RAF ticks can keep that barrier busy under software rendering.
+    await pauseCombat(page);
     await page.evaluate(async () => {
         const session = window.survivorApplication!.session;
         session.dispatch({ type: "teleport", x: 3, z: 55 }); await session.settled;

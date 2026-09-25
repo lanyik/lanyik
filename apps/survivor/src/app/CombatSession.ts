@@ -259,7 +259,7 @@ export class CombatSession {
             snapshotAgeMs: Math.max(0, now - this.frameReceivedAt), inputLatencyMs: this.inputFeedback.latencyMs,
             running: !this.paused && !this.gameOver, pendingSteps: this.pendingSteps, droppedSteps: this.droppedSteps,
             clockClampedMs: this.clockClampedMs,
-            pendingRequests: Number(Boolean(this.inFlight)), executeMs: simulation?.executeMs, queryWaitMs: simulation?.queryWaitMs,
+            pendingRequests: Number(Boolean(this.inFlight)), executeMs: simulation?.executeMs, queryWaitMs: simulation?.queryWaitMs, generationYieldMs: simulation?.generationYieldMs,
             roundTripMs: stats.completed ? stats.roundTripMs : undefined,
             transportMs: simulation ? Math.max(0, stats.roundTripMs - simulation.batchMs) : undefined });
         this.sampleWorkerLoad(now); this.publish();
