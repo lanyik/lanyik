@@ -53,6 +53,7 @@ Multiple changed boundaries require the union of their checks.
 |---|---|
 | Documentation, links, navigation only | Documentation gate; manually compare changed behavior descriptions with code |
 | Documentation checker | `npm test -- tests/helpers/documentation.test.js` plus the documentation gate against this repository |
+| Benchmark sampling, statistics or diagnosis only | Focused benchmark-helper tests and the affected real benchmark scenarios; check every round and instrumented/uninstrumented workload counters |
 | Test organization or application export visibility only, without runtime behavior changes | Affected unit suite(s), corresponding typecheck; app export changes also build the app |
 | Library algorithms or public types | `npm test`, `npm run typecheck`, `npm run build`; public exports/package changes also `npm run check:package-boundaries:built` |
 | Pure gameplay rules, settlement, status, inventory or saves | `npm run test:app`, app typecheck/build; also the relevant browser flows if a published state, command, schema or UI contract changes |
@@ -121,6 +122,32 @@ the complete route with actual hit settlement; crowded input discards hits so al
 targets remain available. Neither establishes starter-character survival or GPU
 frame rate. Exact scene construction and budgets belong to
 [simulation and AI](game/simulation-and-ai.md) and [terrain navigation](game/terrain-navigation.md).
+
+`npm run benchmark:app` retains latency statistics for all five rounds: nearest-rank
+P50/P95/P99, maximum, worst 1-based sample ordinals, over-budget count/fraction, longest
+consecutive run and cumulative excess. Pooled percentiles use all operations;
+consecutive runs never cross round boundaries. Fixed timing buffers are allocated
+before each loop; setup, resets, assertions and report construction are excluded.
+Cold fixture operations remain measured, with construction time reported separately
+where applicable. This operation-only mean is not a before/after speedup against old
+reports that included loop bookkeeping.
+
+The existing mean-budget gate remains enforced. Per-operation overruns against that
+budget and the simulation tick period are observations, not newly calibrated CI limits.
+Maximum and sample identity matter when synchronized events occupy less than 1% of
+ticks; a low P99 alone does not establish smooth execution.
+
+For focused diagnosis, run
+`node --expose-gc scripts/benchmark-survivor.mjs --check --scenarios=fireEffects,autoAvoidance,terrain,autoCombat --profile --output=report.json`.
+Omit `--scenarios` for the full suite. Output contains the source commit, benchmark
+source hashes and runtime bundle hash. Stage probes run in separate repeated fixtures
+after ordinary samples, time synchronous inclusive/self cost and count calls, and
+record bounded GC events overlapping measured operations. Nested inclusive costs
+must not be added together; probe overhead and GC correlation are not causal or FPS
+claims. Workload counters must match the corresponding uninstrumented fixtures.
+Profiles are limited to those four scenarios; no timers or hooks enter the production
+simulation, Worker protocol or UI. The committed [tail-latency sample](game/measurements/performance-tail-latency.json)
+records one machine and artificial pressure workloads, not a full-capacity browser guarantee.
 
 The query benchmark includes candidate preparation, copy, transfer and join costs,
 with the stationary index built before timing. It measures real Node threads, not
