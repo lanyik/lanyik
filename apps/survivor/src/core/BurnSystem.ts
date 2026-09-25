@@ -27,6 +27,7 @@ export class BurnSystem {
     private readonly dueGroups: Uint8Array;
     private readonly dirty: Uint8Array;
     private readonly dirtySlots: Uint32Array;
+    private readonly applicationSources = new Float64Array(BURN_SOURCES);
     private count = 0;
     private freeCount: number;
     private nextEvent = Infinity;
@@ -54,21 +55,31 @@ export class BurnSystem {
             || !Number.isInteger(limit) || limit < 1 || limit > BURN_LAYERS) throw new RangeError("Invalid burn application");
         const slot = this.world.resolve(target);
         if (slot < 0) return false;
-        let own = 0, weakest = -1, groups = 0;
+        let own = 0, weakest = -1, weakestRemaining = Infinity;
         for (let i = this.head[slot]; i >= 0; i = this.next[i]) {
             if (this.source[i] === source) {
                 own++;
-                if (weakest < 0 || this.remaining(i) < this.remaining(weakest)
-                    || this.remaining(i) === this.remaining(weakest) && (this.expires[i] < this.expires[weakest]
-                        || this.expires[i] === this.expires[weakest] && i < weakest)) weakest = i;
+                const remaining = this.remaining(i);
+                if (weakest < 0 || remaining < weakestRemaining
+                    || remaining === weakestRemaining && (this.expires[i] < this.expires[weakest]
+                        || this.expires[i] === this.expires[weakest] && i < weakest)) {
+                    weakest = i; weakestRemaining = remaining;
+                }
             }
-            let first = true;
-            for (let j = this.head[slot]; j !== i; j = this.next[j]) if (this.source[j] === this.source[i]) { first = false; break; }
-            if (first) groups++;
         }
-        if (own === 0 && groups >= BURN_SOURCES) return false;
+        // Existing sources cannot exceed the source cap. Only a new source needs this bounded distinct scan.
+        if (own === 0) {
+            let groups = 0;
+            for (let i = this.head[slot]; i >= 0; i = this.next[i]) {
+                let group = 0;
+                while (group < groups && this.applicationSources[group] !== this.source[i]) group++;
+                if (group < groups) continue;
+                if (++groups === BURN_SOURCES) return false;
+                this.applicationSources[group] = this.source[i];
+            }
+        }
         if (own >= limit) {
-            if (damage * Math.floor(duration / BURN_INTERVAL) < this.remaining(weakest)) return false;
+            if (damage * Math.floor(duration / BURN_INTERVAL) < weakestRemaining) return false;
             this.erase(weakest, slot);
         }
         if (this.freeCount === 0) return false;

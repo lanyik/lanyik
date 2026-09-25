@@ -39,9 +39,22 @@ test("four sources and eight layers are bounded, consumption is source-specific,
     expect(hit.mock.calls.map(args => args[2])).toEqual([24, 24, 24, 24]);
     expect(burns.consume(source, target)).toBe(168); expect(burns.stacks[slot]).toBe(24);
     expect(burns.consume(source, target)).toBe(0);
+    expect(burns.apply(15, target, 3, 60, 480, 8)).toBe(true); // The removed source releases capacity for a new one.
+    expect(burns.apply(16, target, 3, 60, 480, 8)).toBe(false);
     burns.clear(slot); world.destroy(target); world.create(1);
     expect(burns.apply(source, target, 3, 60, 480)).toBe(false);
     burns.advance(600, hit); expect(hit).toHaveBeenCalledTimes(4);
+});
+
+test("interleaved source layers retain ordered sums after removal and replacement", () => {
+    const { slot, target, burns } = fixture(), hit = vi.fn();
+    for (let layer = 0; layer < 8; layer++) for (const source of [4, 2, 1, 3]) burns.apply(source, target, source, 0, 120, 8);
+    expect(burns.consume(2, target)).toBe(32);
+    burns.apply(5, target, 10, 0, 120, 8);
+    burns.apply(1, target, 2, 0, 120, 8); // Replace one of eight equally weak layers.
+    burns.advance(120, hit);
+    expect(hit.mock.calls).toEqual([60, 120].flatMap(tick => [[1, target, 9, tick], [3, target, 24, tick], [4, target, 32, tick], [5, target, 10, tick]]));
+    expect(burns.stacks[slot]).toBe(0);
 });
 
 test("same-tick expiry captures hits before removals, then orders by full target and source handles", () => {

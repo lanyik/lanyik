@@ -136,6 +136,31 @@ results.render = render(runtimes.current);
 }
 // Compare independent builds, including RNG checkpoints, entity arrays and regional layouts.
 const replay = [];
+function replayBurns(r) {
+    const world = new r.EntityWorld(32), burns = new r.BurnSystem(world), history = [];
+    const slots = Array.from({ length: 32 }, () => world.create(1));
+    for (let layer = 0; layer < 8; layer++) for (const source of [4, 2, 1, 3]) for (const slot of slots) {
+        burns.apply(source, world.ids[slot], layer + source, 0, 180 + layer * 7, 8);
+    }
+    for (let tick = 1; tick <= 600; tick++) {
+        burns.advance(tick, (source, target, amount, at) => {
+            history.push([source, target, amount, at]);
+            if (source === 1 && at % 120 === 0) history.push(burns.apply(5, target, 2, at, 120));
+        });
+        const slot = tick % slots.length, target = world.ids[slot];
+        if (tick % 7 === 0) history.push(burns.apply(1 + tick % 5, target, 1 + tick % 11, tick, 120 + tick % 61, 1 + tick % 8));
+        if (tick % 31 === 0) history.push(burns.consume(1 + tick % 5, target));
+        if (tick % 47 === 0) history.push(burns.cleanseOne(slot, tick));
+        if (tick % 101 === 0) {
+            burns.clear(slot); world.destroy(target);
+            const reused = world.create(1); burns.apply(7, world.ids[reused], 3, tick, 120);
+        }
+        if (tick % 60 === 0) history.push(slots.map(s => burns.save(s, tick)));
+    }
+    return history;
+}
+assert.deepEqual(replayBurns(runtimes.current), replayBurns(runtimes.baseline), "Burn events, admission, removal or layer snapshots differ");
+replay.push({ scenario: "burns", targets: 32, ticks: 600, eventsAdmissionAndLayersEqual: true });
 for (const scenario of ["open", "terrain", "automatic"]) {
     const seed = scenario === "open" ? "pipeline-replay" : "rift-ember-1";
     const ticks = scenario === "open" ? 1200 : 600;
