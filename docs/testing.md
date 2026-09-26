@@ -134,6 +134,13 @@ targets remain available. Neither establishes starter-character survival or GPU
 frame rate. Exact scene construction and budgets belong to
 [simulation and AI](game/simulation-and-ai.md) and [terrain navigation](game/terrain-navigation.md).
 
+`enemyNavigation` and `enemyCrowd` additionally measure eight actors escaping a
+concave wall and approaching from one side of the player. They disable attacks,
+retain real behavior/movement, and report arrivals, overlap pairs and spacing
+outside the timed operation. Stationary actor-ticks include intentional waiting
+at a destination and are not solely terrain stalls. Gameplay changes compare
+these outcomes separately from CPU cost; they do not require old combat RNG to match.
+
 `npm run benchmark:app` retains latency statistics for all five rounds: nearest-rank
 P50/P95/P99, maximum, worst 1-based sample ordinals, over-budget count/fraction, longest
 consecutive run and cumulative excess. Pooled percentiles use all operations;
@@ -162,6 +169,8 @@ records one machine and artificial pressure workloads, not a full-capacity brows
 For a same-harness comparison, `--runtime-ref=<commit-hash>` bundles the committed
 TypeScript runtime through Git reads; installed dependencies and built library inputs
 stay the same. The report identifies that runtime separately from the benchmark source.
+Relative TypeScript imports resolve against that Git tree, including files renamed
+or removed in the current worktree.
 
 Gameplay streaming CPU samples include one prefetch job per moving tick in the
 explicit immediate runner. Cache growth now occurs before residency changes and

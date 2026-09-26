@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { relative } from "node:path";
+import { relative, resolve } from "node:path";
 import { BenchmarkProbe, latencyOverruns, summarizeLatencies, summarizeLatencyRounds } from "./lib/benchmark-latency.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -25,6 +25,8 @@ if (runtimeRef && !/^[a-f0-9]{7,40}$/.test(runtimeRef)) throw new Error("--runti
 const bundle = await build({ stdin: { contents: `
     export { CombatSimulation } from './apps/survivor/src/core/CombatSimulation';
     export { CombatWorld, Faction, ActorAction } from './apps/survivor/src/core/CombatWorld';
+    export { OPEN_TERRAIN } from './apps/survivor/src/core/CombatTerrain';
+    export { SurfaceMotion } from './apps/survivor/src/core/SurfaceMotion';
     export { FrostCasting } from './apps/survivor/src/core/FrostCasting';
     export { FireCasting } from './apps/survivor/src/core/FireCasting';
     export { LightningCasting } from './apps/survivor/src/core/LightningCasting';
@@ -52,6 +54,12 @@ const bundle = await build({ stdin: { contents: `
     export { ProceduralCombatTerrain } from './apps/survivor/src/adapters/ProceduralCombatTerrain';
 `, resolveDir: root }, bundle: true, write: false, platform: "node", format: "esm",
     plugins: runtimeRef ? [{ name: "committed-runtime", setup(builder) {
+        const sources = new Set(execFileSync("git", ["ls-tree", "-r", "--name-only", runtimeRef], { cwd: root, encoding: "utf8" }).split("\n"));
+        // Resolve from the selected tree, including source files renamed/deleted in the worktree.
+        builder.onResolve({ filter: /^\./ }, args => {
+            const path = resolve(args.resolveDir, args.path);
+            for (const suffix of [".ts", "/index.ts"]) if (sources.has(relative(root, path + suffix).replaceAll("\\", "/"))) return { path: path + suffix };
+        });
         builder.onLoad({ filter: /\.ts$/ }, ({ path }) => ({ contents: execFileSync("git", ["show", `${runtimeRef}:${relative(root, path).replaceAll("\\", "/")}`],
             { cwd: root, encoding: "utf8", maxBuffer: 8e6 }), loader: "ts" }));
     } }] : [] });
@@ -387,12 +395,56 @@ function autoSearch() {
     return { timings, decisions: 120, enemies: current.MAX_ENEMIES, searchRadius: 48 };
 }
 
+function enemyLocomotion(obstructed) {
+    const rectangles = [[2, 3, -4, 4], [-2, 3, -4, -3.5], [-2, 3, 3.5, 4]];
+    const contact = (x, z, r) => {
+        for (const [left, right, top, bottom] of rectangles) {
+            if (x <= left - r || x >= right + r || z <= top - r || z >= bottom + r) continue;
+            const gaps = [x - left + r, right + r - x, z - top + r, bottom + r - z];
+            const side = gaps.indexOf(Math.min(...gaps));
+            return { x: side === 0 ? -1 : side === 1 ? 1 : 0, z: side === 2 ? -1 : side === 3 ? 1 : 0, round: false };
+        }
+    };
+    const motion = new current.SurfaceMotion(contact);
+    const terrain = obstructed ? { ...current.OPEN_TERRAIN, isClear: (x, z, r) => !contact(x, z, r), move: motion.move.bind(motion) } : current.OPEN_TERRAIN;
+    const e = new current.CombatWorld(obstructed ? 6 : 0, 0, terrain);
+    const region = new current.RegionalWorld("enemy-locomotion", { x: 0, z: 0 }).regionAt(0, 0);
+    const slots = Array.from({ length: 8 }, (_, i) => e.spawnEnemy({
+        x: obstructed ? -(i % 2) * .65 : -3 - i * .15, z: obstructed ? (Math.floor(i / 2) - 1.5) * .65 : (i % 3 - 1) * .2,
+        kind: 0, boss: false, elite: false, level: 1, region
+    }, { resident: true }));
+    // No attacks: isolate routing/occupancy, retaining real behavior decisions and terrain movement.
+    for (const slot of slots) e.action.readyAt[slot] = Infinity;
+    const behavior = new current.EnemyBehavior(e, { residencyAt: () => "near" });
+    const ticks = obstructed ? 4800 : 2400, timings = new Float64Array(ticks), arrivedAt = new Uint32Array(slots.length);
+    let blockedActorTicks = 0, minimumX = 0;
+    for (let tick = 1; tick <= ticks; tick++) {
+        const start = performance.now(); behavior.update(tick); current.moveEnemies(e, tick); timings[tick - 1] = performance.now() - start;
+        for (let i = 0; i < slots.length; i++) {
+            const slot = slots[i], x = e.position.x[slot], z = e.position.z[slot];
+            assert.ok(terrain.isClear(x, z, e.position.radius[slot]), "Locomotion cannot penetrate terrain");
+            if (obstructed && x > 3.4 && Math.hypot(x - 6, z) < 3 && !arrivedAt[i]) arrivedAt[i] = tick;
+            if (Math.hypot(x - e.position.previousX[slot], z - e.position.previousZ[slot]) < 1e-5) blockedActorTicks++;
+            minimumX = Math.min(minimumX, x);
+        }
+    }
+    let overlaps = 0, minimumSeparation = Infinity;
+    for (let i = 0; i < slots.length; i++) for (let j = i + 1; j < slots.length; j++) {
+        const a = slots[i], b = slots[j], distance = Math.hypot(e.position.x[a] - e.position.x[b], e.position.z[a] - e.position.z[b]);
+        minimumSeparation = Math.min(minimumSeparation, distance);
+        if (distance < e.position.radius[a] + e.position.radius[b] - .05) overlaps++;
+    }
+    return { timings, ticks, enemies: slots.length, blockedActorTicks, minimumX, arrived: Array.from(arrivedAt), overlaps, minimumSeparation,
+        inAttackRange: slots.filter(slot => Math.hypot(e.position.x[slot] - e.position.x[e.player], e.position.z[slot]) <= e.action.reach[slot]).length };
+}
+
 const scenarios = {
     travel: [() => travel(current), .5, "Tick"], crowded: [crowded, 3, "Tick"], iceEffects: [iceEffects, 3, "Tick"],
     fireEffects: [fireEffects, 3, "Tick"], lightningEffects: [lightningEffects, 3, "Tick"], starEffects: [starEffects, 3, "Tick"],
     terrain: [probe => terrainCombat(false, probe), 3, "Tick"], autoCombat: [probe => terrainCombat(true, probe), 3, "Tick"],
     autoAvoidance: [autoAvoidance, 3, "Decision"], autoSearch: [autoSearch, 3, "Decision"], autoLoadout: [() => autoLoadout(), 3, "Decision"],
-    passiveLoadout: [() => autoLoadout(true), 3, "Decision"], passivePickup: [passivePickup, 1, "Decision"]
+    passiveLoadout: [() => autoLoadout(true), 3, "Decision"], passivePickup: [passivePickup, 1, "Decision"],
+    enemyNavigation: [() => enemyLocomotion(true), .5, "Tick"], enemyCrowd: [() => enemyLocomotion(false), .5, "Tick"]
 };
 const selected = args.find(arg => arg.startsWith("--scenarios="))?.slice("--scenarios=".length).split(",") ?? Object.keys(scenarios);
 if (selected.some(name => !Object.hasOwn(scenarios, name)) || new Set(selected).size !== selected.length) throw new Error("Unknown or repeated benchmark scenario");

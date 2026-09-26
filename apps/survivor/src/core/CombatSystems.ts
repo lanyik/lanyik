@@ -77,12 +77,21 @@ function commitProjectiles(entities: CombatWorld): void {
 }
 
 export function moveEnemies(entities: CombatWorld, tick: number): void {
-    const { enemies, enemy: e, position: p, action: a, world, player, status } = entities;
+    const { enemies, enemy: e, position: p, action: a, world, player, status, navigation, crowd } = entities;
+    navigation.advance(tick); crowd.begin();
     for (let cursor = 0; cursor < enemies.count; cursor++) {
         const slot = enemies.slots[cursor], intent = e.intent[slot];
-        if (intent === MoveIntent.None || !status.canMove(slot, tick)) continue;
+        if (!status.canMove(slot, tick)) { navigation.clear(slot); crowd.clear(slot); continue; }
+        crowd.sense(slot, tick);
+        if (intent === MoveIntent.None) { navigation.clear(slot); continue; }
+        const route = navigation.steer(slot, tick);
+        if (route === 2) { a.kind[slot] = ActorAction.Idle; continue; }
+        const occupying = route === 0 && crowd.destination(slot);
         let dx = (intent === MoveIntent.Patrol ? e.patrolX[slot] : intent === MoveIntent.Return ? e.homeX[slot] : p.x[player]) - p.x[slot];
         let dz = (intent === MoveIntent.Patrol ? e.patrolZ[slot] : intent === MoveIntent.Return ? e.homeZ[slot] : p.z[player]) - p.z[slot];
+        if (route === 1 || occupying) {
+            dx = (route === 1 ? navigation.x : crowd.x) - p.x[slot]; dz = (route === 1 ? navigation.z : crowd.z) - p.z[slot];
+        }
         const distance = Math.hypot(dx, dz);
         if (distance === 0 && intent !== MoveIntent.Retreat) continue;
         if (distance === 0) { dx = Math.sin(world.ids[slot]); dz = Math.cos(world.ids[slot]); }
@@ -90,7 +99,8 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
         if (intent === MoveIntent.Retreat) { dx = -dx; dz = -dz; }
         const speed = e.speed[slot] * (intent === MoveIntent.Patrol ? GAME_CONFIG.enemies.patrolSpeed : 1)
             * (tick < status.slowUntil[slot] ? status.slowScale[slot] : 1);
-        const stop = intent === MoveIntent.Chase || intent === MoveIntent.Flank ? a.reach[slot] * .9 : 0;
+        let stop = route === 1 || occupying ? 0 : intent === MoveIntent.Chase || intent === MoveIntent.Flank ? a.reach[slot] * .9 : 0;
+        if (stop && distance <= stop + .01 && !entities.canSee(slot, player)) stop = 0;
         if (intent === MoveIntent.Circle) {
             const preferred = ENEMY_DEFINITIONS[e.kind[slot]].ranged ? a.reach[slot] * .8 : 1.8;
             const direction = world.ids[slot] % 2 ? 1 : -1, radial = Math.max(-.5, Math.min(.5, distance - preferred));
@@ -100,12 +110,14 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
         }
         const travel = intent === MoveIntent.Retreat || intent === MoveIntent.Circle ? speed * SECONDS
             : Math.min(Math.max(0, distance - stop), speed * SECONDS);
-        const weave = intent === MoveIntent.Flank ? (world.ids[slot] % 2 ? .4 : -.4) : 0;
+        const weave = intent === MoveIntent.Flank && !route && !occupying ? (world.ids[slot] % 2 ? .4 : -.4) : 0;
         const scale = travel / Math.sqrt(1 + weave * weave);
         const startX = p.x[slot], startZ = p.z[slot];
-        let moved = entities.moveActor(slot, (dx - dz * weave) * scale, (dz + dx * weave) * scale);
+        crowd.steer(slot, (dx - dz * weave) * scale, (dz + dx * weave) * scale, speed * SECONDS);
+        const requestedX = crowd.x, requestedZ = crowd.z;
+        let moved = entities.moveActor(slot, requestedX, requestedZ);
         // Bounded local steering around trunks. Charges keep their committed heading.
-        if (!moved && travel > 0) {
+        if (!moved && travel > 0 && route === 0) {
             const side = world.ids[slot] % 2 ? 1 : -1;
             for (let attempt = 0; attempt < 2; attempt++) {
                 const direction = attempt === 0 ? side : -side;
@@ -113,6 +125,10 @@ export function moveEnemies(entities: CombatWorld, tick: number): void {
                 if (moved) break;
             }
         }
+        // Measure terrain obstruction, not voluntary yielding to a neighbor.
+        const requested = Math.hypot(requestedX, requestedZ);
+        const progress = requested > 0 ? ((p.x[slot] - startX) * requestedX + (p.z[slot] - startZ) * requestedZ) / requested : 0;
+        navigation.observe(slot, tick, requested, progress);
         if (moved) p.heading[slot] = Math.atan2(p.x[slot] - startX, p.z[slot] - startZ);
         a.kind[slot] = moved ? ActorAction.Moving : ActorAction.Idle;
         entities.updateSpatial(slot, Component.Enemy);

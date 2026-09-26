@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { PlayerAutoCombat } from "../src/core/PlayerAutoCombat";
-import { AutoCombatPath } from "../src/core/AutoCombatPath";
+import { LocalNavigationPath } from "../src/core/LocalNavigationPath";
 import { AutoCombatThreats } from "../src/core/AutoCombatThreats";
 import { ActorAction, CombatWorld, Component, Faction } from "../src/core/CombatWorld";
 import { OPEN_TERRAIN, type CombatTerrain } from "../src/core/CombatTerrain";
@@ -194,7 +194,7 @@ describe("bounded local paths and threat observation", () => {
         return terrain;
     }
     test("A* goes around a wall with at most 64 clearance probes per tick and supports cancellation", () => {
-        const terrain = wall(), path = new AutoCombatPath(terrain); path.begin(0, 0, 6, 0);
+        const terrain = wall(), path = new LocalNavigationPath(terrain); path.begin(0, 0, 6, 0, .3);
         for (let tick = 0; tick < 160 && path.status === "searching"; tick++) {
             vi.mocked(terrain.isClear).mockClear(); path.advance();
             expect(vi.mocked(terrain.isClear).mock.calls.length).toBeLessThanOrEqual(64);
@@ -207,12 +207,12 @@ describe("bounded local paths and threat observation", () => {
             x = moved.x; z = moved.z; maximumZ = Math.max(maximumZ, Math.abs(z));
         }
         expect(x).toBe(6); expect(z).toBe(0); expect(maximumZ).toBeGreaterThan(3);
-        path.begin(0, 0, 6, 0); path.cancel(); path.advance(); expect(path.status).toBe("idle");
+        path.begin(0, 0, 6, 0, .3); path.cancel(); path.advance(); expect(path.status).toBe("idle");
     });
     test("sealed and out-of-window goals fail with fixed storage and finite work", () => {
-        const path = new AutoCombatPath(wall(true)); path.begin(0, 0, 6, 0);
+        const path = new LocalNavigationPath(wall(true)); path.begin(0, 0, 6, 0, .3);
         for (let tick = 0; tick < 160; tick++) path.advance();
-        expect(path.status).toBe("failed"); path.begin(0, 0, 100, 0); expect(path.status).toBe("failed");
+        expect(path.status).toBe("failed"); path.begin(0, 0, 100, 0, .3); expect(path.status).toBe("failed");
     });
     test("the controller follows a detour with normal smoothed movement, then reaches the chest", () => {
         const a = arena(wall()); a.chests.count = 1; a.chests.x[0] = 6; a.controller.setEnabled(true);

@@ -15,6 +15,8 @@ import { ControlProfile, StatusSystem } from "./StatusSystem";
 import { CombatText } from "./CombatText";
 import { SpatialGrid, SpatialQuery } from "./SpatialGrid";
 import { OPEN_TERRAIN, type CombatTerrain } from "./CombatTerrain";
+import { EnemyNavigation } from "./EnemyNavigation";
+import { EnemyCrowd } from "./EnemyCrowd";
 import type { DerivedStats } from "./CombatStats";
 import type { FireSkillValues, LightningSkillValues, StarSkillValues } from "./Skills";
 
@@ -99,6 +101,8 @@ export class CombatWorld {
     public readonly experience = this.world.query(Component.Experience);
     public readonly loot = this.world.query(Component.GroundItem);
     public readonly player: number;
+    public readonly navigation: EnemyNavigation;
+    public readonly crowd = new EnemyCrowd(this);
     public readonly spatial = new SpatialGrid(ENTITY_CAPACITY);
     private readonly nearby = new SpatialQuery(ENTITY_CAPACITY);
     public readonly impacts = new DamageBuffer();
@@ -154,6 +158,7 @@ export class CombatWorld {
     };
 
     constructor(x: number, z: number, public readonly terrain: CombatTerrain = OPEN_TERRAIN) {
+        this.navigation = new EnemyNavigation(this);
         this.player = this.world.create(Component.Position | Component.Vitals | Component.Player);
         this.place(this.player, x, z, PLAYER_RADIUS);
     }
@@ -236,6 +241,7 @@ export class CombatWorld {
     }
 
     public remove(slot: number): void {
+        this.navigation.clear(slot); this.crowd.clear(slot);
         if (this.enemy.homes[slot]) this.effects.cancelSource(this.world.ids[slot]);
         this.spatial.remove(slot);
         this.enemy.homes[slot] = this.enemy.regions[slot] = undefined;

@@ -1,11 +1,10 @@
 import type { CombatTerrain } from "./CombatTerrain";
-import { PLAYER_RADIUS } from "./GameConfig";
 
 const CELL = .75, EDGE = 49, CENTER = (EDGE - 1) / 2, CAPACITY = EDGE * EDGE;
 const EXPANSIONS_PER_TICK = 16;
 
-/** One bounded, incremental local A* search. Buffers live with the player controller. */
-export class AutoCombatPath {
+/** Bounded incremental A*. Controllers own scratch buffers, never individual ECS actors. */
+export class LocalNavigationPath {
     private readonly costs = new Uint16Array(CAPACITY);
     private readonly parents = new Int16Array(CAPACITY);
     private readonly states = new Uint8Array(CAPACITY);
@@ -17,16 +16,21 @@ export class AutoCombatPath {
     private originX = 0;
     private originZ = 0;
     private goal = 0;
+    private radius = 0;
+    private arrival = 0;
+    private targetX = 0;
+    private targetZ = 0;
     public status: "idle" | "searching" | "ready" | "failed" = "idle";
     public x = 0;
     public z = 0;
 
-    constructor(private readonly terrain: CombatTerrain) {}
+    constructor(private readonly terrain: CombatTerrain, private readonly acceptArrival?: (x: number, z: number) => boolean) {}
 
     public cancel(): void { this.status = "idle"; this.heapSize = this.routeSize = 0; }
 
-    public begin(x: number, z: number, targetX: number, targetZ: number): void {
+    public begin(x: number, z: number, targetX: number, targetZ: number, radius: number, arrival = 0): void {
         this.cancel();
+        this.radius = radius; this.arrival = arrival; this.targetX = targetX; this.targetZ = targetZ;
         this.originX = x - CENTER * CELL; this.originZ = z - CENTER * CELL;
         const gx = Math.round((targetX - this.originX) / CELL), gz = Math.round((targetZ - this.originZ) / CELL);
         if (gx < 0 || gz < 0 || gx >= EDGE || gz >= EDGE) { this.status = "failed"; return; }
@@ -41,7 +45,8 @@ export class AutoCombatPath {
             if (!this.heapSize) { this.status = "failed"; break; }
             const cell = this.pop();
             this.states[cell] = 2;
-            if (cell === this.goal) {
+            if (this.arrival ? Math.hypot(this.cellX(cell) - this.targetX, this.cellZ(cell) - this.targetZ) <= this.arrival
+                && (!this.acceptArrival || this.acceptArrival(this.cellX(cell), this.cellZ(cell))) : cell === this.goal) {
                 for (let node = cell; this.parents[node] >= 0; node = this.parents[node]) this.route[this.routeSize++] = node;
                 this.status = "ready"; break;
             }
@@ -52,13 +57,13 @@ export class AutoCombatPath {
                 if (next < 0 || this.states[next] >= 2 || this.costs[cell] + 1 >= this.costs[next]) continue;
                 if (!this.states[next]) {
                     // Same conservative cardinal-edge clearance as EncounterNavigation.
-                    if (!this.terrain.isClear(this.cellX(next), this.cellZ(next), PLAYER_RADIUS + CELL / 2)) {
+                    if (!this.terrain.isClear(this.cellX(next), this.cellZ(next), this.radius + CELL / 2)) {
                         this.states[next] = 3; continue;
                     }
                 }
                 if (this.parents[cell] < 0) {
                     const moved = this.terrain.move(this.cellX(cell), this.cellZ(cell), this.cellX(next) - this.cellX(cell),
-                        this.cellZ(next) - this.cellZ(cell), PLAYER_RADIUS, false);
+                        this.cellZ(next) - this.cellZ(cell), this.radius, false);
                     if (Math.hypot(moved.x - this.cellX(next), moved.z - this.cellZ(next)) > 1e-5) continue;
                 }
                 this.parents[next] = cell; this.costs[next] = this.costs[cell] + 1;
@@ -79,9 +84,21 @@ export class AutoCombatPath {
         return false;
     }
 
+    /** Copy a bounded prefix, retaining every turn; the recipient replans after the prefix. */
+    public copyRoute(x: Float64Array, z: Float64Array, offset: number, capacity: number): number {
+        let count = 0;
+        for (let i = this.routeSize - 1; i >= 0 && count < capacity; i--) {
+            const cell = this.route[i];
+            if (i > 0 && i < this.routeSize - 1 && this.route[i + 1] - cell === cell - this.route[i - 1]) continue;
+            x[offset + count] = this.cellX(cell); z[offset + count++] = this.cellZ(cell);
+        }
+        return count;
+    }
+
     private cellX(cell: number): number { return this.originX + cell % EDGE * CELL; }
     private cellZ(cell: number): number { return this.originZ + Math.floor(cell / EDGE) * CELL; }
     private score(cell: number): number {
+        if (this.arrival) return this.costs[cell] + Math.max(0, Math.hypot(this.cellX(cell) - this.targetX, this.cellZ(cell) - this.targetZ) - this.arrival) / CELL;
         return this.costs[cell] + Math.abs(cell % EDGE - this.goal % EDGE) + Math.abs(Math.floor(cell / EDGE) - Math.floor(this.goal / EDGE));
     }
     private less(a: number, b: number): boolean { const d = this.score(a) - this.score(b); return d < 0 || (d === 0 && a < b); }

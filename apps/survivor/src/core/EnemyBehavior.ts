@@ -187,7 +187,8 @@ export class EnemyBehavior {
     public wantsAction(slot: number): boolean {
         const a = this.entities.action;
         return a.kind[slot] >= ActorAction.Melee || this.tick >= a.readyAt[slot]
-            && (this.canHeal(slot) || (this.canBossSpell(slot) || this.canReave(slot) || this.canCharge(slot) || this.canFault(slot) || this.distance <= a.reach[slot])
+            && (this.canHeal(slot) || (this.canBossSpell(slot) || this.canReave(slot) || this.canCharge(slot) || this.canFault(slot)
+                || this.distance <= a.reach[slot] && this.entities.crowd.canAttack(slot))
                 && this.canSeePlayer(slot));
     }
     private canVolley(slot: number): boolean {

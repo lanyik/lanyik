@@ -96,6 +96,7 @@ flowchart TB
 - [战斗校准报告](game/measurements/combat-balance.json)、[管线对照](game/measurements/combat-pipeline-optimization.json)、[被动接入测量](game/measurements/utility-passive-skills.json)：数值、CPU 和 UI 是不同口径，不能互相代替。
 - [CPU 尾延迟记录](game/measurements/performance-tail-latency.json)、[首轮优化对照](game/measurements/performance-tail-optimization.json)：逐轮分位、峰值序号、超预算统计、独立阶段/GC 诊断及旧版回放对照；复现命令见测试策略，不作为浏览器帧率证明。
 - [玩法区块分批记录](game/measurements/regional-streaming.json)：提前准备前后 CPU 对照、异步切片/等待与确定性回放，保留 P99 和均值代价及冷启动限制。
+- [怪物绕障与占位对照](game/measurements/enemy-navigation.json)：凹墙到达、围攻重叠与同场景 CPU 成本；行为改善与计算开销分别报告，不代表浏览器帧率。
 
 <a id="assets"></a>
 

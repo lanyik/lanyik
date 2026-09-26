@@ -11,7 +11,8 @@
 | 时钟、容量与视野 | [GameConfig](../../apps/survivor/src/core/GameConfig.ts)、[WorldView](../../apps/survivor/src/core/WorldView.ts) | 所有池、传输布局、激活/淡出/卸载关系与性能预算 |
 | 权威世界与阶段 | [CombatWorld](../../apps/survivor/src/core/CombatWorld.ts)、[CombatSimulation](../../apps/survivor/src/core/CombatSimulation.ts)、[CombatSystems](../../apps/survivor/src/core/CombatSystems.ts) | 实体身份、查询失效、随机流与命中提交 |
 | 怪物行为与动作 | [EnemyBehavior](../../apps/survivor/src/core/EnemyBehavior.ts)、[EnemyActions](../../apps/survivor/src/core/EnemyActions.ts)、[EnemyDefinitions](../../apps/survivor/src/core/EnemyDefinitions.ts) | 中断、目标失效、出生与脱战清理 |
-| 玩家自动战斗 | [PlayerAutoCombat](../../apps/survivor/src/core/PlayerAutoCombat.ts)、[AutoCombatPath](../../apps/survivor/src/core/AutoCombatPath.ts)、[AutoCombatThreats](../../apps/survivor/src/core/AutoCombatThreats.ts) | 手动优先、路径预算、威胁与施法协作 |
+| 怪物绕障与占位 | [EnemyNavigation](../../apps/survivor/src/core/EnemyNavigation.ts)、[EnemyCrowd](../../apps/survivor/src/core/EnemyCrowd.ts)、[LocalNavigationPath](../../apps/survivor/src/core/LocalNavigationPath.ts) | 总搜索预算、实际体型、不可达退避、位置释放与实体世代 |
+| 玩家自动战斗 | [PlayerAutoCombat](../../apps/survivor/src/core/PlayerAutoCombat.ts)、[AutoCombatThreats](../../apps/survivor/src/core/AutoCombatThreats.ts) | 手动优先、共享路径算法、威胁与施法协作 |
 | Worker 协议 | [worker 目录](../../apps/survivor/src/worker/) | 客户端、权威入口、查询入口、序列与缓冲所有权 |
 | 主线程会话 | [app 目录](../../apps/survivor/src/app/) | 输入批次、暂停屏障、渲染时钟、失败与销毁 |
 
@@ -44,7 +45,15 @@
 
 攻击前摇、出手和恢复由核心决定；未出手动作被中断后保留相应 CD，已释放弹道按自身生命周期继续。目标身份失效不能转而命中同槽新实体；需要存活来源的治疗、返还或反伤必须再次验证。
 
-怪物目前使用局部移动与偏转，尚无逐怪完整受阻寻路或战斗群体占位。遭遇连通图证明可达性，不负责引导战斗路径；不要把两者视为同一能力。
+### 受阻寻路与群体占位
+
+CombatWorld 拥有怪物导航与占位状态，行为树只决定意图，移动阶段执行路径和局部避让。普通追击、远程寻射线和归位持续受地形阻挡后才排队搜索，巡逻仍使用有界候选与休息。遭遇连通图只证明出生可达，不承担战斗路径。
+
+怪物与玩家复用 LocalNavigationPath 四邻接 A* 算法，各自拥有搜索缓冲。怪物全世界共用四个搜索槽，每 tick 合计最多展开 64 个节点；密集队列轮转准入，单次搜索有截止预算，失败后等待再试。结果只保存定容路径前缀，后续路段重新规划，不给每个实体分配搜索网格。追击允许以射程内、无遮挡的节点结束，归位要求末段能扫掠到精确岗位，避免目标贴墙时强求中心对应的保守节点。近战在隔墙时不能因距离已近而停止接近。
+
+请求保存完整实体句柄；目标/意图变化、明显位移、控制、攻击、脱战和移除会取消失效路径，槽复用不继承结果。地形净空使用实际身体半径，路线执行仍经过 moveActor；不会传送出凹墙。搜索窗口、净空余量与单次预算都是能力边界，不承诺任意长绕路或极窄通道可解，失败不是忽略碰撞的理由。
+
+近身近战分配有限的身体大小占位，内圈满后在外圈等待，内圈释放后允许补位；沿玩家周围绕行，普通近战到位才起手。近邻避让按 AI 频率错峰更新，只消费固定数量最近邻并稳定处理等距和重合，位移不超过原移速。占位与避让不消费战斗随机流，移动仍可能改变后续命中和掉落序列。远程保持退避/环绕，已承诺的攻击与冲锋不受普通避让改写。这里是软分离，不是刚体碰撞：极端密度、狭口和攻击锁定期不保证零重叠。
 
 ### 领主变体
 
@@ -54,7 +63,7 @@
 
 自动战斗拥有目标、路径、手动操作让行和躲避意图；所有移动走现有角色通行，所有攻击走现有施法入口，不增加专属速度或无视障碍的通道。
 
-AutoCombatPath 使用有界、增量推进的局部搜索。AutoCombatThreats 从已知攻击读取威胁，复用预分配缓冲，不预测尚未发生的 AI 决策。手动操作优先；普通寻路可为站定法术让行，紧急躲避可以取消吟唱。
+玩家独占一个 LocalNavigationPath，保持原有增量局部搜索预算，不与怪物争用搜索槽。AutoCombatThreats 从已知攻击读取威胁，复用预分配缓冲，不预测尚未发生的 AI 决策。手动操作优先；普通寻路可为站定法术让行，紧急躲避可以取消吟唱。
 躲避评估先排除相对运动线段完全位于身体包围框同一侧的弹道段，再做原有圆/圆柱扫掠；边界相等必须保留，两端跨越不能裁掉。该筛选不缩短预测时间、不减少候选方向，也不改变评分和等分选择顺序。
 
 自动施法开关独立于自动寻怪。自动配装走[物品事务](items.md#自动配装与回收)，不在行为树或每个 tick 扫描全部装备。死亡、传送、恢复清理自动战斗运行状态；角色存档不自动恢复运行开关。暂停和隐藏页面不推进搜索或模拟。
@@ -97,3 +106,5 @@ CPU 基准保留每轮尾延迟、超预算次数及最慢 tick/决策序号，�
 按[测试策略](../testing.md)运行游戏单测及对应 Worker/浏览器用例；协议与容量改动覆盖序列、借用缓冲、取消、失败、重建和迟到结果。固定种子回放比较权威快照与随机状态，不能为通过测试排除生命、奖励或随机数差异。
 
 CPU 基准、Worker 并行实验与浏览器帧时分别报告。人群基准会丢弃部分命中，直行基准会补满生命；它们不能证明完整围攻性能、生存平衡或浏览器帧率。原始记录见[测量入口](../README.md#evidence)，平衡报告范围见[数值校准](combat-and-progression.md#数值校准)。
+
+EnemyNavigation 单测覆盖长墙、凹墙、归位、封闭目标、总预算、贴墙目标、体型净空、控制和槽复用、围攻与补位；[绕障与占位测量](measurements/enemy-navigation.json)中的 enemyNavigation/enemyCrowd 场景分别保留八怪凹墙到达与同侧围攻重叠结果，关闭攻击以隔离移动行为。成长回归的拾取脚本须为近身攻击退让，仍验证真实生命、拾取、装备升级和一分钟成长，不注入无敌或补血来掩盖战斗改变。

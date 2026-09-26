@@ -2,6 +2,7 @@ import { ticksForSeconds } from "../src/core/GameConfig";
 import { enemySamples } from "./helpers/EntitySamples";
 import { describe, expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
+import { ActorAction } from "../src/core/CombatWorld";
 import { SKILLS, skillValues } from "../src/core/Skills";
 import { DeterministicRandom } from "../src/core/DeterministicRandom";
 import { BASE_LOOT_PROFILE, effectiveFind, lootProfile, rollRarity, RARITIES } from "../src/core/Loot";
@@ -215,6 +216,7 @@ describe("loot and orb progression", () => {
 
     test("a minute of combat with earned upgrades reaches about level six through real XP pickups", () => {
         const combat = new CombatSimulation("rift-ember-1");
+        let escapeUntil = 0, escapeX = 0, escapeZ = 0;
         for (let tick = 0; tick < ticksForSeconds(60); tick++) {
             if (tick % 120 === 0) {
                 const player = combat.getSnapshot().player;
@@ -228,7 +230,14 @@ describe("loot and orb progression", () => {
                 const dx = state.entities.position.x[state.entities.experience.slots[index]] - state.player.x, dz = state.entities.position.z[state.entities.experience.slots[index]] - state.player.z;
                 if (dx * dx + dz * dz < nearest) { nearest = dx * dx + dz * dz; x = state.entities.position.x[state.entities.experience.slots[index]]; z = state.entities.position.z[state.entities.experience.slots[index]]; }
             }
-            combat.step({ x: x - state.player.x, z: z - state.player.z, active: true });
+            // Pickups cannot take priority over a nearby attack now that enemies spread around the player.
+            for (let i = 0; i < state.entities.enemies.count; i++) {
+                const slot = state.entities.enemies.slots[i], dx = state.player.x - state.entities.position.x[slot], dz = state.player.z - state.entities.position.z[slot];
+                if (state.entities.action.kind[slot] >= ActorAction.Melee && Math.hypot(dx, dz) < 2) {
+                    escapeUntil = tick + ticksForSeconds(.4); escapeX = dx; escapeZ = dz; break;
+                }
+            }
+            combat.step(tick < escapeUntil ? { x: escapeX, z: escapeZ, active: true } : { x: x - state.player.x, z: z - state.player.z, active: true });
         }
         const snapshot = combat.getSnapshot();
         expect(snapshot.elapsedMs).toBe(60_000); expect(snapshot.gameOver).toBe(false);

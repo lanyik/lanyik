@@ -3,7 +3,7 @@ import { CombatWorld, Component } from "./CombatWorld";
 import type { ChestRenderBuffer, MovementInput } from "./CombatState";
 import type { DerivedStats } from "./CombatStats";
 import { PLAYER_RADIUS, ticksForSeconds, ticksPerUpdate } from "./GameConfig";
-import { AutoCombatPath } from "./AutoCombatPath";
+import { LocalNavigationPath } from "./LocalNavigationPath";
 import { AutoCombatThreats } from "./AutoCombatThreats";
 import type { RegionalWorld } from "./RegionalWorld";
 
@@ -30,7 +30,7 @@ export class PlayerAutoCombat {
     private readonly evasion = { x: 0, z: 0, active: false };
     private evading = false;
     private stationarySafe = false;
-    private readonly path: AutoCombatPath;
+    private readonly path: LocalNavigationPath;
     private readonly threats: AutoCombatThreats;
     private readonly rejectedX = new Float64Array(8);
     private readonly rejectedZ = new Float64Array(8);
@@ -66,7 +66,7 @@ export class PlayerAutoCombat {
 
     constructor(private readonly entities: CombatWorld, private readonly chests: ChestRenderBuffer, private readonly heal: () => void,
         private readonly regions: Pick<RegionalWorld, "regionAt"> | undefined) {
-        this.path = new AutoCombatPath(entities.terrain); this.threats = new AutoCombatThreats(entities);
+        this.path = new LocalNavigationPath(entities.terrain); this.threats = new AutoCombatThreats(entities);
     }
     public get enabled(): boolean { return this.enabledValue; }
     public get activity(): AutoCombatActivity { return this.evading ? "evade" : this.activityValue; }
@@ -235,7 +235,7 @@ export class PlayerAutoCombat {
         this.navigationX = this.x + (x - this.x) * scale; this.navigationZ = this.z + (z - this.z) * scale;
         const moved = this.entities.terrain.move(this.x, this.z, this.navigationX - this.x, this.navigationZ - this.z, PLAYER_RADIUS, false);
         if (Math.hypot(moved.x - this.navigationX, moved.z - this.navigationZ) < 1e-5) this.path.cancel();
-        else if (this.path.status !== "ready") this.path.begin(this.x, this.z, this.navigationX, this.navigationZ);
+        else if (this.path.status !== "ready") this.path.begin(this.x, this.z, this.navigationX, this.navigationZ, PLAYER_RADIUS);
     }
 
     private followPath(): void {
