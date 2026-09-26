@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { ACTOR_POSES, HERO_POSES, IDLE_POSES, writeActorPose, ActorPoseMixer } from "../src/presentation/ActorPose";
+import { ACTOR_POSES, IDLE_POSES, writeActorPose, ActorPoseMixer } from "../src/presentation/ActorPose";
 import { ActorAction } from "../src/core/CombatWorld";
 
 test("transitions preserve their first pose, survive interruption, and clear recycled identities", () => {
@@ -34,7 +34,7 @@ test("attack poses follow simulation progress without wrapping or retaining move
     expect(weights[16]).toBe(1);
 });
 
-test.each([HERO_POSES, ACTOR_POSES])("idle loops independently of movement and attacks for %i poses", count => {
+test.each([ACTOR_POSES])("idle loops independently of movement and attacks for %i poses", count => {
     const weights = new Array(count).fill(0), offset = count - IDLE_POSES;
     writeActorPose(weights, .875, ActorAction.Idle, 1);
     expect(weights.slice(0, offset).every(weight => weight === 0)).toBe(true);

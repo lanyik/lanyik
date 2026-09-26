@@ -1,4 +1,5 @@
 import { EntityWorld } from "./EntityWorld";
+import { PlayerFeedback } from "./PlayerFeedback";
 import { ProjectileBatch } from "./ProjectileBatch";
 import {
     ENTITY_CAPACITY, MAX_ENEMIES, MAX_PROJECTILES, MAX_HOSTILE_PROJECTILES,
@@ -94,6 +95,7 @@ class DamageBuffer {
 /** One application-owned ECS. Components are indexed by stable slots, queries by dense cursors. */
 export class CombatWorld {
     public readonly combatText = new CombatText();
+    public readonly feedback = new PlayerFeedback();
     public readonly world = new EntityWorld(ENTITY_CAPACITY);
     public readonly enemies = this.world.query(Component.Enemy);
     public readonly projectiles = this.world.query(Component.Projectile);

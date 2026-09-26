@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { App } from "../../src/presentation/App";
+import { CombatAudio } from "../../src/presentation/CombatAudio";
 import { CombatSession } from "../../src/app/CombatSession";
 import { IndexedDBCharacterRepository, type SaveSlot } from "../../src/app/CharacterRepository";
 import type { CharacterCheckpoint } from "../../src/core/CharacterCheckpoint";
@@ -24,12 +25,13 @@ class HeldRepository extends IndexedDBCharacterRepository {
     }
 }
 const repository = new HeldRepository();
+const audio = new CombatAudio();
 const session = new CombatSession({ workerActivity: [], load: async () => HOMESTEAD.spawn,
-    reset() {}, readMovement: () => ({ x: 0, z: 0, active: false }), render() {}, clearMovement() {}, dispose: async () => {} },
+    reset() {}, readMovement: () => ({ x: 0, z: 0, active: false }), render() {}, clearMovement() {}, setPresentationActive() {}, dispose: () => audio.dispose() },
     () => new LoopbackCombatTransport(), repository);
 await session.start("travel-save-race", "homestead");
 const root = createRoot(document.getElementById("survivor-ui")!);
-root.render(<App session={session} log={new RuntimeLog(() => localStorage)} onHome={async () => {}}
+root.render(<App session={session} log={new RuntimeLog(() => localStorage)} onHome={async () => {}} audio={audio}
     attachRegionMap={() => ({ update() {}, setExpanded() {}, recenter() {}, navigate() {}, dispose() {} })} />);
 let saving: Promise<unknown>;
 window.travelFixture = {

@@ -1,0 +1,7 @@
+{
+  "source": "apps/survivor/src/presentation/CombatSounds.ts",
+  "author": "Project contributors",
+  "license": "MPL-2.0",
+  "method": "Original deterministic waveform synthesis; no external recordings or samples",
+  "sounds": ["attack", "cast", "hurt", "impact", "pickup", "death", "wind"]
+}

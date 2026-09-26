@@ -3,7 +3,10 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { InstancedBufferAttribute, type Vector2, type Vector3 } from "three";
 import { installActorFade } from "./ActorVisibility";
 import { ActorAction } from "../core/CombatWorld";
-import { ACTOR_POSES, HERO_POSES, ActorPoseMixer } from "./ActorPose";
+import { ACTOR_POSES, ActorPoseMixer } from "./ActorPose";
+import { HERO_POSES, HERO_CLIPS } from "./HeroClips.generated";
+import { HeroPose } from "./HeroPose";
+import type { PlayerRenderState } from "../core/CombatState";
 import { AssetLoader } from "./AssetLoader";
 import { GAME_CONFIG, ENTITY_CAPACITY } from "../core/GameConfig";
 
@@ -28,8 +31,7 @@ export class ActorModels {
     private readonly materials = new Set<Material>();
     private readonly textures = new Set<Texture>();
     private readonly heroMeshes: Mesh[] = [];
-    private heroCycle = 0;
-    private heroIdleCycle = 0;
+    private readonly heroPose = new HeroPose();
     private readonly pose = new Mesh();
     private readonly mixer = new ActorPoseMixer(ENTITY_CAPACITY);
 
@@ -77,7 +79,10 @@ export class ActorModels {
                     mesh.material.roughnessMap = atlases[kind][2]; mesh.material.metalnessMap = atlases[kind][2];
                     mesh.material.emissiveMap = atlases[kind][3];
                     mesh.material.needsUpdate = true;
-                    if (kind === 0) { actors.hero.add(mesh); actors.heroMeshes.push(mesh); actors.heroCycle = cycle; actors.heroIdleCycle = idleCycle; }
+                    if (kind === 0) {
+                        if (JSON.stringify(mesh.userData.heroClips) !== JSON.stringify(HERO_CLIPS)) throw new Error("Ranger: mismatched hero clips; rebuild assets");
+                        actors.hero.add(mesh); actors.heroMeshes.push(mesh);
+                    }
                     else {
                         installActorFade(mesh.material, viewCenter, true);
                         mesh.geometry.setAttribute("actorHome", new InstancedBufferAttribute(new Float32Array(capacity * 2), 2).setUsage(DynamicDrawUsage));
@@ -104,10 +109,11 @@ export class ActorModels {
         finally { loader.dispose(); }
     }
 
-    public animateHero(seconds: number, moving: boolean): void {
-        for (const mesh of this.heroMeshes) this.mixer.write(mesh.morphTargetInfluences!, 0, 1, seconds,
-            seconds / (moving ? this.heroCycle : this.heroIdleCycle), moving ? ActorAction.Moving : ActorAction.Idle, 0);
+    public animateHero(player: PlayerRenderState, timestampMs: number, active: boolean, frozen: boolean): number {
+        for (const mesh of this.heroMeshes) this.heroPose.write(mesh.morphTargetInfluences!, player, timestampMs, active, frozen);
+        return this.heroPose.heading;
     }
+    public suspendHero(): void { this.heroPose.suspend(); }
     public animateEnemy(mesh: InstancedMesh, index: number, slot: number, id: number, seconds: number, action: ActorAction, progress: number): void {
         const cycle = action === ActorAction.Idle ? mesh.userData.idleCycle : mesh.userData.cycle;
         this.mixer.write(this.pose.morphTargetInfluences!, slot, id, seconds, seconds / cycle + id * .37, action, progress);
@@ -123,8 +129,8 @@ export class ActorModels {
         }
         return true;
     }
-    public reset(): void { this.mixer.reset(); }
-    public get poseBuffers(): readonly ArrayBufferView[] { return this.mixer.buffers; }
+    public reset(): void { this.mixer.reset(); this.heroPose.reset(); }
+    public get poseBuffers(): readonly ArrayBufferView[] { return [...this.mixer.buffers, ...this.heroPose.buffers]; }
     public dispose(): void {
         for (const pool of this.enemies) for (const mesh of pool) mesh.dispose();
         for (const geometry of this.geometries) geometry.dispose();

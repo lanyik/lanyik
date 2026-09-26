@@ -64,7 +64,7 @@ export class RenderFrame {
         for (const key of ["kind", "x", "z", "endX", "endZ", "radius", "started", "endsAt"] as const) effects[key].set(source.effects[key].subarray(0, source.effects.count));
         for (const key of ["id", "x", "z", "value", "started", "kind"] as const) combatText[key].set(source.combatText[key].subarray(0, source.combatText.count));
         for (const key of ["x", "y", "z", "previousX", "previousY", "previousZ", "kind"] as const) fireProjectiles[key].set(source.fireProjectiles[key].subarray(0, source.fireProjectiles.count));
-        return { buffer: this.buffer, player: { ...source.player },
+        return { buffer: this.buffer, player: { ...source.player, feedback: { ...source.player.feedback } },
             counts: [input.enemies.count, input.projectiles.count, input.experience.count, input.loot.count, source.chests.count, source.effects.count, source.combatText.count, source.fireProjectiles.count] };
     }
     public read(packet: RenderPacket): CombatRenderState {

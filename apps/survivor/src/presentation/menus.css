@@ -205,3 +205,6 @@
     .survivor[data-window-open=true] .notices { bottom: 80px; }
 }
 @media (max-width: 720px) { .start-shell { width: calc(100% - 24px); margin: 24px auto; }.start-columns { grid-template-columns: 1fr; gap: 16px; }.start-brand { gap: 12px; margin-bottom: 20px; }.start-brand > .ui-icon { width: 42px; height: 42px; }.world-setup, .start-saves { padding: 16px; }.world-preview { max-height: 270px; }.save-card { padding: 10px; }.bag-bulk small { flex-basis: 100%; } }
+.audio-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; border: 1px solid #76664b; }
+.audio-controls label { display: flex; align-items: center; gap: 6px; }
+.audio-controls input[type="range"] { width: 120px; }

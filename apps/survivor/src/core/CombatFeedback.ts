@@ -13,6 +13,10 @@ export function combatFeedback(e: CombatWorld, events: CombatEvents, i: number):
             : events.player[i] ? events.critical[i] ? CombatTextKind.PlayerCritical : CombatTextKind.PlayerDamage
                 : events.critical[i] ? CombatTextKind.EnemyCritical : CombatTextKind.EnemyDamage;
         const slot = e.world.resolve(events.target[i]);
+        if (events.amount[i] > 0) {
+            if (events.player[i]) e.feedback.hurtTick = events.tick[i];
+            else if (Math.hypot(events.x[i] - e.position.x[e.player], events.z[i] - e.position.z[e.player]) < 18) e.feedback.impactTick = events.tick[i];
+        }
         if (slot >= 0 && !events.player[i] && events.cause[i] === EffectCause.Attack) e.vitals.hitFlash[slot] = .1;
     } else return;
     e.combatText.add(events.target[i], kind, events.amount[i], events.x[i], events.z[i], events.tick[i]);

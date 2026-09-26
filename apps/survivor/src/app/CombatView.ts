@@ -15,5 +15,7 @@ export interface CombatView {
     readMovement(): MovementInput;
     render(state: CombatRenderState, alpha: number, timestampMs: number): void;
     clearMovement(): void;
+    /** Presentation may finish a terminal death pose after the simulation clock stops. */
+    setPresentationActive(active: boolean): void;
     dispose(): Promise<void>;
 }

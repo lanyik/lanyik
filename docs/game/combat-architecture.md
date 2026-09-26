@@ -17,7 +17,7 @@
 | [BurnSystem](../../apps/survivor/src/core/BurnSystem.ts) | StatusSystem 持有的独立周期层、输出快照及相位 |
 | [CombatEvents](../../apps/survivor/src/core/CombatEvents.ts) | 模拟内部同步消费的结算事实 |
 | [CombatRewards](../../apps/survivor/src/core/CombatRewards.ts) | 击杀计数、死亡奖励生成与地面物品；通过 CharacterState 记账及分配 ID |
-| [CombatFeedback](../../apps/survivor/src/core/CombatFeedback.ts) | 把结算事实转成闪白和飘字，不参与数值规则 |
+| [CombatFeedback](../../apps/survivor/src/core/CombatFeedback.ts) | 把结算事实转成闪白、飘字及主角受击/命中提示，不参与数值规则 |
 
 调用方向为技能/普攻/怪物动作 → 命中请求 → 数值结算 → 生命提交 → 事实 → 奖励与表现。状态参与结算输入；常驻被动低频编译属性，不通过定时状态伪装。角色事务由 CharacterState 提交，技能构筑与战斗实体仍由各自所有者维护。
 
@@ -32,6 +32,8 @@ CombatVitality 返回实际生命损失/治疗量，吸血和飘字不能使用�
 事件使用预分配有界缓冲，每笔结算及派生效果完成后同步消费，再进入下一笔。消费者借用当前记录，不能保存数组索引作为历史，也不能递归调用伤害或生命修改；重入和权威缓冲溢出明确失败。
 
 权威事实和可丢弃视觉缓冲分开，表现丢弃不影响奖励。药剂、自然回复、升级及换装比例重算目前仍由角色命令处理；新增“任意治疗触发”前必须统一这些入口，不能假定现有战斗事件已覆盖全部生命变化。
+
+主角动作和声音消费固定大小的 PlayerFeedback 投影，规则只能写入实际完成的攻击、掉血和拾取提示；不得等待音效/动作结束后结算。合并、丢弃与生命周期由[角色表现合同](actor-assets.md#主角动作与声音)维护。
 
 ## 状态合同
 

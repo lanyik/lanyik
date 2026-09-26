@@ -24,6 +24,7 @@ import { CraftConfirmation } from "./CraftConfirmation";
 import type { CraftOperation } from "../core/Crafting";
 import { recycleRef } from "../core/Recycling";
 import { SessionMenu } from "./SessionMenu";
+import type { CombatAudio } from "./CombatAudio";
 import type { RuntimeLog } from "../app/RuntimeLog";
 import { RuntimeLogExport } from "./RuntimeLogExport";
 import { WorldTravelPanel } from "./WorldTravelPanel";
@@ -43,14 +44,14 @@ function formatTime(ms: number): string {
     return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function App({ session, attachRegionMap, onHome, log }: { readonly session: CombatSession; readonly attachRegionMap: AttachRegionMap; readonly onHome: () => Promise<void>; readonly log: RuntimeLog }) {
+export function App({ session, attachRegionMap, onHome, log, audio }: { readonly session: CombatSession; readonly attachRegionMap: AttachRegionMap; readonly onHome: () => Promise<void>; readonly log: RuntimeLog; readonly audio: CombatAudio }) {
     const snapshot = useSyncExternalStore(session.subscribe, session.getSnapshot);
-    return <SessionInterface key={snapshot.generation} session={session} snapshot={snapshot} attachRegionMap={attachRegionMap} onHome={onHome} log={log} />;
+    return <SessionInterface key={snapshot.generation} session={session} snapshot={snapshot} attachRegionMap={attachRegionMap} onHome={onHome} log={log} audio={audio} />;
 }
 
-function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
+function SessionInterface({ session, snapshot, attachRegionMap, onHome, log, audio }: {
     readonly session: CombatSession; readonly snapshot: SessionSnapshot; readonly attachRegionMap: AttachRegionMap;
-    readonly onHome: () => Promise<void>; readonly log: RuntimeLog;
+    readonly onHome: () => Promise<void>; readonly log: RuntimeLog; readonly audio: CombatAudio;
 }) {
     const [panels, setPanels] = useState<Record<Menu, boolean>>({ character: false, inventory: false, map: false, skills: false, craft: false, spirit: false, system: false, travel: false });
     const resumeAfterMenu = useRef(false);
@@ -163,7 +164,7 @@ function SessionInterface({ session, snapshot, attachRegionMap, onHome, log }: {
             {panels.skills && <SkillsPanel player={player} homestead={combat.world.location === "homestead"} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("skills")} />}
             {panels.craft && <CraftingPanel key={craftItemId ?? "forge"} player={player} initialItem={player.inventory.find(item => item.id === craftItemId)} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("craft")} />}
             {panels.spirit && <SpiritRealmPanel player={player} disabled={combat.gameOver} dispatch={command => session.dispatch(command)} onClose={() => close("spirit")} />}
-            {panels.system && <SessionMenu session={session} snapshot={snapshot} close={() => close("system")} home={onHome} log={log} />}
+            {panels.system && <SessionMenu session={session} snapshot={snapshot} close={() => close("system")} home={onHome} log={log} audio={audio} />}
             {recycling && <CraftConfirmation operation={recycling} player={player} disabled={combat.gameOver} close={() => setRecycling(undefined)} confirm={operation => session.dispatch({ type: "craft", operation })} />}
             <section className="combat-dock" aria-label="角色状态与技能">
                 <div className="hud-power"><span>战力 <strong data-testid="battle-power">{player.battlePower}</strong></span><small>装备 +{player.equipmentPower}</small></div>

@@ -1,4 +1,5 @@
 import { StatusKind, type SavedStatus } from "./StatusSystem";
+import type { PlayerFeedback } from "./PlayerFeedback";
 import { SkillBuild, SKILL_NODES } from "./SkillBuild";
 import { PASSIVE_UNLOCK_LEVELS, isPassiveId, passiveNodeId, compilePassiveEffects, NO_PASSIVE_EFFECTS, type PassiveId } from "./PassiveSkills";
 import { FireCasting } from "./FireCasting";
@@ -111,6 +112,17 @@ export class SkillSystem {
     public busy(tick: number): boolean { return tick < Math.max(this.recoveryUntil, this.pending?.endsAt ?? 0) || this.dashing(tick); }
     public holding(tick: number): boolean { return !!this.pending && tick < Math.max(this.pending.releaseAt, this.pending.channelUntil); }
     public get mobile(): boolean { return !!this.pending && mobileCast(this.pending.id); }
+    public writePresentation(output: PlayerFeedback, tick: number): void {
+        const cast = this.pending;
+        output.castPhase = 0; output.castProgress = 0;
+        if (!cast || cast.id === "dash" || tick >= cast.endsAt) return;
+        output.castHeading = cast.heading;
+        const winding = tick < cast.releaseAt, channeling = !winding && tick < cast.channelUntil;
+        output.castPhase = winding ? 1 : channeling ? 2 : 3;
+        const start = winding ? cast.started : channeling ? cast.releaseAt : cast.channelUntil;
+        const end = winding ? cast.releaseAt : channeling ? cast.channelUntil : cast.endsAt;
+        output.castProgress = (tick - start) / Math.max(1, end - start);
+    }
     public advanceCasting(tick: number, random: DeterministicRandom, interrupt: boolean, settle: () => void): void {
         const cast = this.pending;
         if (!cast) return;
@@ -233,6 +245,7 @@ export class SkillSystem {
         return false;
     }
     private release(cast: PendingCast, tick: number, random: DeterministicRandom): void {
+        this.entities.feedback.castTick = tick;
         const { id, stats, values } = cast;
         const { position: p, player, impacts, world, effects, status } = this.entities;
         const x = p.x[player], z = p.z[player];

@@ -2,7 +2,6 @@ import { ActorAction } from "../core/CombatWorld";
 
 const MOVEMENT_POSES = 8;
 export const IDLE_POSES = 4;
-export const HERO_POSES = MOVEMENT_POSES + IDLE_POSES;
 export const ACTOR_POSES = MOVEMENT_POSES * 2 + IDLE_POSES;
 
 /** Idle and movement loop; attacks include both endpoints and never wrap back to windup. */

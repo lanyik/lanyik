@@ -23,7 +23,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 function view(): CombatView {
     vi.stubGlobal("document", { hidden: false });
     return { workerActivity: [], load: async () => ({ x: 0, z: 0 }), readMovement: () => ({ x: 1, z: 0, active: true }),
-        reset: vi.fn(), render: vi.fn(), clearMovement: vi.fn(), dispose: async () => {} };
+        reset: vi.fn(), render: vi.fn(), clearMovement: vi.fn(), setPresentationActive: vi.fn(), dispose: async () => {} };
 }
 
 test("restart clears real instance pools before the replacement worker starts and while it is loading", async () => {
@@ -157,5 +157,21 @@ test("paused and hidden sessions reject skill casts while loadout edits remain a
     expect(session.getSnapshot().combat!.player.skills.dashing).toBe(false);
     session.setHidden(false); session.dispatch({ type: "cast-skill", skill: "dash" }); await session.settled;
     expect(session.getSnapshot().combat!.player.skills.dashing).toBe(true);
+    await session.dispose();
+});
+
+test("presentation activation respects pause and visibility, stops on failure, and restarts with a new owner", async () => {
+    const presentation = view(), session = new CombatSession(presentation, () => new LoopbackCombatTransport());
+    await session.start("presentation-gates", "homestead");
+    expect(presentation.setPresentationActive).toHaveBeenLastCalledWith(true);
+    session.dispatch({ type: "toggle-pause" }); await session.settled;
+    expect(presentation.setPresentationActive).toHaveBeenLastCalledWith(false);
+    session.setHidden(true); session.setHidden(false);
+    expect(presentation.setPresentationActive).toHaveBeenLastCalledWith(false);
+    session.dispatch({ type: "toggle-pause" });
+    expect(presentation.setPresentationActive).toHaveBeenLastCalledWith(true);
+    session.fail(new Error("world failed"));
+    expect(presentation.setPresentationActive).toHaveBeenLastCalledWith(false);
+    await session.retry(); expect(presentation.setPresentationActive).toHaveBeenLastCalledWith(true);
     await session.dispose();
 });

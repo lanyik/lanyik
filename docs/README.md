@@ -53,7 +53,7 @@ flowchart TB
 | 探索迷雾、家园、旅行与副本 | [探索与家园](game/exploration-and-homestead.md) | [core](../apps/survivor/src/core/)、[app](../apps/survivor/src/app/)中的探索和旅行模块 |
 | 移动、遮挡、出生与可达性 | [地形通行](game/terrain-navigation.md) | [CombatTerrain](../apps/survivor/src/core/CombatTerrain.ts)、[SurfaceMotion](../apps/survivor/src/core/SurfaceMotion.ts) |
 | 窗口、交互、HUD 与可访问性 | [界面设计](game/interface-design.md)、[UI 性能](game/ui-performance.md) | [presentation](../apps/survivor/src/presentation/) |
-| 模型、动作与资源处理 | [角色资产](game/actor-assets.md)、[环境资产](game/environment-assets.md) | [assets](../apps/survivor/assets/)、[构建脚本](../scripts/) |
+| 模型、动作、声音与资源处理 | [角色资产](game/actor-assets.md)、[环境资产](game/environment-assets.md) | [assets](../apps/survivor/assets/)、[构建脚本](../scripts/) |
 | 项目进度与尚未完成的能力 | [开发重点](game/development-priorities.md) | 对照以上领域；计划不代表实现 |
 
 <a id="foundation"></a>
@@ -112,6 +112,7 @@ flowchart TB
 | [环境归属原文](../apps/survivor/assets/environment/texture-attribution.md) | 上游归属，不等同于当前加载清单 |
 | [技能素材来源](../apps/survivor/assets/effects/sources.json)、[原始许可](../apps/survivor/assets/effects/kenney-LICENSE.txt) | 特效输入及分发边界 |
 | [家园来源](../apps/survivor/assets/homestead/sources.json)、[原始许可](../apps/survivor/assets/homestead/License.txt) | 模型输入与归属 |
+| [音效来源](../apps/survivor/assets/audio/sources.json) | 项目原创波形合成与许可 |
 
 dist/ 与 apps/survivor/.assets/ 是生成产物；根 public/ 混合演示输入与受跟踪产物，不能整目录当缓存删除。
 

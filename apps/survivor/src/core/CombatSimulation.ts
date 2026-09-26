@@ -4,6 +4,7 @@ import { CombatRewards } from "./CombatRewards";
 import { CharacterState } from "./CharacterState";
 import { CombatEventKind, type CombatEventConsumer } from "./CombatEvents";
 import { combatFeedback } from "./CombatFeedback";
+import { PlayerFeedback } from "./PlayerFeedback";
 import { ATTRIBUTE_IDS, generateEquipment, type AttributeId, type EquippedItems } from "./Equipment";
 import { DeterministicRandom } from "./DeterministicRandom";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
@@ -116,6 +117,7 @@ export class CombatSimulation {
     private set mana(value: number) { this.entities.vitals.mana[this.entities.player] = value; }
     private gameOverValue = false;
     private readonly playerRenderState: MutablePlayerRenderState = {
+        feedback: new PlayerFeedback(),
         entitySlot: 0,
         animationTime: 0,
         x: 0,
@@ -141,6 +143,7 @@ export class CombatSimulation {
         this.world = new RegionalWorld(seed, start, terrain, Boolean(yieldWorld));
         this.entities = new CombatWorld(start.x, start.z, terrain);
         this.playerRenderState.entitySlot = this.entities.player;
+        this.playerRenderState.feedback = this.entities.feedback;
         this.resolution = new CombatResolution(this.entities);
         this.behavior = new EnemyBehavior(this.entities, isChallenge(location) ? { residencyAt: () => "near" } : this.world);
         this.skills = new SkillSystem(this.entities);
@@ -250,6 +253,7 @@ export class CombatSimulation {
         const state = validateCharacterCheckpoint(checkpoint), p = state.player;
         if (state.seed !== String(this.seed) || state.location !== this.location || state.origin.x !== this.start.x || state.origin.z !== this.start.z
             || !this.entities.terrain.isClear(p.x, p.z, GAME_CONFIG.combat.playerRadius)) throw new Error("角色存档世界或位置无效");
+        Object.assign(this.entities.feedback, new PlayerFeedback());
         this.exploration = new Exploration(state.exploration); this.wildsPosition = { ...state.wildsPosition };
         this.characterId = state.characterId; this.challenges = state.challenges; this.challengeRevisionValue = state.challengeRevision; this.teleportReadyAt = state.teleportReadyAt;
         this.autoCast = p.autoCast;
@@ -480,6 +484,7 @@ export class CombatSimulation {
         // Use the same conversion as effect timestamps, including while paused on a hit tick.
         this.playerRenderState.animationTime = this.tick / GAME_CONFIG.timing.simulationHz;
         const state = this.playerRenderState;
+        this.skills.writePresentation(this.entities.feedback, this.tickValue);
         state.x = this.playerX;
         state.z = this.playerZ;
         state.previousX = this.previousPlayerX;
@@ -757,7 +762,13 @@ export class CombatSimulation {
             this.stats.attackRange / projectileSpeed + 0.25,
             { critical, height: .8, groundX: this.playerX, groundZ: this.playerZ,
                 velocityY: distance > 0 ? (this.entities.aimHeight(target) - this.entities.aimHeight(this.entities.player)) * projectileSpeed / (distance - launchOffset) : 0 }
-        )) this.attackCooldown = Math.max(0, remaining + 1 / this.stats.attackRate);
+        )) {
+            this.attackCooldown = Math.max(0, remaining + 1 / this.stats.attackRate);
+            const feedback = this.entities.feedback;
+            feedback.attackTick = this.tickValue;
+            feedback.attackHeading = Math.atan2(directionX, directionZ);
+            feedback.attackDuration = Math.min(.38, 1 / this.stats.attackRate);
+        }
     }
 
     private resolveImpacts(): void {
@@ -785,6 +796,7 @@ export class CombatSimulation {
             const travel = all ? 0 : pickupTravel(distance, this.stats.pickupRadius);
             if (all || distance - travel <= PICKUP_ARRIVAL) {
                 this.character.gainExperience(e.experienceValue[index]); e.remove(index); collected++;
+                e.feedback.pickupTick = this.tickValue;
                 if (this.challenge) this.challengeRevisionValue++;
             } else {
                 e.position.x[index] += dx / distance * travel; e.position.z[index] += dz / distance * travel;
@@ -824,6 +836,7 @@ export class CombatSimulation {
             if (!this.character.receiveItems([item], 0, item)) { if (all) this.passiveLootCursor++; continue; }
             this.rewards.groundItems.delete(id);
             this.entities.remove(index);
+            this.entities.feedback.pickupTick = this.tickValue;
             if (this.challenge) this.challengeRevisionValue++;
             this.character.resetCapacityNotice();
             if (this.character.recycledCount(item.type) === recycled || item.type === "equipment" && this.character.wearsEquipment(item)) {

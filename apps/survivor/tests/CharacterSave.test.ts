@@ -98,7 +98,7 @@ test("IndexedDB slots persist across reopen; corrupt slot is isolated; auto does
 test("save barrier includes prior queued commands and only acknowledges a committed record", async () => {
     vi.stubGlobal("document", { hidden: false }); vi.stubGlobal("indexedDB", new IDBFactory());
     const repo = new IndexedDBCharacterRepository(); let transport!: LoopbackCombatTransport;
-    const session = new CombatSession({ workerActivity: [], load: async () => ({ x: 0, z: 0 }), reset() {}, render() {}, clearMovement() {}, readMovement: () => ({ x: 0, z: 0, active: false }), dispose: async () => {} },
+    const session = new CombatSession({ workerActivity: [], load: async () => ({ x: 0, z: 0 }), reset() {}, render() {}, clearMovement() {}, setPresentationActive() {}, readMovement: () => ({ x: 0, z: 0, active: false }), dispose: async () => {} },
         () => transport = new LoopbackCombatTransport(), repo);
     await session.start("save-barrier");
     session.dispatch({ type: "set-auto-recycle", itemType: "orb", maximum: "magic" });
@@ -139,7 +139,7 @@ test("snapshot sharing keeps unchanged prefixes and handles removal, empty branc
 });
 test("storage rejection is reported without stopping combat or acknowledging a save", async () => {
     vi.stubGlobal("document", { hidden: false });
-    const session = new CombatSession({ workerActivity: [], load: async () => ({ x: 0, z: 0 }), reset() {}, render() {}, clearMovement() {}, readMovement: () => ({ x: 0, z: 0, active: false }), dispose: async () => {} },
+    const session = new CombatSession({ workerActivity: [], load: async () => ({ x: 0, z: 0 }), reset() {}, render() {}, clearMovement() {}, setPresentationActive() {}, readMovement: () => ({ x: 0, z: 0, active: false }), dispose: async () => {} },
         () => new LoopbackCombatTransport(), { list: async () => [], resolve: async checkpoint => checkpoint, save: async () => { throw new Error("Storage quota exceeded"); }, close() {} });
     await session.start(); await expect(session.save("auto")).rejects.toThrow("quota");
     expect(session.getSnapshot().status).toBe("ready"); expect(session.getSnapshot().saveStatus).toEqual({ busy: false, error: "Storage quota exceeded" });

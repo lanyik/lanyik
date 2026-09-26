@@ -97,7 +97,7 @@ function sessionFixture(repository?: CharacterRepository) {
     vi.stubGlobal("document", { hidden: false });
     const clients: LoopbackCombatTransport[] = [];
     const view: CombatView = { workerActivity: [], load: vi.fn(async () => ({ x: 0, z: 0 })), reset() {}, render() {}, clearMovement() {},
-        readMovement: () => ({ x: 0, z: 0, active: false }), dispose: async () => {} };
+        readMovement: () => ({ x: 0, z: 0, active: false }), setPresentationActive() {}, dispose: async () => {} };
     const session = new CombatSession(view, () => { const client = new LoopbackCombatTransport(); clients.push(client); return client; }, repository);
     return { session, view, clients };
 }

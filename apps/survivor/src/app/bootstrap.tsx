@@ -61,7 +61,7 @@ export function bootstrap(options: SurvivorOptions = {}): { readonly session: Co
                 try { active.frame(frame.t, frame.dtS === 0); } catch (error) { active.fail(error); }
             }, frame => active.afterFrame(frame));
             disconnectPerformance = active.observeLongFrames();
-            root.render(<StrictMode><App session={active} attachRegionMap={view.attachRegionMap} onHome={home} log={runtimeLog} /></StrictMode>);
+            root.render(<StrictMode><App session={active} attachRegionMap={view.attachRegionMap} onHome={home} log={runtimeLog} audio={view.audio} /></StrictMode>);
             visibilityChanged();
             if (checkpoint) await active.load(checkpoint); else await active.start(seed, "homestead");
             if (!closing && session === active) autoSave();

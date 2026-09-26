@@ -23,13 +23,15 @@ if (application !== expectedApplication || dirname(output) !== application) {
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await prepareSurvivorEnvironment(resolve(application, "assets/environment"), output, root);
-await prepareSurvivorActors(resolve(application, "assets/actors"), resolve(output, "actors"), resolve(application, "src/core/ActorSockets.generated.ts"));
+await prepareSurvivorActors(resolve(application, "assets/actors"), resolve(output, "actors"), resolve(application, "src/core/ActorSockets.generated.ts"), resolve(application, "src/presentation/HeroClips.generated.ts"));
 await prepareSurvivorCreatures(resolve(application, "assets/environment"), resolve(output, "actors"));
 const readActor = await sourceReader(resolve(application, "assets/actors"));
 for (const file of ["outfits-LICENSE.txt", "base-characters-LICENSE.txt", "animations-LICENSE.txt", "bestiary-LICENSE.txt"]) {
     await writeFile(resolve(output, "actors", file), await readActor(file));
 }
 await cp(resolve(application, "assets/actors/sources.json"), resolve(output, "actors/sources.json"));
+await mkdir(resolve(output, "audio"), { recursive: true });
+await cp(resolve(application, "assets/audio/sources.json"), resolve(output, "audio/sources.json"));
 await prepareSurvivorEffects(resolve(application, "assets/effects"), resolve(output, "effects"));
 await prepareSurvivorLoot(resolve(application, "assets/loot"), resolve(output, "loot"));
 await prepareSurvivorHomestead(resolve(application, "assets/homestead"), resolve(output, "homestead"), resolve(application, "src/core/HomesteadModels.generated.ts"));

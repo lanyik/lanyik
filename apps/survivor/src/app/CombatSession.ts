@@ -192,6 +192,7 @@ export class CombatSession {
         this.upgradeIds.clear();
         this.clock.setRunning(false);
         this.clock.reset();
+        this.view.setPresentationActive(false);
         this.view.clearMovement();
         this.publish();
         try {
@@ -399,6 +400,7 @@ export class CombatSession {
         this.resetPerformance();
         this.error = reason instanceof Error ? reason.message : String(reason);
         this.clock.setRunning(false);
+        this.view.setPresentationActive(false);
         this.client?.dispose(); this.client = undefined;
         this.inFlight = undefined; this.pendingSteps = 0; this.pendingCommands = [];
         this.view.clearMovement();
@@ -423,6 +425,7 @@ export class CombatSession {
     }
 
     private syncClock(): void {
+        this.view.setPresentationActive(this.status === "ready" && !this.paused && !this.hidden && !this.travelling);
         const running = this.status === "ready" && !this.paused && !this.hidden && !this.gameOver && !this.travelling;
         this.clock.setRunning(running);
         if (!running) this.pendingSteps = 0;

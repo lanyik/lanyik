@@ -6,6 +6,8 @@ import { SaveSummary } from "./StartScreen";
 import type { RuntimeLog } from "../app/RuntimeLog";
 import { RuntimeLogExport } from "./RuntimeLogExport";
 import { WindowHeader } from "./WindowChrome";
+import { AudioControls } from "./AudioControls";
+import type { CombatAudio } from "./CombatAudio";
 
 function SaveConfirmation({ pending, close, act }: { pending: { load?: CharacterSave; slot: SaveSlot }; close: () => void; act: () => void }) {
     const dialog = useRef<HTMLDialogElement>(null);
@@ -18,7 +20,7 @@ function SaveConfirmation({ pending, close, act }: { pending: { load?: Character
     </dialog>, document.body);
 }
 
-export function SessionMenu({ session, snapshot, close, home, log }: { session: CombatSession; snapshot: SessionSnapshot; close: () => void; home: () => Promise<void>; log: RuntimeLog }) {
+export function SessionMenu({ session, snapshot, close, home, log, audio }: { session: CombatSession; snapshot: SessionSnapshot; close: () => void; home: () => Promise<void>; log: RuntimeLog; audio: CombatAudio }) {
     const [entries, setEntries] = useState<readonly SaveEntry[]>([]), [error, setError] = useState<string>();
     const [busy, setBusy] = useState(false), [pending, setPending] = useState<{ load?: CharacterSave; slot: SaveSlot }>();
     const [selectedSlot, setSelectedSlot] = useState<SaveSlot>("manual-1");
@@ -36,6 +38,7 @@ export function SessionMenu({ session, snapshot, close, home, log }: { session: 
             {entry.save ? <SaveSummary save={entry.save} /> : <p>{entry.error ?? "空存档槽"}</p>}
         </button>)}</div>
         <div className="save-slot-actions"><span>{SAVE_NAMES[selectedSlot]}</span><button disabled={blocked || !selected?.save} onClick={() => { if (selected?.save) setPending({ load: selected.save, slot: selectedSlot }); }}>读取{SAVE_NAMES[selectedSlot]}</button><button className="primary-action" disabled={blocked || !selected || selectedSlot === "auto" || snapshot.combat?.gameOver} onClick={() => selected?.save || selected?.error ? setPending({ slot: selectedSlot }) : void run(() => session.save(selectedSlot))}>保存到{SAVE_NAMES[selectedSlot]}</button></div>
+        <AudioControls audio={audio} />
         {(error || snapshot.saveStatus.error) && <p className="menu-error" role="alert">{error || snapshot.saveStatus.error}</p>}
         </div>
         <footer className="action-footer"><button className="quiet-action" disabled={blocked} onClick={() => void run(home)}>保存并返回主界面</button><button disabled={blocked} onClick={close}>继续游戏<kbd>O</kbd></button></footer>

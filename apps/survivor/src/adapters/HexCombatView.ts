@@ -15,6 +15,7 @@ import workerUrl from "three-hex-map/world-generator.worker?url";
 import type { CombatStart, CombatView } from "../app/CombatView";
 import type { CombatRenderState, MovementInput } from "../core/CombatState";
 import { CombatLayer } from "../presentation/CombatLayer";
+import { CombatAudio } from "../presentation/CombatAudio";
 import { MovementInputController } from "../presentation/MovementInputController";
 import { GAME_CONFIG } from "../core/GameConfig";
 import { WORLD_VIEW } from "../core/WorldView";
@@ -69,6 +70,8 @@ export function findCombatStart(seed: string): { readonly tile: Point; readonly 
 }
 
 export class HexCombatView implements CombatView {
+    public readonly audio = new CombatAudio();
+    private readonly unlockAudio = () => { if (this.audio.getSnapshot().status !== "failed") void this.audio.unlock(); };
     private readonly map: HexMap;
     private readonly layer: CombatLayer;
     private readonly layerReady: Promise<void>;
@@ -117,6 +120,8 @@ export class HexCombatView implements CombatView {
             if (!canvas) throw new Error("Survivor world canvas is missing");
             this.canvas = canvas;
             this.input = new MovementInputController(canvas);
+            window.addEventListener("pointerdown", this.unlockAudio);
+            window.addEventListener("keydown", this.unlockAudio);
         } catch (error) {
             this.map.dispose();
             throw error;
@@ -199,6 +204,7 @@ export class HexCombatView implements CombatView {
 
     public render(state: CombatRenderState, alpha: number, timestampMs: number): void {
         this.layer.update(state, alpha, timestampMs);
+        this.audio.update(state.player);
         const player = state.player;
         const blend = Math.max(0, Math.min(1, alpha));
         const x = player.previousX + (player.x - player.previousX) * blend;
@@ -207,14 +213,17 @@ export class HexCombatView implements CombatView {
     }
 
     public clearMovement(): void { this.input.clear(); }
-    public reset(): void { this.layer.reset(); }
+    public setPresentationActive(active: boolean): void { this.layer.setPresentationActive(active); this.audio.setActive(active); }
+    public reset(): void { this.layer.reset(); this.audio.reset(); }
 
     public dispose(): Promise<void> {
         this.cancelLoad();
         this.input.dispose();
+        window.removeEventListener("pointerdown", this.unlockAudio);
+        window.removeEventListener("keydown", this.unlockAudio);
         for (const [minimap, source] of this.regionMaps) { minimap.dispose(); source?.dispose(); }
         this.regionMaps.clear();
-        return this.map.disposeAsync();
+        return Promise.all([this.audio.dispose(), this.map.disposeAsync()]).then(() => undefined);
     }
 
     private cancelLoad(): void {

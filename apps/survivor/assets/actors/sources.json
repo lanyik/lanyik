@@ -207,7 +207,17 @@
     "archivePath": "Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb",
     "license": "CC0-1.0",
     "sha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
-    "bytes": 7618436
+    "bytes": 7618436,
+    "heroClips": [
+      "Idle_Loop",
+      "Jog_Fwd_Loop",
+      "Spell_Simple_Shoot",
+      "Spell_Simple_Enter",
+      "Spell_Simple_Idle_Loop",
+      "Spell_Simple_Exit",
+      "Hit_Chest",
+      "Death01"
+    ]
   },
   {
     "file": "bestiary/Imp.glb",

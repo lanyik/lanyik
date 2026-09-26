@@ -83,4 +83,22 @@ describe("survivor actor source and retargeting contracts", () => {
         try { expect(() => actorPoser(animation, [creature])).toThrow("missing_bone"); }
         finally { bone.name = "calf_l"; }
     });
+
+    it("retargets every registered hero action and preserves the death endpoint", async () => {
+        const entries = JSON.parse(await readFile(new URL("../../apps/survivor/assets/actors/sources.json", import.meta.url), "utf8"));
+        const clips = entries.find(entry => entry.file === "animation/UAL1_Standard.glb").heroClips;
+        const ranger = await loadActorSource(read, "ranger/Male_Ranger.gltf"), poser = actorPoser(animation, [ranger]);
+        try {
+            for (const name of clips) {
+                const clip = animation.animations.find(candidate => candidate.name === name);
+                expect(clip).toBeDefined(); poser.pose(name, clip.duration / 2);
+                for (const bone of ranger.meshes[0].skeleton.bones) expect(bone.matrixWorld.elements.every(Number.isFinite)).toBe(true);
+            }
+            const duration = animation.animations.find(clip => clip.name === "Death01").duration;
+            poser.pose("Death01", duration - 1e-6);
+            const bones = ranger.meshes[0].skeleton.bones, last = bones.map(bone => bone.quaternion.clone());
+            poser.pose("Death01", duration);
+            for (const [i, bone] of bones.entries()) expect(bone.quaternion.angleTo(last[i])).toBeLessThan(.001);
+        } finally { poser.dispose(); disposeActorSource(ranger); }
+    });
 });

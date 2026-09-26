@@ -9,6 +9,7 @@ import type { EntityQuery } from "./EntityWorld";
 import type { SkillSnapshot } from "./Skills";
 import type { EffectBuffer, FireShotBuffer } from "./CombatEffects";
 import type { CombatTextBuffer } from "./CombatText";
+import type { PlayerFeedback } from "./PlayerFeedback";
 import type { RecyclingRules } from "./Recycling";
 import type { ItemType } from "./ItemDefinition";
 import type { SpiritRealm } from "./SpiritRealm";
@@ -83,6 +84,7 @@ export interface CombatNotice {
 }
 
 export interface PlayerRenderState {
+    readonly feedback: Readonly<PlayerFeedback>;
     readonly entitySlot: number;
     readonly animationTime: number;
     readonly x: number;
