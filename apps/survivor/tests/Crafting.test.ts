@@ -11,7 +11,7 @@ import { GAME_CONFIG } from "../src/core/GameConfig";
 const attack: EquipmentAffix = { stat: "damage", value: 40, rarity: "rare" };
 const armor: EquipmentAffix = { stat: "armor", value: 20, rarity: "magic" };
 function gear(id: number, affixes = [attack, armor]): Equipment {
-    return { ...withEquipmentAffixes(createStarterEquipment(), affixes), id, locked: false, revision: 0 };
+    return { ...withEquipmentAffixes(createStarterEquipment("ranger"), affixes), id, locked: false, revision: 0 };
 }
 function fixture(items: InventoryItem[], gold = 100_000, dust = 100_000) {
     const simulation = new CombatSimulation("craft-transactions");
@@ -21,6 +21,15 @@ function fixture(items: InventoryItem[], gold = 100_000, dust = 100_000) {
 }
 
 describe("crafting transactions", () => {
+    test.each([null, "ranger"] as const)("inheritance preserves target armor access (%s), not the source weapon identity", requiredClass => {
+        const source = gear(10), target = { ...gear(11), value: "chest" as const, requiredClass };
+        const simulation = fixture([source, target]);
+        simulation.craft({ kind: "inherit", source, target });
+        expect(simulation.getSnapshot().player.inventory).toEqual([expect.objectContaining({
+            id: target.id, value: "chest", requiredClass, affixes: source.affixes, revision: 1
+        })]);
+        simulation.dispose();
+    });
     test("extract destroys the entire source, preserves exactly one affix, charges once and stacks by potency", () => {
         const source = gear(10), simulation = fixture([source, createAffixItem(20, attack)]);
         const op: CraftOperation = { kind: "extract", source, affix: 0 };

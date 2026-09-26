@@ -16,7 +16,7 @@ test("equipment and consumables follow the same attraction trajectory and arriva
     const { simulation, runtime, world } = fixture();
     try {
         const radius = simulation.getSnapshot().player.stats.pickupRadius, x = radius * .9;
-        world.spawnExperience(x, 0, 1); runtime.rewards.drop({ ...createStarterEquipment(), id: 900 }, x, 0);
+        world.spawnExperience(x, 0, 1); runtime.rewards.drop({ ...createStarterEquipment("ranger"), id: 900 }, x, 0);
         runtime.rewards.drop(createConsumable(901, "common", "mana", 2), x, 0);
         const orb = world.experience.slots[0], loot = world.loot.slots[0];
         runtime.advanceExperience(); runtime.collectEquipment();
@@ -32,10 +32,10 @@ test("out-of-range loot stays put; full bags preserve attracted drops and collec
     const { simulation, runtime, world } = fixture();
     try {
         const radius = simulation.getSnapshot().player.stats.pickupRadius;
-        runtime.rewards.drop({ ...createStarterEquipment(), id: 900 }, radius + 1, 0);
+        runtime.rewards.drop({ ...createStarterEquipment("ranger"), id: 900 }, radius + 1, 0);
         runtime.collectEquipment(); expect(world.position.x[world.loot.slots[0]]).toBe(radius + 1);
-        runtime.character.inventory = Array.from({ length: GAME_CONFIG.inventory.equipment.capacity }, (_, i) => ({ ...createStarterEquipment(), id: 1000 + i }));
-        runtime.rewards.drop({ ...createStarterEquipment(), id: 901 }, radius * .8, 0);
+        runtime.character.inventory = Array.from({ length: GAME_CONFIG.inventory.equipment.capacity }, (_, i) => ({ ...createStarterEquipment("ranger"), id: 1000 + i }));
+        runtime.rewards.drop({ ...createStarterEquipment("ranger"), id: 901 }, radius * .8, 0);
         for (let i = 0; i < 120; i++) runtime.collectEquipment();
         expect(world.loot.count).toBe(2); const slot = world.loot.slots[1];
         expect(world.position.x[slot]).toBeLessThan(.4);

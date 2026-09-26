@@ -81,7 +81,7 @@ test("only clearing every enemy produces the center chest; a full bag cannot con
     expect(run.getRenderState().chests).toMatchObject({ count: 1 });
     expect(run.getRenderState().chests.x[0]).toBe(CHALLENGE_ARENA.x); expect(run.getRenderState().chests.z[0]).toBe(CHALLENGE_ARENA.z);
     const state = run.checkpoint(), high = state.nextItemId;
-    run.restore({ ...state, nextItemId: high + 80, player: { ...state.player, inventory: Array.from({ length: 80 }, (_, index) => ({ ...createStarterEquipment(), id: high + index })) } });
+    run.restore({ ...state, nextItemId: high + 80, player: { ...state.player, inventory: Array.from({ length: 80 }, (_, index) => ({ ...createStarterEquipment("ranger"), id: high + index })) } });
     run.teleport(CHALLENGE_ARENA.x, CHALLENGE_ARENA.z);
     const blocked = run.checkpoint(); run.step(idle);
     expect(run.getSnapshot().challenges["rift-lord"]!.claimed).toBe(false);
@@ -89,6 +89,8 @@ test("only clearing every enemy produces the center chest; a full bag cannot con
     const full = run.checkpoint(); run.restore({ ...full, player: { ...full.player, inventory: [], autoRecycle: { ...full.player.autoRecycle, equipment: "rainbow" } } });
     run.step(idle);
     expect(run.getSnapshot().player.inventory).toContainEqual(expect.objectContaining({ type: "equipment", stars: 3, rarity: "rainbow", itemLevel: 10 }));
+    expect(run.getSnapshot().player.inventory.filter(item => item.type === "equipment")
+        .every(item => ["weapon", "head", "chest", "legs", "boots", "arms", "hands"].includes(item.value))).toBe(true);
     expect(run.getRenderState().chests.count).toBe(0); expect(run.getSnapshot().challenges["rift-lord"]!.claimed).toBe(true);
     const returned = restore(run.checkpoint("homestead"));
     expect(() => returned.checkpoint("rift-lord")).toThrow(/卷轴/);
@@ -122,6 +124,33 @@ test("scrolls roll independently without equipment drops and cover each boss", (
     }
     expect([...seen].sort()).toEqual([...CHALLENGE_IDS].sort());
     simulation.dispose();
+});
+
+test.each([false, true])("normal and boss loot exclude accessories (boss=%s)", boss => {
+    const sim = home(), { entities: e, rewards } = sim as unknown as { entities: CombatWorld; rewards: CombatRewards };
+    const events = new CombatEvents(), random = new DeterministicRandom("restricted-drops");
+    for (let i = 0; i < 32; i++) {
+        const slot = e.spawnEnemy(challengeSpawns("rift-lord", 1)[boss ? 0 : 2], { resident: true });
+        events.add(e, CombatEventKind.Defeat, EffectCause.Attack, e.world.ids[e.player], slot, 0, i);
+        events.drain((events, index) => rewards.grant(events, index, random, 1, { ...BASE_LOOT_PROFILE, normalDropChance: 1 }));
+        const drops = [...rewards.groundItems.values()].filter(item => item.type === "equipment");
+        expect(drops).toHaveLength(1);
+        expect(["weapon", "head", "chest", "legs", "boots", "arms", "hands"]).toContain(drops[0].value);
+        expect(drops[0].requiredClass).toBe(drops[0].value === "weapon" ? "ranger" : null);
+        e.remove(slot); for (const query of [e.loot, e.experience]) while (query.count) e.remove(query.slots[0]); rewards.groundItems.clear();
+    }
+    sim.dispose();
+});
+
+test("challenge ground loot validates class restrictions before restore", () => {
+    const start = home(), run = restore(start.checkpoint("rift-lord")), e = entities(run);
+    defeatEnemy(run, e.enemies.slots[0]);
+    const before = run.checkpoint(), malformed = structuredClone(before);
+    const drop = malformed.challenges["rift-lord"]!.loot.find(drop => drop.item.type === "equipment")!;
+    Object.assign(drop.item, { value: "necklace", requiredClass: "ranger" });
+    expect(() => run.restore(malformed)).toThrow(/装备/);
+    expect(run.checkpoint()).toEqual(before);
+    start.dispose(); run.dispose();
 });
 
 test("committed kills override older slots, survive worker replacement and never replay XP or scroll consumption", async () => {

@@ -19,7 +19,7 @@ for (const level of [1, 5, 10, 25, 50, 100]) for (const { kind, boss } of oppone
     }
     rows.push(row);
 }
-const report = { reference: "64 deterministic same-level complete blue equipment sets, first matching item per slot; attributes 40% might / 40% vitality / 10% agility / 10% spirit; no souls or targeted affixes",
+const report = { reference: "64 deterministic same-level theoretical 11-slot blue equipment sets, including accessories without a live source; first matching item per slot; attributes 40% might / 40% vitality / 10% agility / 10% spirit; no souls or targeted affixes",
     metrics: "hitPercent excludes crit/block/shields; basicTtk is stationary autoattack expectation without skills, lethal procs, guard stance or healing; netBasicDps includes enemy crit, player evasion/block, passive shield and regeneration, excludes lifesteal and active skills; not a full encounter simulation",
     rows };
 await writeFile(new URL("../docs/game/measurements/combat-balance.json", import.meta.url), JSON.stringify(report, null, 2) + "\n");

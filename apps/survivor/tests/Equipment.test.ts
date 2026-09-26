@@ -7,8 +7,8 @@ describe("equipment generation", () => {
     test("generates stable, finite equipment with valid references", () => {
         const first = new DeterministicRandom("loot-table");
         const second = new DeterministicRandom("loot-table");
-        const a = Array.from({ length: 1600 }, (_, index) => generateEquipment(first, index + 2, 1 + index % 12, BASE_LOOT_PROFILE));
-        const b = Array.from({ length: 1600 }, (_, index) => generateEquipment(second, index + 2, 1 + index % 12, BASE_LOOT_PROFILE));
+        const a = Array.from({ length: 1600 }, (_, index) => generateEquipment(first, index + 2, 1 + index % 12, BASE_LOOT_PROFILE, { classId: "ranger", slots: EQUIPMENT_SLOTS }));
+        const b = Array.from({ length: 1600 }, (_, index) => generateEquipment(second, index + 2, 1 + index % 12, BASE_LOOT_PROFILE, { classId: "ranger", slots: EQUIPMENT_SLOTS }));
         expect(a).toEqual(b);
         expect(new Set(a.map(item => item.id)).size).toBe(a.length);
         for (const item of a) {
@@ -29,7 +29,7 @@ describe("equipment generation", () => {
 
     test("aggregates one authoritative value from each equipped slot", () => {
         const random = new DeterministicRandom("aggregation");
-        const items = Array.from({ length: 100 }, (_, index) => generateEquipment(random, index + 2, 5, BASE_LOOT_PROFILE));
+        const items = Array.from({ length: 100 }, (_, index) => generateEquipment(random, index + 2, 5, BASE_LOOT_PROFILE, { classId: "ranger", slots: EQUIPMENT_SLOTS }));
         const equipped = Object.fromEntries(EQUIPMENT_SLOTS.map(slot => [slot, items.find(item => item.value === slot)!]));
         expect(Object.values(equipped).every(Boolean)).toBe(true);
         const totals = sumEquipment(equipped);
@@ -38,8 +38,8 @@ describe("equipment generation", () => {
 
     test("chest quality floors do not change level bases or star count rolls", () => {
         for (const rarity of RARITIES) {
-            const common = generateEquipment(new DeterministicRandom("independent-axes"), 2, 9, BASE_LOOT_PROFILE);
-            const item = generateEquipment(new DeterministicRandom("independent-axes"), 2, 9, BASE_LOOT_PROFILE, rarity);
+            const common = generateEquipment(new DeterministicRandom("independent-axes"), 2, 9, BASE_LOOT_PROFILE, { classId: "ranger", slots: EQUIPMENT_SLOTS });
+            const item = generateEquipment(new DeterministicRandom("independent-axes"), 2, 9, BASE_LOOT_PROFILE, { classId: "ranger", slots: EQUIPMENT_SLOTS, minimumRarity: rarity });
             expect(RARITIES.indexOf(item.rarity)).toBeGreaterThanOrEqual(RARITIES.indexOf(rarity));
             expect(item.baseBonuses).toEqual(common.baseBonuses);
             expect(item.stars).toBe(common.stars);

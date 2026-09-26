@@ -10,8 +10,8 @@ import { CombatSimulation } from "../src/core/CombatSimulation";
 import type { RegionalWorld } from "../src/core/RegionalWorld";
 
 test("category capacities are independent and a full potion bag can accept matching stack space", () => {
-    const gear = Array.from({ length: GAME_CONFIG.inventory.equipment.capacity }, (_, id) => ({ ...createStarterEquipment(), id: id + 100 }));
-    expect(insertInventoryItem(gear, { ...createStarterEquipment(), id: 200 })).toBeUndefined();
+    const gear = Array.from({ length: GAME_CONFIG.inventory.equipment.capacity }, (_, id) => ({ ...createStarterEquipment("ranger"), id: id + 100 }));
+    expect(insertInventoryItem(gear, { ...createStarterEquipment("ranger"), id: 200 })).toBeUndefined();
     const potion = createConsumable(300, "common", "health", 98);
     const bag = insertInventoryItem(gear, potion)!;
     expect(inventorySlots(bag, "equipment")).toBe(80); expect(inventorySlots(bag, "consumable")).toBe(1);

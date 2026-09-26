@@ -22,7 +22,7 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     await pauseCombat(page);
     const random = new DeterministicRandom("loot-ui");
     const items: InventoryItem[] = [
-        ...RARITIES.map((rarity, i) => ({ ...createStarterEquipment(), id: 100 + i, rarity, locked: false, bonuses: EMPTY_BONUSES })),
+        ...RARITIES.map((rarity, i) => ({ ...createStarterEquipment("ranger"), id: 100 + i, rarity, locked: false, bonuses: EMPTY_BONUSES })),
         generateOrb(random, 200, "rainbow"), generateOrb(random, 201, "diamond"),
         createConsumable(300, "rare", "health-percent", 5), createConsumable(301, "legendary", "mana", 3)
     ];

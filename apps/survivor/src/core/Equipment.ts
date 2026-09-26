@@ -1,5 +1,6 @@
 import { DeterministicRandom } from "./DeterministicRandom";
 import type { ItemDefinition } from "./ItemDefinition";
+import { CHARACTER_CLASSES, isCharacterClassId, type CharacterClassId } from "./CharacterClass";
 import { RARITIES, rollRarity, rollStars, type Rarity, type LootProfile } from "./Loot";
 export { RARITIES, RARITY_NAMES, type Rarity } from "./Loot";
 
@@ -9,6 +10,9 @@ export const SLOT_NAMES = Object.freeze({
 });
 export type EquipmentSlot = keyof typeof SLOT_NAMES;
 export const EQUIPMENT_SLOTS = Object.freeze(Object.keys(SLOT_NAMES) as EquipmentSlot[]);
+const ACCESSORY_SLOTS: readonly EquipmentSlot[] = ["ring", "necklace", "bracelet", "charm"];
+/** All current world/challenge rewards use this pool; accessories await a dedicated source. */
+export const REGULAR_DROP_SLOTS = Object.freeze(EQUIPMENT_SLOTS.filter(slot => !ACCESSORY_SLOTS.includes(slot)));
 export const ATTRIBUTE_IDS = ["might", "vitality", "agility", "spirit"] as const;
 export type AttributeId = typeof ATTRIBUTE_IDS[number];
 export const ATTRIBUTE_NAMES: Readonly<Record<AttributeId, string>> = Object.freeze({ might: "力量", vitality: "体魄", agility: "敏捷", spirit: "精神" });
@@ -71,6 +75,8 @@ export interface EquipmentAffix {
     readonly rarity: Rarity;
 }
 export interface Equipment extends ItemDefinition<"equipment", EquipmentSlot, 1> {
+    /** null means universal. Weapons require a class; accessories must be universal. */
+    readonly requiredClass: CharacterClassId | null;
     readonly locked: boolean;
     /** Automatic wear history, not a second lock. Manual locking/equipping/crafting clears it. */
     readonly autoEquipped: boolean;
@@ -84,6 +90,21 @@ export interface Equipment extends ItemDefinition<"equipment", EquipmentSlot, 1>
 }
 export type EquippedItems = Readonly<Partial<Record<EquipmentSlot, Equipment>>>;
 
+export function hasValidEquipmentAccess(item: Pick<Equipment, "value" | "requiredClass">): boolean {
+    if (!EQUIPMENT_SLOTS.includes(item.value)) return false;
+    if (item.value === "weapon") return isCharacterClassId(item.requiredClass);
+    if (ACCESSORY_SLOTS.includes(item.value)) return item.requiredClass === null;
+    return item.requiredClass === null || isCharacterClassId(item.requiredClass);
+}
+
+export function canEquipEquipment(item: Equipment, classId: CharacterClassId): boolean {
+    return hasValidEquipmentAccess(item) && (item.requiredClass === null || item.requiredClass === classId);
+}
+
+export function equipmentAccessLabel(item: Equipment): string {
+    return item.requiredClass === null ? ACCESSORY_SLOTS.includes(item.value) ? "通用饰品" : "通用装备" : `${CHARACTER_CLASSES[item.requiredClass].name}专属`;
+}
+
 const BASES: Readonly<Record<EquipmentSlot, readonly [BonusId, number, number][]>> = {
     weapon: [["damage", 3.5, 1.35]], head: [["maxHealth", 6, 2], ["armor", 0.5, 0.25]],
     chest: [["maxHealth", 9, 3.2], ["armor", 0.8, 0.38]], legs: [["maxHealth", 7, 2.4], ["armor", 0.6, 0.3]],
@@ -93,8 +114,8 @@ const BASES: Readonly<Record<EquipmentSlot, readonly [BonusId, number, number][]
 };
 export const QUALITY_POWER = [1, 1.3, 1.7, 2.2, 2.9, 3.8] as const;
 const PREFIXES = ["狼印", "余烬", "风暴", "冷月", "猩红", "幽影"] as const;
-const ITEM_NAMES: Readonly<Record<EquipmentSlot, readonly string[]>> = Object.freeze({
-    weapon: ["猎手短弩", "符文长弓", "月刃", "巡林战杖"], head: ["游侠兜帽", "骨纹战盔", "星铁面甲", "灵纹冠冕"],
+const ITEM_NAMES: Readonly<Record<Exclude<EquipmentSlot, "weapon">, readonly string[]>> = Object.freeze({
+    head: ["游侠兜帽", "骨纹战盔", "星铁面甲", "灵纹冠冕"],
     chest: ["巡林皮甲", "守望锁甲", "黑曜胸铠", "符文法衣"], legs: ["猎手护腿", "铁卫胫甲", "暮色战裙", "星纹腿甲"],
     boots: ["轻羽靴", "铁卫战靴", "踏焰靴", "踏星履"], arms: ["鹿皮臂甲", "尖刺护臂", "铁卫臂铠", "灵纹臂甲"],
     hands: ["游侠手套", "钢铁护手", "符文掌套", "月影手甲"], ring: ["琥珀戒指", "秘银指环", "黑曜骨戒", "星辉指环"],
@@ -114,12 +135,12 @@ function equipmentBase(slot: EquipmentSlot, itemLevel: number): EquipmentBonuses
     return Object.freeze(bonuses);
 }
 
-function assemble(id: number, slot: EquipmentSlot, rarity: Rarity, stars: 1 | 2 | 3,
+function assemble(id: number, slot: EquipmentSlot, requiredClass: CharacterClassId | null, rarity: Rarity, stars: 1 | 2 | 3,
     itemLevel: number, name: string, affixes: readonly EquipmentAffix[]): Equipment {
     const baseBonuses = equipmentBase(slot, itemLevel);
     const bonuses = { ...baseBonuses };
     for (const affix of affixes) bonuses[affix.stat] = round(bonuses[affix.stat] + affix.value);
-    return Object.freeze({ type: "equipment", value: slot, size: 1, id, rarity, stars, itemLevel, name, baseBonuses, locked: id === 1, autoEquipped: false, revision: 0,
+    return Object.freeze({ type: "equipment", value: slot, requiredClass, size: 1, id, rarity, stars, itemLevel, name, baseBonuses, locked: id === 1, autoEquipped: false, revision: 0,
         affixes: Object.freeze(affixes), bonuses: Object.freeze(bonuses), score: equipmentScore(bonuses) });
 }
 
@@ -132,19 +153,29 @@ export function withEquipmentAffixes(item: Equipment, affixes: readonly Equipmen
         bonuses: Object.freeze(bonuses), score: equipmentScore(bonuses) });
 }
 
-export function createStarterEquipment(): Equipment {
-    return assemble(1, "weapon", "common", 1, 1, "守夜短弩", [
+export function createStarterEquipment(classId: CharacterClassId): Equipment {
+    if (!isCharacterClassId(classId)) throw new RangeError("Unknown character class");
+    return assemble(1, "weapon", classId, "common", 1, 1, CHARACTER_CLASSES[classId].starterWeapon, [
         Object.freeze({ stat: "damage", value: 1, rarity: "common" }),
         Object.freeze({ stat: "accuracy", value: 0.02, rarity: "common" })
     ]);
 }
 
+interface EquipmentGeneration {
+    readonly classId: CharacterClassId;
+    readonly slots: readonly EquipmentSlot[];
+    readonly minimumRarity?: Rarity;
+}
+
+/** Pure generation. Reward owners explicitly select an eligible slot pool. */
 export function generateEquipment(random: DeterministicRandom, id: number, itemLevel: number,
-    profile: LootProfile, minimumRarity: Rarity = "common"): Equipment {
+    profile: LootProfile, options: EquipmentGeneration): Equipment {
     if (!Number.isSafeInteger(id) || id <= 1) throw new RangeError("Equipment id must be a safe integer above one");
     if (!Number.isSafeInteger(itemLevel) || itemLevel <= 0) throw new RangeError("Item level must be a positive safe integer");
-    const slot = random.pick(EQUIPMENT_SLOTS);
-    const rarity = rollRarity(random, profile, minimumRarity);
+    if (!isCharacterClassId(options.classId)) throw new RangeError("Unknown character class");
+    if (!options.slots.length || options.slots.some(slot => !EQUIPMENT_SLOTS.includes(slot))) throw new RangeError("Invalid equipment slot pool");
+    const slot = random.pick(options.slots);
+    const rarity = rollRarity(random, profile, options.minimumRarity ?? "common");
     const rarityIndex = RARITIES.indexOf(rarity);
     const stars = rollStars(random, profile);
     const candidates = [...BONUS_IDS];
@@ -154,7 +185,8 @@ export function generateEquipment(random: DeterministicRandom, id: number, itemL
         const value = round(BONUS_INFO[stat].value * QUALITY_POWER[rarityIndex] * (0.86 + random.next() * 0.28));
         affixes.push(Object.freeze({ stat, value, rarity }));
     }
-    return assemble(id, slot, rarity, stars, itemLevel, `${random.pick(PREFIXES)}${random.pick(ITEM_NAMES[slot])}`, affixes);
+    const names = slot === "weapon" ? CHARACTER_CLASSES[options.classId].weapons : ITEM_NAMES[slot];
+    return assemble(id, slot, slot === "weapon" ? options.classId : null, rarity, stars, itemLevel, `${random.pick(PREFIXES)}${random.pick(names)}`, affixes);
 }
 
 export function sumEquipment(items: EquippedItems): EquipmentBonuses {

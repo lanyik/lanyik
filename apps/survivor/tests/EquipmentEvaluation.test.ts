@@ -15,7 +15,7 @@ import type { RegionalWorld } from "../src/core/RegionalWorld";
 
 function gear(id: number, bonuses: Partial<EquipmentBonuses>, value: Equipment["value"] = "weapon", itemLevel = 1): Equipment {
     const total = { ...EMPTY_BONUSES, ...bonuses };
-    return { ...createStarterEquipment(), id, value, itemLevel, locked: false, bonuses: total, baseBonuses: total, affixes: [], score: equipmentScore(total) };
+    return { ...createStarterEquipment("ranger"), id, value, requiredClass: value === "weapon" ? "ranger" : null, itemLevel, locked: false, bonuses: total, baseBonuses: total, affixes: [], score: equipmentScore(total) };
 }
 
 // Arrange precise inventory boundaries; assertions exercise public gameplay transactions.
@@ -84,7 +84,7 @@ describe("equipment evaluation and safe cleanup", () => {
         const inferior = gear(3, { damage: 1 }, "weapon", 99);
         const emptySlot = gear(4, { armor: 1 }, "head");
         const specialist = gear(5, { goldBonus: 2 });
-        const tie = { ...createStarterEquipment(), id: 6 };
+        const tie = { ...createStarterEquipment("ranger"), id: 6 };
         const potion = createConsumable(7, "common", "health");
         const orb = generateOrb(new DeterministicRandom("safe-orb"), 8);
         {

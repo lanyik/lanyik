@@ -1,0 +1,42 @@
+import { expect, test } from "@playwright/test";
+import { createStarterEquipment } from "../../src/core/Equipment";
+import type { CombatSimulation } from "../../src/core/CombatSimulation";
+import { advanceCombat, combatWorker, inspectCombatWorker, pauseCombat } from "../helpers/browserCombat";
+
+test("ranger identity and shared armor remain visible through Worker equipment and saved reload", async ({ page }) => {
+    const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+    await inspectCombatWorker(page); await page.goto("/");
+    await expect(page.getByText("职业：游侠 · 职业武器：弓弩", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
+    await expect(page.locator(".survivor[data-state=ready]")).toHaveAttribute("data-location", "homestead", { timeout: 45_000 });
+    await pauseCombat(page);
+    const armor = { ...createStarterEquipment("ranger"), id: 2, value: "chest" as const, requiredClass: null, name: "通用测试胸甲", locked: false };
+    await combatWorker(page).evaluate(item => {
+        const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
+        const saved = sim.checkpoint();
+        sim.restore({ ...saved, nextItemId: 3, player: { ...saved.player, inventory: [item] } });
+    }, armor);
+    await advanceCombat(page);
+    await page.keyboard.press("KeyB");
+    const card = page.locator('.inventory-card[data-item-id="2"]');
+    await expect(card).toContainText("通用装备");
+    await card.dblclick();
+    await page.keyboard.press("KeyC");
+    await expect(page.getByTestId("character-class")).toContainText("游侠");
+    const panel = page.getByTestId("character-panel");
+    await panel.getByRole("button", { name: "胸甲：通用测试胸甲", exact: true }).click();
+    await expect(panel.locator(".item-details")).toContainText("通用装备");
+    await panel.getByRole("button", { name: "武器：守夜短弩", exact: true }).click();
+    await expect(panel.locator(".item-details")).toContainText("游侠专属");
+    const saved = await page.evaluate(async () => (await window.survivorApplication!.session.save("manual-1")).checkpoint);
+    expect(saved.player.classId).toBe("ranger");
+    expect(saved.player.equipment.chest).toMatchObject({ id: 2, requiredClass: null });
+    await page.reload();
+    await expect(page.locator(".save-card").filter({ hasText: "手动存档 1" })).toContainText("游侠");
+    await page.getByRole("button", { name: "读取手动存档 1", exact: true }).click();
+    await expect(page.locator(".survivor[data-state=ready]")).toHaveAttribute("data-location", "homestead", { timeout: 45_000 });
+    await page.keyboard.press("KeyC");
+    await expect(page.getByTestId("character-class")).toContainText("游侠");
+    expect(await page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat!.player.equipment)).toEqual(saved.player.equipment);
+    expect(errors).toEqual([]);
+});

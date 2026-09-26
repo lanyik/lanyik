@@ -17,12 +17,12 @@ import type { RegionalWorld } from "../src/core/RegionalWorld";
 const attributes = { might: 5, vitality: 5, agility: 5, spirit: 5 };
 function gear(id: number, damage: number, itemLevel = 1, extra: Partial<Equipment> = {}): Equipment {
     const bonuses = { ...EMPTY_BONUSES, damage };
-    return Object.freeze({ ...createStarterEquipment(), id, itemLevel, locked: false, autoEquipped: false,
+    return Object.freeze({ ...createStarterEquipment("ranger"), id, itemLevel, locked: false, autoEquipped: false,
         baseBonuses: EMPTY_BONUSES, bonuses, affixes: [{ stat: "damage", value: damage, rarity: "common" }] as const, score: equipmentScore(bonuses), ...extra });
 }
 const old = () => gear(2, 10, 1, { locked: false, autoEquipped: true });
 function input(inventory: InventoryItem[], equipment: EquippedItems = { weapon: old() }, orbs: (Orb | undefined)[] = Array(6).fill(undefined), level = 1) {
-    return { inventory, equipment, orbs, attributes, level, recycling: EMPTY_RECYCLING };
+    return { classId: "ranger" as const, inventory, equipment, orbs, attributes, level, recycling: EMPTY_RECYCLING };
 }
 function simulation(inventory: InventoryItem[], equipment: EquippedItems = { weapon: old() }, level = 1) {
     const sim = new CombatSimulation("automatic-loadout");
@@ -81,7 +81,7 @@ test("small upgrades retain the old equipment, and manual locking permanently re
     expect(sim.getSnapshot().player.inventory.find(item => item.id === 2)).toMatchObject({ autoEquipped: true });
     sim.setEquipmentLock(2, true);
     expect(sim.getSnapshot().player.inventory.find(item => item.id === 2)).toMatchObject({ locked: true, autoEquipped: false });
-    const checkpoint = sim.checkpoint(); expect(checkpoint.version).toBe(10); sim.restore(checkpoint);
+    const checkpoint = sim.checkpoint(); expect(checkpoint.version).toBe(11); sim.restore(checkpoint);
     expect(sim.getSnapshot().autoCombat.enabled).toBe(false);
     expect(sim.getSnapshot().player.equipment.weapon?.autoEquipped).toBe(true);
     expect(sim.getSnapshot().player.inventory.find(item => item.id === 2)).toMatchObject({ autoEquipped: false });

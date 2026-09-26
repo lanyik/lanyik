@@ -55,6 +55,7 @@ function obsolete(item: Equipment, player: EquipmentContext): boolean {
 }
 
 interface LoadoutInput {
+    readonly classId: EquipmentContext["classId"];
     readonly passiveBonuses?: EquipmentContext["passiveBonuses"];
     readonly passiveFind?: FindRatings;
     readonly inventory: readonly InventoryItem[];
@@ -79,7 +80,8 @@ export function planAutomaticLoadout(input: LoadoutInput, incoming: readonly Inv
         let selected: Equipment | undefined, gain = 0, nextStats = stats;
         for (const item of items) {
             if (item.type !== "equipment" || item.value !== slot) continue;
-            const comparison = compareEquipment(item, { level: input.level, attributes: input.attributes, equipment, stats, passiveBonuses: input.passiveBonuses });
+            const comparison = compareEquipment(item, { classId: input.classId, level: input.level, attributes: input.attributes, equipment, stats, passiveBonuses: input.passiveBonuses });
+            if (!comparison.canEquip) continue;
             if (comparison.delta > gain || comparison.delta === gain && gain > 0 && item.id < selected!.id) {
                 selected = item; gain = comparison.delta; nextStats = comparison.stats;
             }
@@ -94,7 +96,7 @@ export function planAutomaticLoadout(input: LoadoutInput, incoming: readonly Inv
     const orbs = bestOrbs(items, input.orbs, input.level, input.passiveFind), chosen = new Set(orbs.filter(orb => !!orb).map(orb => orb.id));
     items = items.filter(item => !chosen.has(item.id));
     for (const orb of input.orbs) if (orb && !chosen.has(orb.id)) items.push(orb);
-    const player = { level: input.level, attributes: input.attributes, equipment, stats, passiveBonuses: input.passiveBonuses }, recycled: InventoryItem[] = [];
+    const player = { classId: input.classId, level: input.level, attributes: input.attributes, equipment, stats, passiveBonuses: input.passiveBonuses }, recycled: InventoryItem[] = [];
     let inventory = items.filter(item => {
         if (item.id === protectedId || !(item.type === "equipment" && obsolete(item, player)) && !shouldRecycle(item, input.recycling, player)) return true;
         recycled.push(item); return false;

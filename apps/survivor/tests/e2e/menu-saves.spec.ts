@@ -32,7 +32,7 @@ test("home previews seeds before graphics starts; manual and auto saves roundtri
     await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
-    const items = [{ ...createStarterEquipment(), id: 22 }, createOrb(23, "rare", "bounty"), createConsumable(24, "legendary", "mana-percent", 7), createAffixItem(25, { stat: "damage", value: 20, rarity: "rare" }), createChallengeScroll(26, "storm-oracle", 3)];
+    const items = [{ ...createStarterEquipment("ranger"), id: 22 }, createOrb(23, "rare", "bounty"), createConsumable(24, "legendary", "mana-percent", 7), createAffixItem(25, { stat: "damage", value: 20, rarity: "rare" }), createChallengeScroll(26, "storm-oracle", 3)];
     await inventory(page, items); await page.keyboard.press("KeyO");
     const menu = page.getByRole("dialog", { name: "游戏与存档", exact: true });
     await menu.getByRole("button", { name: "选择自动存档", exact: true }).click();
@@ -67,7 +67,7 @@ test("Shift toggles bag and forge locks; a single level-batch preview protects l
     await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
-    const base = createStarterEquipment();
+    const base = createStarterEquipment("ranger");
     await inventory(page, [{ ...base, id: 10, itemLevel: 4, locked: true }, { ...base, id: 11, itemLevel: 5, locked: false }, { ...base, id: 12, itemLevel: 3, locked: false }, { ...base, id: 13, itemLevel: 4, locked: true }]);
     await page.keyboard.press("KeyB"); const bag = page.locator(".inventory-window"), cell = bag.locator('[data-item-id="10"]');
     await cell.click(); await expect(bag.getByRole("button", { name: "售出", exact: true })).toBeDisabled();

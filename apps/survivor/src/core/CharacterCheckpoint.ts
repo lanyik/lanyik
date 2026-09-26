@@ -1,4 +1,5 @@
-import { ATTRIBUTE_IDS, BONUS_IDS, EQUIPMENT_SLOTS } from "./Equipment";
+import { ATTRIBUTE_IDS, BONUS_IDS, EQUIPMENT_SLOTS, canEquipEquipment, hasValidEquipmentAccess } from "./Equipment";
+import { isCharacterClassId } from "./CharacterClass";
 import type { PlayerSnapshot } from "./CombatState";
 import { GAME_CONFIG, ticksForSeconds } from "./GameConfig";
 import { POTION_RARITIES, POTION_TYPES, type InventoryItem } from "./InventoryItem";
@@ -16,7 +17,7 @@ import { ENEMY_DEFINITIONS, enemyStats } from "./EnemyDefinitions";
 import { PASSIVE_UNLOCK_LEVELS, isPassiveId, passiveNodeId } from "./PassiveSkills";
 
 export interface CharacterCheckpoint {
-    readonly version: 10;
+    readonly version: 11;
     readonly characterId: string;
     readonly challengeRevision: number;
     readonly challenges: ChallengeProgressMap;
@@ -34,7 +35,7 @@ export interface CharacterCheckpoint {
     readonly attackCooldown: number;
     readonly damageImmunity: number;
     readonly skills: SkillCheckpoint;
-    readonly player: Pick<PlayerSnapshot, "x" | "z" | "heading" | "health" | "mana" | "level" | "experience" | "unspentAttributePoints" | "gold" | "orbDust" | "equipment" | "inventory" | "orbs" | "attributes" | "spiritRealm" | "autoRecycle" | "recycled" | "autoCast" | "potionRemaining" | "shieldRemaining">;
+    readonly player: Pick<PlayerSnapshot, "classId" | "x" | "z" | "heading" | "health" | "mana" | "level" | "experience" | "unspentAttributePoints" | "gold" | "orbDust" | "equipment" | "inventory" | "orbs" | "attributes" | "spiritRealm" | "autoRecycle" | "recycled" | "autoCast" | "potionRemaining" | "shieldRemaining">;
 }
 
 const integer = (value: number, min = 0) => Number.isSafeInteger(value) && value >= min;
@@ -44,7 +45,7 @@ function assertItem(item: InventoryItem): void {
         || typeof item.name !== "string" || !item.name.length || item.name.length > 120 || !integer(item.size, 1)
         || item.size > GAME_CONFIG.inventory[item.type].stackSize) throw new Error("存档物品无效");
     if (item.type === "equipment") {
-        if (!EQUIPMENT_SLOTS.includes(item.value) || !integer(item.itemLevel, 1) || !integer(item.stars) || item.stars > 4 || !integer(item.revision)
+        if (!hasValidEquipmentAccess(item) || !integer(item.itemLevel, 1) || !integer(item.stars) || item.stars > 4 || !integer(item.revision)
             || typeof item.locked !== "boolean" || typeof item.autoEquipped !== "boolean"
             || !finite(item.score) || !item.baseBonuses || !item.bonuses
             || BONUS_IDS.some(id => !finite(item.baseBonuses[id]) || !finite(item.bonuses[id]))
@@ -63,13 +64,14 @@ function assertItem(item: InventoryItem): void {
 
 /** Reject invalid/currently unsupported saves before changing a running character. No migration. */
 export function validateCharacterCheckpoint(value: CharacterCheckpoint): CharacterCheckpoint {
-    if (!value || value.version !== 10) throw new Error("角色存档版本与当前游戏不一致");
+    if (!value || value.version !== 11) throw new Error("角色存档版本与当前游戏不一致");
     if (typeof value.characterId !== "string" || !value.characterId.length || value.characterId.length > 128 || !integer(value.challengeRevision)
         || !integer(value.teleportReadyAt) || value.teleportReadyAt > value.tick + GAME_CONFIG.timing.simulationHz * 5) throw new Error("角色传送进度无效");
     if ((!isChallenge(value.location) && !["wilds", "homestead"].includes(value.location)) || !value.wildsPosition
         || !Number.isFinite(value.wildsPosition.x) || !Number.isFinite(value.wildsPosition.z)) throw new Error("角色世界位置无效");
     validateExploration(value.exploration);
     const p = value.player, s = value.skills;
+    if (!p || !isCharacterClassId(p.classId)) throw new Error("角色职业无效");
     if (typeof value.seed !== "string" || !value.seed.trim() || value.seed.length > 128 || !value.origin
         || !Number.isFinite(value.origin.x) || !Number.isFinite(value.origin.z) || !p || !s
         || !Number.isFinite(p.x) || !Number.isFinite(p.z) || !Number.isFinite(p.heading)
@@ -111,7 +113,7 @@ export function validateCharacterCheckpoint(value: CharacterCheckpoint): Charact
     const all = [...p.inventory, ...Object.values(p.equipment).filter(item => !!item), ...p.orbs.filter(item => !!item), ...groundItems];
     all.forEach(assertItem);
     if (new Set(all.map(item => item.id)).size !== all.length || all.some(item => item.id >= value.nextItemId)
-        || Object.entries(p.equipment).some(([slot, item]) => item && (item.type !== "equipment" || item.value !== slot))
+        || Object.entries(p.equipment).some(([slot, item]) => item && (item.type !== "equipment" || item.value !== slot || !canEquipEquipment(item, p.classId)))
         || p.orbs.some(item => item && item.type !== "orb")
         || Object.entries(GAME_CONFIG.inventory).some(([type, rule]) => p.inventory.filter(item => item.type === type).length > rule.capacity)) throw new Error("角色物品位置或数量无效");
     if (!integer(s.points) || !integer(s.revision) || validateSkillRanks(s.ranks, p.level) || s.points + investedPoints(s.ranks) !== p.level - 1

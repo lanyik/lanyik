@@ -5,7 +5,7 @@ import { CharacterState } from "./CharacterState";
 import { CombatEventKind, type CombatEventConsumer } from "./CombatEvents";
 import { combatFeedback } from "./CombatFeedback";
 import { PlayerFeedback } from "./PlayerFeedback";
-import { ATTRIBUTE_IDS, generateEquipment, type AttributeId, type EquippedItems } from "./Equipment";
+import { ATTRIBUTE_IDS, REGULAR_DROP_SLOTS, generateEquipment, type AttributeId, type EquippedItems } from "./Equipment";
 import { DeterministicRandom } from "./DeterministicRandom";
 import { COMBAT_STEP_MS } from "./FixedStepClock";
 import { rollAttack, type DerivedStats } from "./CombatStats";
@@ -238,7 +238,7 @@ export class CombatSimulation {
         }
         const recovering = recoverDefeat && this.gameOverValue;
         if (recovering) { position = CHALLENGE_SPAWN; challengeRevision++; }
-        return validateCharacterCheckpoint({ version: 10, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
+        return validateCharacterCheckpoint({ version: 11, characterId: this.characterId, challenges, challengeRevision, teleportReadyAt, seed: String(this.seed), origin: { ...this.start },
             location: destination, wildsPosition, exploration: this.exploration.snapshot,
             player: travelling || point || recovering ? { ...player, inventory, ...position, ...(destination === "homestead" || recovering ? { health: this.stats.maxHealth, mana: this.stats.maxMana } : {}) } : player,
             tick: this.tickValue, kills: this.rewards.kills, openedChests: this.openedChests, nextItemId: this.character.nextItemId, random: this.random.state,
@@ -706,7 +706,7 @@ export class CombatSimulation {
             // A blocked chest must not consume random state or item IDs.
             const random = this.random.clone();
             let nextId = this.character.nextItemId;
-            const item = generateEquipment(random, nextId++, chest.region.level, this.character.lootProfile, rules.rarity);
+            const item = generateEquipment(random, nextId++, chest.region.level, this.character.lootProfile, { classId: this.character.classId, slots: REGULAR_DROP_SLOTS, minimumRarity: rules.rarity });
             const rewards: InventoryItem[] = [item, generateConsumable(random, nextId++, rules.rarity)];
             if (chest.hasOrb) rewards.push(generateOrb(random, nextId++, rules.rarity));
             const gold = Math.round(rules.gold * (1 + this.stats.goldBonus + this.character.orbResonance.goldBonus));
@@ -871,7 +871,8 @@ export class CombatSimulation {
         const run = this.challenge!;
         if (!run.cleared || run.claimed || Math.hypot(this.playerX - CHALLENGE_ARENA.x, this.playerZ - CHALLENGE_ARENA.z) > .95) return;
         const random = this.random.clone();
-        const item = generateEquipment(random, this.character.nextItemId, this.currentRegion.level, { ...this.character.lootProfile, stars: [0, 0, 1] }, "rainbow");
+        const item = generateEquipment(random, this.character.nextItemId, this.currentRegion.level, { ...this.character.lootProfile, stars: [0, 0, 1] },
+            { classId: this.character.classId, slots: REGULAR_DROP_SLOTS, minimumRarity: "rainbow" });
         // The guaranteed prize must be retained, whether in the bag or automatically equipped.
         if (!this.character.receiveGenerated([item], this.character.nextItemId + 1, 0, item.id, run)) return;
         this.random = random;

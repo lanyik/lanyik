@@ -19,7 +19,7 @@ test("crafting confirms destructive changes, supports affix dragging and persist
     await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
-    const gear = (id: number, name: string, damage: number): Equipment => ({ ...withEquipmentAffixes(createStarterEquipment(), [
+    const gear = (id: number, name: string, damage: number): Equipment => ({ ...withEquipmentAffixes(createStarterEquipment("ranger"), [
         { stat: "damage", value: damage, rarity: "rare" }, { stat: "armor", value: 3, rarity: "magic" }
     ]), id, name, locked: false, revision: 0 });
     const source = gear(10, "提取试炼弓", 40), target = gear(11, "目标长弓", 3), inheritance = { ...gear(12, "先祖长弓", 80), stars: 3 as const, rarity: "diamond" as const };

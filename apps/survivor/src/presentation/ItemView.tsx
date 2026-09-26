@@ -1,6 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BONUS_IDS, BONUS_INFO, RARITY_NAMES, SLOT_NAMES, type BonusId } from "../core/Equipment";
+import { BONUS_IDS, BONUS_INFO, RARITY_NAMES, SLOT_NAMES, equipmentAccessLabel, type BonusId } from "../core/Equipment";
 import { POTIONS, potionAmount, type Consumable, type InventoryItem } from "../core/InventoryItem";
 import type { ItemType } from "../core/ItemDefinition";
 import { GAME_CONFIG } from "../core/GameConfig";
@@ -73,7 +73,7 @@ export function ItemDetails({ item }: { readonly item: InventoryItem }) {
     return <div className={`item-details rarity-${item.rarity}`} data-testid="item-details">
         <header><strong>{item.name}</strong><span><b className="rarity-label">{RARITY_NAMES[item.rarity]}品质</b>{item.type === "equipment" && <span>等级 {item.itemLevel}</span>}</span></header>
         {item.type === "equipment" && <>
-            <div className="item-meta"><span>{SLOT_NAMES[item.value]}</span><span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span><span>评分 {item.score}</span>{item.locked && <span>已锁定 · 自动清理保护</span>}</div>
+            <div className="item-meta"><span>{SLOT_NAMES[item.value]}</span><span>{equipmentAccessLabel(item)}</span><span className="gear-stars" aria-label={`${item.stars}星`}>{"★".repeat(item.stars)}</span><span>评分 {item.score}</span>{item.locked && <span>已锁定 · 自动清理保护</span>}</div>
             <h4 className="item-section-title">基础属性</h4>
             <div className="item-properties" aria-label="基础属性">{BONUS_IDS.filter(id => item.baseBonuses[id] > 0).map(id => <div className="property-row" key={id}><span>{BONUS_INFO[id].name}</span><b>+{statValue(id, item.baseBonuses[id])}</b></div>)}</div>
             <h4 className="item-section-title">附加词条</h4>

@@ -59,7 +59,7 @@ test("Z equips without extra locks, retires obsolete gear, and saves single-togg
     await page.getByRole("button", { name: "开始新游戏", exact: true }).click();
     await enterWilds(page); await pauseCombat(page);
     const gear = (id: number, damage: number, itemLevel: number) => ({
-        ...withEquipmentAffixes(createStarterEquipment(), [{ stat: "damage", value: damage, rarity: "common" }]),
+        ...withEquipmentAffixes(createStarterEquipment("ranger"), [{ stat: "damage", value: damage, rarity: "common" }]),
         id, itemLevel, name: `自动装配测试 ${id}`, locked: false, autoEquipped: false
     });
     await combatWorker(page).evaluate(items => {

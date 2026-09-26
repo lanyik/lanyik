@@ -2,7 +2,7 @@ import type { CombatWorld } from "./CombatWorld";
 import type { CombatEvents } from "./CombatEvents";
 import { DeterministicRandom } from "./DeterministicRandom";
 import { ENEMY_DEFINITIONS } from "./EnemyDefinitions";
-import { generateEquipment } from "./Equipment";
+import { generateEquipment, REGULAR_DROP_SLOTS } from "./Equipment";
 import { generateConsumable, type InventoryItem } from "./InventoryItem";
 import { generateOrb } from "./Orbs";
 import type { LootProfile } from "./Loot";
@@ -23,7 +23,8 @@ export class CombatRewards {
         this.e.spawnExperience(x, z, ENEMY_DEFINITIONS[events.enemyKind[i]].experience * (1 + (level - 1) * .15) * (boss ? 15 : elite ? 2 : 1) * experienceMultiplier);
         if (boss && this.e.loot.count < MAX_GROUND_EQUIPMENT) this.drop(generateOrb(random, this.character.allocateItemId(), "rare"), x, z);
         const chance = boss ? 1 : elite ? profile.eliteDropChance : profile.normalDropChance;
-        if (this.e.loot.count < MAX_GROUND_EQUIPMENT && random.chance(chance)) this.drop(generateEquipment(random, this.character.allocateItemId(), level, profile, boss ? "legendary" : "common"), x, z);
+        if (this.e.loot.count < MAX_GROUND_EQUIPMENT && random.chance(chance)) this.drop(generateEquipment(random, this.character.allocateItemId(), level, profile,
+            { classId: this.character.classId, slots: REGULAR_DROP_SLOTS, minimumRarity: boss ? "legendary" : "common" }), x, z);
         if (this.e.loot.count < MAX_GROUND_EQUIPMENT && random.chance(.14)) this.drop(generateConsumable(random, this.character.allocateItemId(), boss ? "legendary" : elite ? "magic" : "common"), x, z);
         const scroll = new DeterministicRandom(`${this.seed}:scroll:${this.kills}`);
         if (this.e.loot.count < MAX_GROUND_EQUIPMENT && scroll.chance(profile.qualities[5])) this.drop(createChallengeScroll(this.character.allocateItemId(), scroll.pick(CHALLENGE_IDS)), x, z);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { CHARACTER_CLASSES, INITIAL_CHARACTER_CLASS } from "../core/CharacterClass";
 import type { CharacterCheckpoint } from "../core/CharacterCheckpoint";
 import { SAVE_NAMES, type CharacterRepository, type CharacterSave, type SaveEntry } from "../app/CharacterRepository";
 import { UiIcon } from "./UiIcon";
@@ -10,7 +11,7 @@ import { CHALLENGES, isChallenge } from "../core/BossChallenge";
 
 export function SaveSummary({ save }: { save: CharacterSave }) {
     const p = save.checkpoint.player;
-    return <><strong>Lv.{p.level} · 击杀 {save.checkpoint.kills} · {save.checkpoint.location === "homestead" ? "家园" : isChallenge(save.checkpoint.location) ? CHALLENGES[save.checkpoint.location].name : "荒野"}</strong><span>{save.checkpoint.seed}</span>
+    return <><strong>{CHARACTER_CLASSES[p.classId].name} · Lv.{p.level} · 击杀 {save.checkpoint.kills} · {save.checkpoint.location === "homestead" ? "家园" : isChallenge(save.checkpoint.location) ? CHALLENGES[save.checkpoint.location].name : "荒野"}</strong><span>{save.checkpoint.seed}</span>
         <small>金币 {p.gold.toLocaleString("zh-CN")} · 背包 {p.inventory.length} 格</small><time>{new Date(save.savedAt).toLocaleString("zh-CN")}</time></>;
 }
 
@@ -53,6 +54,7 @@ export function StartScreen({ repository, start, error, blocked = false, log }: 
                 {preview !== "ready" && <span>{preview === "loading" ? "正在描绘世界…" : previewError || "请输入世界种子"}</span>}<b>北 ↑</b></div>
             <div className="preview-legend"><span>水域</span><span>森林与平原</span><span>山脉与雪地</span></div>
             <label className="seed-label">世界种子<input aria-label="世界种子" value={seed} maxLength={128} disabled={busy} onChange={event => setSeed(event.target.value)} /></label>
+            <p>职业：{CHARACTER_CLASSES[INITIAL_CHARACTER_CLASS].name} · 职业武器：{CHARACTER_CLASSES[INITIAL_CHARACTER_CLASS].weaponName}</p>
             <div className="start-actions"><button disabled={busy} onClick={() => setSeed(`rift-${crypto.randomUUID().slice(0, 8)}`)}>随机种子</button><button className="primary-action" disabled={busy || !validSeed} onClick={() => void launch()}>{busy ? "准备进入…" : "开始新游戏"}</button></div>
             <small>预览展示中心 512×512 地格。新游戏更新自动存档，手动存档保留。</small></section>
             <section className="start-saves"><header><h2>你的旅程</h2>{latest && <button className="primary-action" disabled={busy} onClick={() => void launch(latest.checkpoint)}>继续游戏</button>}</header>

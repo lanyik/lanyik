@@ -305,12 +305,14 @@ function autoAvoidance(createProbe) {
 
 function autoLoadout(passives = false) {
     const random = new current.DeterministicRandom("loadout-budget");
-    const inventory = Array.from({ length: 80 }, (_, index) => current.generateEquipment(random, index + 2, 50 + index, current.BASE_LOOT_PROFILE));
+    // Fixed full-catalog fixture, including accessories without a live drop source.
+    const generation = { classId: "ranger", slots: ["weapon", "head", "chest", "legs", "boots", "arms", "hands", "ring", "necklace", "bracelet", "charm"] };
+    const inventory = Array.from({ length: 80 }, (_, index) => current.generateEquipment(random, index + 2, 50 + index, current.BASE_LOOT_PROFILE, generation));
     for (let index = 0; index < 48; index++) inventory.push(current.createOrb(index + 100, current.RARITIES[Math.floor(index / 4) % 6], current.ORB_TYPES[index % 4]));
-    const input = { inventory, equipment: { weapon: current.createStarterEquipment() },
+    const input = { classId: "ranger", inventory, equipment: { weapon: current.createStarterEquipment("ranger") },
         orbs: Array.from({ length: 6 }, (_, index) => current.createOrb(index + 200, "common", current.ORB_TYPES[index % 4])),
         level: 200, attributes: { might: 5, vitality: 5, agility: 5, spirit: 5 }, recycling: { ...current.EMPTY_RECYCLING, orb: "magic" } };
-    const incoming = [current.generateEquipment(random, 300, 200, current.BASE_LOOT_PROFILE, "rainbow"), current.createOrb(301, "rainbow", "harmony")];
+    const incoming = [current.generateEquipment(random, 300, 200, current.BASE_LOOT_PROFILE, { ...generation, minimumRarity: "rainbow" }), current.createOrb(301, "rainbow", "harmony")];
     if (passives) {
         const effects = current.compilePassiveEffects(["fortune", "bloodpact", "thorns"], () => 10);
         input.passiveBonuses = effects.bonuses; input.passiveFind = effects.find;
@@ -327,10 +329,10 @@ function autoLoadout(passives = false) {
 function passivePickup() {
     const sim = new current.CombatSimulation("passive-pickup", { x: 0, z: 0 }, undefined, undefined, "homestead"), cp = sim.checkpoint();
     const ranks = current.initialSkillRanks(); ranks[current.nodeIndex("passive.magnet")] = 1;
-    const inventory = Array.from({ length: 80 }, (_, i) => ({ ...current.createStarterEquipment(), id: i + 2 }));
+    const inventory = Array.from({ length: 80 }, (_, i) => ({ ...current.createStarterEquipment("ranger"), id: i + 2 }));
     sim.restore({ ...cp, nextItemId: 1000, player: { ...cp.player, level: 150, inventory }, skills: { ...cp.skills, ranks, points: 148, passives: ["magnet", null, null] } });
     const e = sim.entities, timings = new Float64Array(120); let nextId = 1000, pickups = 0;
-    for (let i = 0; i < 32; i++) { const item = { ...current.createStarterEquipment(), id: nextId++ }; sim.rewards.groundItems.set(item.id, item); e.spawnLoot(item, 100, i); }
+    for (let i = 0; i < 32; i++) { const item = { ...current.createStarterEquipment("ranger"), id: nextId++ }; sim.rewards.groundItems.set(item.id, item); e.spawnLoot(item, 100, i); }
     for (let pulse = 0; pulse < 120; pulse++) {
         while (e.loot.count < current.GAME_CONFIG.combat.maxGroundEquipment) {
             const item = current.createConsumable(nextId++, "common", "health"); sim.rewards.groundItems.set(item.id, item); e.spawnLoot(item, 100, 0);

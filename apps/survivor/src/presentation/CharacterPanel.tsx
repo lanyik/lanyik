@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CHARACTER_CLASSES } from "../core/CharacterClass";
 import { ATTRIBUTE_IDS, BONUS_INFO, EQUIPMENT_SLOTS, SLOT_NAMES, type AttributeId, type BonusId } from "../core/Equipment";
 import type { PlayerSnapshot } from "../core/CombatState";
 import type { SessionCommand } from "../app/CombatSession";
@@ -28,7 +29,7 @@ export function CharacterPanel({ player, disabled, dispatch, onClose }: {
     const [inspectedId, setInspectedId] = useState<number>();
     const inspected = [...Object.values(player.equipment), ...player.orbs].find(item => item?.id === inspectedId);
     return <section className="character-window window" role="dialog" aria-label="角色" data-testid="character-panel">
-        <WindowHeader title="角色" icon="character" shortcut="C" close={onClose} help={<><p>选择装备查看详情，双击卸下；宝珠拖入槽位嵌入或交换。</p><p>属性右侧 + 分配点数。展开属性分组查看完整数值，悬停图标可比较装备。</p></>}><span>Lv. {player.level}</span></WindowHeader>
+        <WindowHeader title="角色" icon="character" shortcut="C" close={onClose} help={<><p>选择装备查看详情，双击卸下；宝珠拖入槽位嵌入或交换。</p><p>武器须符合职业；通用防具与饰品不限制职业。</p><p>属性右侧 + 分配点数。展开属性分组查看完整数值，悬停图标可比较装备。</p></>}><span data-testid="character-class">{CHARACTER_CLASSES[player.classId].name} · Lv. {player.level}</span></WindowHeader>
         <div className="character-columns">
             <div className="equipment-pane"><div className="section-heading"><h3>随身装备</h3><small>{Object.keys(player.equipment).length} / {EQUIPMENT_SLOTS.length} 已装备</small></div>
                 <div className="paper-doll" aria-label="装备栏">

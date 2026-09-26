@@ -77,7 +77,7 @@ test("a new run resets item selection and the selected orb socket before IDs are
     await enterWilds(page);
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
     await pauseCombat(page);
-    const equipment = { ...createStarterEquipment(), id: 2 };
+    const equipment = { ...createStarterEquipment("ranger"), id: 2 };
     await combatWorker(page).evaluate(item => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
         const fixture = simulation as unknown as { character: { levelValue: number; inventory: InventoryItem[]; };  };

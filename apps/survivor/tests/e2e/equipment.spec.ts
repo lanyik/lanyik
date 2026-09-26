@@ -1,7 +1,7 @@
 import type { CombatRewards } from "../../src/core/CombatRewards";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
-import { createStarterEquipment, EMPTY_BONUSES, equipmentScore, generateEquipment, type Equipment } from "../../src/core/Equipment";
+import { REGULAR_DROP_SLOTS, createStarterEquipment, EMPTY_BONUSES, equipmentScore, generateEquipment, type Equipment } from "../../src/core/Equipment";
 import { DeterministicRandom } from "../../src/core/DeterministicRandom";
 import { BASE_LOOT_PROFILE } from "../../src/core/Loot";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
@@ -51,14 +51,14 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
         expect(rendered.actual[kind].length).toBeGreaterThan(0);
         expect(rendered.actual[kind].every(count => count === rendered.expected[kind])).toBe(true);
     }
-    const starter = { ...createStarterEquipment(), locked: false };
+    const starter = { ...createStarterEquipment("ranger"), locked: false };
     const weakBonuses = { ...EMPTY_BONUSES, damage: 1 };
     const betterBonuses = { ...starter.bonuses, damage: 50, armor: 10 };
     const better: Equipment = { ...starter, id: 9001, name: "晨光试炼弩", bonuses: betterBonuses,
         baseBonuses: { ...EMPTY_BONUSES, damage: 49, armor: 10 }, score: equipmentScore(betterBonuses) };
     const weaker: Equipment = { ...starter, id: 9002, name: "磨损短弩", bonuses: weakBonuses, baseBonuses: weakBonuses, affixes: [], score: equipmentScore(weakBonuses) };
     const random = new DeterministicRandom("dense-inventory");
-    const inventory = [better, weaker, { ...starter, id: 9990, locked: true }, ...Array.from({ length: 16 }, (_, i) => generateEquipment(random, 9010 + i, 5 + i, BASE_LOOT_PROFILE))];
+    const inventory = [better, weaker, { ...starter, id: 9990, locked: true }, ...Array.from({ length: 16 }, (_, i) => generateEquipment(random, 9010 + i, 5 + i, BASE_LOOT_PROFILE, { classId: "ranger", slots: REGULAR_DROP_SLOTS }))];
     // Arrange inventory data only; comparisons, cleanup, pickup and equip use production commands.
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;

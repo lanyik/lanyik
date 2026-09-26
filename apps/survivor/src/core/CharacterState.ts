@@ -1,4 +1,5 @@
-import { ATTRIBUTE_IDS, ATTRIBUTE_NAMES, createStarterEquipment, sumEquipment, type AttributeId, type EquippedItems } from "./Equipment";
+import { ATTRIBUTE_IDS, ATTRIBUTE_NAMES, canEquipEquipment, createStarterEquipment, sumEquipment, type AttributeId, type EquippedItems } from "./Equipment";
+import { INITIAL_CHARACTER_CLASS, type CharacterClassId } from "./CharacterClass";
 import { battlePower } from "./EquipmentEvaluation";
 import { planAutomaticLoadout } from "./AutomaticLoadout";
 import { deriveStats, type DerivedStats } from "./CombatStats";
@@ -36,7 +37,8 @@ export function experienceForLevel(level: number): number {
  */
 export class CharacterState {
     private inventory: InventoryItem[] = [];
-    private equipped: EquippedItems = { weapon: createStarterEquipment() };
+    private classIdValue: CharacterClassId = INITIAL_CHARACTER_CLASS;
+    private equipped: EquippedItems = { weapon: createStarterEquipment(this.classIdValue) };
     private readonly orbs: (Orb | undefined)[] = new Array(ORB_UNLOCK_LEVELS.length);
     private attributes: Record<AttributeId, number> = { might: 5, vitality: 5, agility: 5, spirit: 5 };
     private levelValue = 1;
@@ -63,6 +65,7 @@ export class CharacterState {
     }
 
     public get level(): number { return this.levelValue; }
+    public get classId(): CharacterClassId { return this.classIdValue; }
     public get stats(): DerivedStats { return this.derivedStats; }
     public get lootProfile() { return this.findProfile; }
     public get orbResonance() { return this.resonance; }
@@ -71,6 +74,7 @@ export class CharacterState {
 
     public snapshot() {
         return {
+            classId: this.classIdValue,
             spiritRealm: this.realm, orbDust: this.orbDust, orbResonance: this.resonance,
             level: this.levelValue, experience: this.experience, experienceToLevel: experienceForLevel(this.levelValue),
             unspentAttributePoints: this.unspentAttributePoints, gold: this.gold,
@@ -85,6 +89,7 @@ export class CharacterState {
 
     /** The session validates the complete checkpoint and restores skill effects first. */
     public restore(player: CharacterCheckpoint["player"], nextId: number): void {
+        this.classIdValue = player.classId;
         this.inventory = [...player.inventory]; this.equipped = { ...player.equipment };
         this.orbs.splice(0, this.orbs.length, ...player.orbs);
         this.attributes = { ...player.attributes };
@@ -150,6 +155,7 @@ export class CharacterState {
         if (index < 0) return { ok: false, message: "背包中没有这件装备" };
         const item = this.inventory[index];
         if (item.type !== "equipment") return { ok: false, message: "请选择装备" };
+        if (!canEquipEquipment(item, this.classIdValue)) return { ok: false, message: "职业不符，无法装备" };
         const previous = this.equipped[item.value];
         this.inventory.splice(index, 1);
         this.equipped = { ...this.equipped, [item.value]: Object.freeze({ ...item, locked: true, autoEquipped: false, revision: item.revision + 1 }) };
@@ -298,7 +304,7 @@ export class CharacterState {
                 this.automaticReceiptTick = this.host.tick;
             }
             const plan = planAutomaticLoadout({ inventory: this.inventory, equipment: this.equipped, orbs: this.orbs,
-                level: this.levelValue, attributes: this.attributes, recycling: this.autoRecycle, passiveBonuses: this.host.passiveEffects.bonuses, passiveFind: this.host.passiveEffects.find }, incoming, protectedId);
+                classId: this.classIdValue, level: this.levelValue, attributes: this.attributes, recycling: this.autoRecycle, passiveBonuses: this.host.passiveEffects.bonuses, passiveFind: this.host.passiveEffects.find }, incoming, protectedId);
             if (!plan.ok) {
                 if (receipt) this.failedLoadoutReceipts.add(receipt);
                 this.notifyInventoryFull(plan.blocked); return false;
@@ -340,7 +346,7 @@ export class CharacterState {
 
     private shouldAutoRecycle(item: InventoryItem): boolean {
         return shouldRecycle(item, this.autoRecycle, {
-            level: this.levelValue, attributes: this.attributes, equipment: this.equipped, stats: this.derivedStats, passiveBonuses: this.host.passiveEffects.bonuses
+            classId: this.classIdValue, level: this.levelValue, attributes: this.attributes, equipment: this.equipped, stats: this.derivedStats, passiveBonuses: this.host.passiveEffects.bonuses
         });
     }
 

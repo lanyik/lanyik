@@ -72,14 +72,14 @@ test("passive slots unlock exactly at 50/100/150, swaps are unique, learning alo
 
 test("passive benefits and costs use ordinary stat caps and equipment comparisons keep the same permanent context", () => {
     const effects = compilePassiveEffects(["bloodpact", "execution", "aegis"], () => 10);
-    const equipment = { weapon: createStarterEquipment() }, base = deriveStats(150, attributes, sumEquipment(equipment));
+    const equipment = { weapon: createStarterEquipment("ranger") }, base = deriveStats(150, attributes, sumEquipment(equipment));
     const modified = deriveStats(150, attributes, sumEquipment(equipment), effects.bonuses);
     expect(modified.maxHealth).toBe(Math.round(base.maxHealth * .8));
     expect(modified.lifesteal - base.lifesteal).toBeCloseTo(.08);
     expect(modified.criticalChance - base.criticalChance).toBeCloseTo(-.03);
     expect(modified.shieldRecovery).toBe(base.shieldRecovery - 3);
     expect(modified.damageIncrease - base.damageIncrease).toBeCloseTo(-.15);
-    expect(compareEquipment(equipment.weapon, { level: 150, attributes, equipment, stats: modified, passiveBonuses: effects.bonuses }).delta).toBe(0);
+    expect(compareEquipment(equipment.weapon, { classId: "ranger", level: 150, attributes, equipment, stats: modified, passiveBonuses: effects.bonuses }).delta).toBe(0);
     const capped = deriveStats(150, attributes, { ...sumEquipment({}), criticalChance: 1, damageReduction: 1, shieldRecovery: 100 }, effects.bonuses);
     expect(capped.criticalChance).toBe(1); expect(capped.damageReduction).toBe(.75); expect(capped.shieldRecovery).toBe(2);
 });
@@ -99,10 +99,10 @@ test("home equipment changes preserve resource ratios, active cooldowns and shie
     sim.equipPassive(null, 0); expect(sim.getSnapshot().player.skills.passives[0]).toBe("bloodpact"); sim.dispose();
 });
 
-test("equipped ranks recompile, unequipping removes find/bonuses, and version 10 roundtrips without serializing derived effects", () => {
+test("equipped ranks recompile, unequipping removes find/bonuses, and saves roundtrip without serializing derived effects", () => {
     const { sim } = simulation(["fortune", "stargazer", "aegis"]);
     const before = sim.getSnapshot().player, cp = sim.checkpoint();
-    expect(cp.version).toBe(10); expect(cp.player).not.toHaveProperty("passiveBonuses");
+    expect(cp.version).toBe(11); expect(cp.player).not.toHaveProperty("passiveBonuses");
     expect(before.lootProfile.ratings).toEqual({ quality: 120, stars: 150, quantity: 0 });
     sim.restore(cp); expect(sim.getSnapshot().player.stats).toEqual(before.stats);
     const ranks = [...cp.skills.ranks]; ranks[nodeIndex("passive.fortune")] = 3;
@@ -143,7 +143,7 @@ test("automatic orb search maximizes actual yield with passive find and equipmen
         const p = lootProfile(sumOrbs(chosen), passiveFind);
         return p.normalDropChance * p.qualities.reduce((a, c, i) => a + c * QUALITY_POWER[i], 0) * p.stars.reduce((a, c, i) => a + c * (i + 2), 0);
     };
-    const plan = planAutomaticLoadout({ level: 50, attributes, equipment: {}, inventory: orbs, orbs: Array(6).fill(undefined), recycling: EMPTY_RECYCLING, passiveFind, passiveBonuses });
+    const plan = planAutomaticLoadout({ classId: "ranger", level: 50, attributes, equipment: {}, inventory: orbs, orbs: Array(6).fill(undefined), recycling: EMPTY_RECYCLING, passiveFind, passiveBonuses });
     expect(plan.ok).toBe(true); if (!plan.ok) throw new Error("capacity");
     const slots = plan.orbs.filter(orb => !!orb).length, candidates: number[] = [];
     for (let mask = 0; mask < 16; mask++) { const chosen = orbs.filter((_, i) => mask & (1 << i)); if (chosen.length === slots) candidates.push(score(chosen)); }
@@ -152,7 +152,7 @@ test("automatic orb search maximizes actual yield with passive find and equipmen
 
 test("magnet drains distant loot/XP in bounded batches without walking or removing chests", () => {
     const { sim, internals: f, drop } = simulation(["magnet"]), e = f.entities;
-    for (let i = 0; i < 40; i++) { drop({ ...createStarterEquipment(), id: 100 + i }); e.spawnExperience(100, i, 1); }
+    for (let i = 0; i < 40; i++) { drop({ ...createStarterEquipment("ranger"), id: 100 + i }); e.spawnExperience(100, i, 1); }
     const before = sim.getSnapshot(), chests = sim.getRenderState().chests.count;
     f.tickValue = pulseTicks - 1; f.collectEquipment(); f.advanceExperience(); expect(e.loot.count).toBe(40); expect(e.experience.count).toBe(40);
     f.tickValue++; f.collectEquipment(); f.advanceExperience(); expect(e.loot.count).toBe(24); expect(e.experience.count).toBe(24);
@@ -160,13 +160,13 @@ test("magnet drains distant loot/XP in bounded batches without walking or removi
     expect(e.loot.count).toBe(0); expect(e.experience.count).toBe(0); expect(f.rewards.groundItems.size).toBe(0);
     const after = sim.getSnapshot(); expect(after.player.inventory.filter(item => item.type === "equipment")).toHaveLength(40);
     expect(after.player.experience - before.player.experience).toBe(40); expect(after.player.x).toBe(before.player.x); expect(sim.getRenderState().chests.count).toBe(chests);
-    sim.equipPassive(null, 0); drop({ ...createStarterEquipment(), id: 201 }); f.tickValue += pulseTicks; f.collectEquipment(); expect(e.loot.count).toBe(1); sim.dispose();
+    sim.equipPassive(null, 0); drop({ ...createStarterEquipment("ranger"), id: 201 }); f.tickValue += pulseTicks; f.collectEquipment(); expect(e.loot.count).toBe(1); sim.dispose();
 });
 
 test("full category preserves drops, bounds failed transactions and rotating scans still reach other categories", () => {
-    const inventory = Array.from({ length: GAME_CONFIG.inventory.equipment.capacity }, (_, i) => ({ ...createStarterEquipment(), id: 100 + i }));
+    const inventory = Array.from({ length: GAME_CONFIG.inventory.equipment.capacity }, (_, i) => ({ ...createStarterEquipment("ranger"), id: 100 + i }));
     const { sim, internals: f, drop } = simulation(["magnet"], inventory);
-    for (let i = 0; i < 32; i++) drop({ ...createStarterEquipment(), id: 300 + i });
+    for (let i = 0; i < 32; i++) drop({ ...createStarterEquipment("ranger"), id: 300 + i });
     drop(createConsumable(500, "common", "health"));
     const receive = vi.spyOn((f as unknown as { character: { receiveItems(items: readonly InventoryItem[]): boolean } }).character, "receiveItems");
     for (let i = 1; i <= 3; i++) { receive.mockClear(); f.tickValue = i * pulseTicks; f.collectEquipment(); expect(receive.mock.calls.length).toBeLessThanOrEqual(16); }
@@ -176,7 +176,7 @@ test("full category preserves drops, bounds failed transactions and rotating sca
 
 test("magnet respects automatic loadout's single receipt planning budget", () => {
     const { sim, internals: f, drop } = simulation(["magnet"], [], "wilds"); sim.toggleAutoCombat();
-    for (let i = 0; i < 20; i++) drop({ ...createStarterEquipment(), id: 400 + i });
+    for (let i = 0; i < 20; i++) drop({ ...createStarterEquipment("ranger"), id: 400 + i });
     const plan = vi.spyOn(loadout, "planAutomaticLoadout"); f.tickValue = pulseTicks; f.collectEquipment();
     expect(plan).toHaveBeenCalledTimes(1); expect(f.entities.loot.count).toBe(19); sim.dispose();
 });

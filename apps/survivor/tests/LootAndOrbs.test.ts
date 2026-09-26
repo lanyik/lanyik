@@ -9,7 +9,7 @@ import { BASE_LOOT_PROFILE, effectiveFind, lootProfile, rollRarity, RARITIES } f
 import { ORB_UNLOCK_LEVELS } from "../src/core/Orbs";
 import { RegionalWorld } from "../src/core/RegionalWorld";
 import { deriveStats } from "../src/core/CombatStats";
-import { ATTRIBUTE_IDS, EMPTY_BONUSES, generateEquipment } from "../src/core/Equipment";
+import { REGULAR_DROP_SLOTS, ATTRIBUTE_IDS, EMPTY_BONUSES, generateEquipment } from "../src/core/Equipment";
 import { compareInventoryItems, createConsumable, POTIONS } from "../src/core/InventoryItem";
 import { compareEquipment } from "../src/core/EquipmentEvaluation";
 
@@ -24,6 +24,9 @@ function openOrbChest() {
             combat.step({ x: chest.x - player.x, z: chest.z - player.z, active: true });
         }
         expect(combat.getSnapshot().openedChests).toBe(1);
+        const equipment = combat.getSnapshot().player.inventory.filter(item => item.type === "equipment");
+        expect(equipment.length).toBeGreaterThan(0);
+        expect(equipment.every(item => ["weapon", "head", "chest", "legs", "boots", "arms", "hands"].includes(item.value))).toBe(true);
         return { combat, chest };
     }
     throw new Error("Orb chest fixture was not found");
@@ -47,7 +50,7 @@ function reachNextLevel(combat: CombatSimulation): void {
 describe("loot and orb progression", () => {
     test("sorting puts quality before level with stable ID ties across item types", () => {
         const random = new DeterministicRandom("inventory-order");
-        const gear = (id: number, level: number, rarity: typeof RARITIES[number]) => ({ ...generateEquipment(random, id, level, BASE_LOOT_PROFILE), rarity });
+        const gear = (id: number, level: number, rarity: typeof RARITIES[number]) => ({ ...generateEquipment(random, id, level, BASE_LOOT_PROFILE, { classId: "ranger", slots: REGULAR_DROP_SLOTS }), rarity });
         const items = [gear(8, 100, "common"), gear(6, 5, "legendary"), gear(5, 20, "rare"),
             gear(4, 25, "rare"), gear(3, 25, "rare"), createConsumable(2, "rare", "mana")];
         expect(items.sort(compareInventoryItems).map(item => item.id)).toEqual([6, 3, 4, 5, 2, 8]);

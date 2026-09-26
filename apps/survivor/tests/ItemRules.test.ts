@@ -65,7 +65,7 @@ test("quick slots choose the smallest sufficient dose, then largest available, i
 test("automatic quality threshold is inclusive and preserves locked equipment and other categories", () => {
     const simulation = new CombatSimulation("quality-clear"), random = new DeterministicRandom("orbs");
     const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; };  };
-    fixture.character.inventory = [...RARITIES.map((rarity, index) => ({ ...createStarterEquipment(), id: 100 + index, rarity, locked: index === 1, bonuses: EMPTY_BONUSES })),
+    fixture.character.inventory = [...RARITIES.map((rarity, index) => ({ ...createStarterEquipment("ranger"), id: 100 + index, rarity, locked: index === 1, bonuses: EMPTY_BONUSES })),
         generateOrb(random, 200), ...POTION_TYPES.map((type, i) => createConsumable(300 + i, "common", type))];
     simulation.setAutoRecycle("equipment", "rare");
     const player = simulation.getSnapshot().player;
@@ -97,7 +97,7 @@ test("unloading permanently removes all ground item categories and XP; revisitin
     const simulation = new CombatSimulation("ground-expiry"), random = new DeterministicRandom("orb-expiry");
     const fixture = simulation as unknown as { rewards: CombatRewards; world: RegionalWorld; entities: CombatWorld; reconcileRegions(): void };
     const { x, z } = simulation.getSnapshot().player;
-    for (const item of [createStarterEquipment(), createConsumable(10, "common", "mana"), generateOrb(random, 11)]) fixture.rewards.drop(item, x, z);
+    for (const item of [createStarterEquipment("ranger"), createConsumable(10, "common", "mana"), generateOrb(random, 11)]) fixture.rewards.drop(item, x, z);
     fixture.entities.spawnExperience(x, z, 5);
     fixture.world.synchronize(x + 12, z); fixture.reconcileRegions();
     expect(fixture.rewards.groundItems.size).toBe(3);

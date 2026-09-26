@@ -4,7 +4,7 @@ import { GAME_CONFIG } from "../core/GameConfig";
 import { canStack } from "../core/Inventory";
 import { compareEquipment } from "../core/EquipmentEvaluation";
 import { canUseConsumable, type InventoryItem } from "../core/InventoryItem";
-import { SLOT_NAMES, BONUS_INFO } from "../core/Equipment";
+import { SLOT_NAMES, BONUS_INFO, equipmentAccessLabel } from "../core/Equipment";
 import { RARITIES, RARITY_NAMES, type Rarity } from "../core/Loot";
 import { ItemIcon, potionDescription, statValue } from "./ItemView";
 import { OrbSockets, useOrbDrag } from "./OrbDrag";
@@ -29,11 +29,12 @@ export function InventoryPanel({ player, selectedId, onSelect, onClose, onUse, o
     const [lockMode, setLockMode] = useState(false);
     const drag = useOrbDrag();
     const dismissTooltip = useDismissItemTooltip();
-    const evaluations = useMemo(() => new Map(player.inventory.filter(item => item.type === "equipment").map(item => [item.id, compareEquipment(item, player)])), [player.inventory, player.stats, player.equipment, player.level, player.attributes, player.passiveBonuses]);
+    const evaluations = useMemo(() => new Map(player.inventory.filter(item => item.type === "equipment").map(item => [item.id, compareEquipment(item, player)])), [player.classId, player.inventory, player.stats, player.equipment, player.level, player.attributes, player.passiveBonuses]);
     const items = player.inventory.filter(item => item.type === filter);
     const rules = GAME_CONFIG.inventory[filter];
     const selected = items.find(item => item.id === selectedId);
     const useBlocked = (item: InventoryItem) => disabled || item.type === "orb" || item.type === "affix"
+        || item.type === "equipment" && !evaluations.get(item.id)!.canEquip
         || item.type === "consumable" && (paused || player.potionRemaining > 0 || !canUseConsumable(item, player));
     const mergeable = filter === "consumable" && items.some((item, index) => item.size < rules.stackSize && items.some((other, j) => j > index && canStack(item, other)));
     return <aside className="inventory-window window" role="dialog" aria-label="背包">
@@ -73,7 +74,7 @@ export function InventoryPanel({ player, selectedId, onSelect, onClose, onUse, o
                 <header className="bag-item-heading"><ItemTooltip item={item} player={player}><button className={`item-icon-trigger${item.type === "orb" ? " orb-drag-trigger" : ""}`} aria-label={`查看${item.name}详情`}
                     onPointerDown={event => { if (item.type === "orb") drag.begin(event, item.id); }} onKeyDown={event => { if (item.type === "orb") drag.keyboard(event, item.id); }}
                     onDoubleClick={event => { if (!event.shiftKey && !lockMode && !useDisabled) onUse(item); }}><ItemIcon item={item} /></button></ItemTooltip><div><strong>{item.name}</strong><small>{item.type === "equipment" ? `${SLOT_NAMES[item.value]} · Lv.${item.itemLevel}${item.locked ? " · 已锁定" : ""}` : item.type === "orb" ? "寻宝宝珠" : item.type === "affix" ? "词条精粹" : item.type === "scroll" ? "领主挑战通行证" : "恢复药剂"}</small></div></header>
-                {comparison && item.type === "equipment" ? <div className="bag-item-rating"><span>评分 <b>{item.score}</b></span><strong className={powerClass(comparison.delta)}>战力 {signed(comparison.delta)}</strong><small>{comparison.canClear ? "可清理" : "保留"}</small></div>
+                {comparison && item.type === "equipment" ? <div className="bag-item-rating"><span>{equipmentAccessLabel(item)} · 评分 <b>{item.score}</b></span><strong className={powerClass(comparison.delta)}>{comparison.canEquip ? `战力 ${signed(comparison.delta)}` : "职业不符"}</strong><small>{comparison.canClear ? "可清理" : "保留"}</small></div>
                     : <div className="bag-item-rating"><span>{item.type === "consumable" ? potionDescription(item) : item.type === "affix" ? `${BONUS_INFO[item.value].name} ${statValue(item.value, item.amount)}` : item.type === "scroll" ? "经验 ×3 · 清场必得三星彩装" : "嵌入后提升寻宝收益"}</span></div>}
             </article>;
         }} empty={<div className="empty-bag"><UiIcon name="inventory" /><strong>此分类暂无物品</strong><p>击败敌人或打开宝箱，靠近战利品自动拾取。</p></div>} />

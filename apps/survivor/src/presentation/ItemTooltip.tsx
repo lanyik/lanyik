@@ -36,15 +36,15 @@ function EquipmentDetails({ item, player }: { readonly item: InventoryItem; read
     const equipped = comparison?.current?.id === item.id;
     return <>
         {comparison && <div className={`comparison-summary ${powerClass(comparison.delta)}`}>
-            <strong>{equipped ? "已装备" : comparison.delta > 0 ? "换装提升" : comparison.delta < 0 ? "换装降低" : "战力持平"}</strong>
-            {!equipped && <><b>战力 {signed(comparison.delta)}</b><small>换装后 {comparison.power} · 装备评分 {signed(comparison.scoreDelta)}</small>
+            <strong>{!comparison.canEquip ? "职业不符，无法装备" : equipped ? "已装备" : comparison.delta > 0 ? "换装提升" : comparison.delta < 0 ? "换装降低" : "战力持平"}</strong>
+            {comparison.canEquip && !equipped && <><b>战力 {signed(comparison.delta)}</b><small>换装后 {comparison.power} · 装备评分 {signed(comparison.scoreDelta)}</small>
                 <span>{comparison.canClear ? "自动清理对象" : "自动清理时保留"}{!comparison.current ? " · 当前部位为空" : ""}</span></>}
         </div>}
         <div className={`comparison-items${comparison?.current && !equipped ? " has-current" : ""}`}>
-            <section>{comparison && !equipped && <h3>待装备</h3>}<ItemDetails item={item} /></section>
+            <section>{comparison && !equipped && <h3>{comparison.canEquip ? "待装备" : "所选装备"}</h3>}<ItemDetails item={item} /></section>
             {comparison?.current && !equipped && <section><h3>当前装备</h3><ItemDetails item={comparison.current} /></section>}
         </div>
-        {comparison && !equipped && <div className="comparison-stats" aria-label="换装后核心属性">
+        {comparison?.canEquip && !equipped && <div className="comparison-stats" aria-label="换装后核心属性">
             <span>攻击 <b>{statValue("damage", player.stats.damage)} → {statValue("damage", comparison.stats.damage)}</b></span>
             <span>防御 <b>{statValue("armor", player.stats.armor)} → {statValue("armor", comparison.stats.armor)}</b></span>
             <span>生命 <b>{player.stats.maxHealth} → {comparison.stats.maxHealth}</b></span>

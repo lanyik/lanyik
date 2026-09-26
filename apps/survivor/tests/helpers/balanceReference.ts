@@ -5,12 +5,12 @@ import { BASE_LOOT_PROFILE, type Rarity } from "../../src/core/Loot";
 import { ENEMY_DEFINITIONS, ENEMY_HIT_RULES, enemyStats, type EnemyKind } from "../../src/core/EnemyDefinitions";
 import { GAME_CONFIG } from "../../src/core/GameConfig";
 
-/** Real generated 11-slot sets, fixed rarity, first item per slot, no best-of-many affix selection. */
+/** Theoretical 11-slot sets, including accessories without a live source; first item per slot, fixed rarity. */
 export function balanceReference(level: number, sample: number, rarity: Rarity = "magic") {
     const random = new DeterministicRandom(`balance:${sample}`), gear: Partial<Record<EquipmentSlot, Equipment>> = {};
     let count = 0;
     for (let id = 2; id < 10_000 && count < EQUIPMENT_SLOTS.length; id++) {
-        const item = generateEquipment(random, id, level, BASE_LOOT_PROFILE, rarity);
+        const item = generateEquipment(random, id, level, BASE_LOOT_PROFILE, { classId: "ranger", slots: EQUIPMENT_SLOTS, minimumRarity: rarity });
         if (item.rarity === rarity && !gear[item.value]) { gear[item.value] = item; count++; }
     }
     if (count !== EQUIPMENT_SLOTS.length) throw new Error("Balance reference did not complete its equipment set");

@@ -7,7 +7,7 @@ import { createOrb } from "../src/core/Orbs";
 import { createAffixItem } from "../src/core/AffixItem";
 import { recycleRef, recycleReward } from "../src/core/Recycling";
 
-const weak = (id: number): Equipment => ({ ...createStarterEquipment(), id, locked: false, bonuses: EMPTY_BONUSES });
+const weak = (id: number): Equipment => ({ ...createStarterEquipment("ranger"), id, locked: false, bonuses: EMPTY_BONUSES });
 function setup(items: InventoryItem[]) {
     const simulation = new CombatSimulation("recycling");
     const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; }; rewards: CombatRewards; collectEquipment(): void };
@@ -43,13 +43,13 @@ describe("category recycling", () => {
         expect(simulation.getSnapshot().player.autoRecycle.consumable).toBe("common"); simulation.dispose();
     });
     test("automatic sales protect locked, equal and better gear and empty slots", () => {
-        const items: Equipment[] = [weak(10), { ...weak(11), locked: true }, { ...createStarterEquipment(), id: 12, locked: false },
-            { ...weak(13), value: "boots" }, { ...createStarterEquipment(), id: 14, locked: false, bonuses: { ...EMPTY_BONUSES, damage: 100 } }];
+        const items: Equipment[] = [weak(10), { ...weak(11), locked: true }, { ...createStarterEquipment("ranger"), id: 12, locked: false },
+            { ...weak(13), value: "boots" }, { ...createStarterEquipment("ranger"), id: 14, locked: false, bonuses: { ...EMPTY_BONUSES, damage: 100 } }];
         const { simulation } = setup(items); simulation.setAutoRecycle("equipment", "rainbow");
         expect(simulation.getSnapshot().player.inventory.map(item => item.id)).toEqual([11, 12, 13, 14]); simulation.dispose();
     });
     test("manual sale rejects locked, changed stacks and repeated operations without granting currency", () => {
-        const potion = createConsumable(10, "rare", "mana", 3), locked = createStarterEquipment();
+        const potion = createConsumable(10, "rare", "mana", 3), locked = createStarterEquipment("ranger");
         const { simulation, fixture } = setup([potion, locked]), operation = { kind: "recycle" as const, item: recycleRef(potion) };
         fixture.character.inventory[0] = { ...potion, size: 2 };
         simulation.craft(operation); simulation.craft({ kind: "recycle", item: recycleRef(locked) });

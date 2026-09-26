@@ -14,7 +14,7 @@ test("Shift locking stays safe with W, repeats and auto-sale; diagnostics surviv
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await pauseCombat(page);
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
-    const base = createStarterEquipment(), bonuses = { ...EMPTY_BONUSES, damage: 1 };
+    const base = createStarterEquipment("ranger"), bonuses = { ...EMPTY_BONUSES, damage: 1 };
     const weak: Equipment = { ...base, id: 901, name: "解锁回收测试弩", locked: true, bonuses, baseBonuses: bonuses, affixes: [], score: equipmentScore(bonuses) };
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;

@@ -1,4 +1,5 @@
 import type { Attributes, EquippedItems, EquipmentBonuses } from "./Equipment";
+import type { CharacterClassId } from "./CharacterClass";
 import type { DerivedStats } from "./CombatStats";
 import type { LootProfile } from "./Loot";
 import type { Orb } from "./Orbs";
@@ -25,6 +26,7 @@ export interface MovementInput {
 }
 
 export interface PlayerSnapshot {
+    readonly classId: CharacterClassId;
     readonly passiveBonuses: Readonly<Partial<EquipmentBonuses>>;
     readonly heading: number;
     readonly spiritRealm: SpiritRealm;

@@ -17,7 +17,7 @@ afterEach(() => vi.unstubAllGlobals());
 function fixture() {
     const simulation = new CombatSimulation("character-save");
     const state = simulation as unknown as { character: { inventory: InventoryItem[]; orbDust: number; nextId: number; gold: number } };
-    state.character.inventory = [{ ...createStarterEquipment(), id: 2, locked: false }, createOrb(3, "magic", "bounty"), createConsumable(4, "legendary", "mana-percent", 7), createAffixItem(5, { stat: "damage", value: 30, rarity: "rare" })];
+    state.character.inventory = [{ ...createStarterEquipment("ranger"), id: 2, locked: false }, createOrb(3, "magic", "bounty"), createConsumable(4, "legendary", "mana-percent", 7), createAffixItem(5, { stat: "damage", value: 30, rarity: "rare" })];
     state.character.nextId = 6; state.character.gold = 4567; state.character.orbDust = 89;
     simulation.equipOrb(3, 0); simulation.setAutoRecycle("consumable", "common");
     return simulation;
@@ -62,7 +62,7 @@ test("burn saves preserve phase and source groups, reject invalid layers and nev
     const target = e.world.ids[e.player];
     e.status.burns.apply(target, target, 3, 0, 480); e.status.burns.apply(100, target, 4, 0, 480); e.status.burns.apply(200, target, 5, 0, 480);
     for (let tick = 0; tick < 23; tick++) simulation.step({ x: 0, z: 0, active: false });
-    const saved = simulation.checkpoint(); expect(saved.version).toBe(10);
+    const saved = simulation.checkpoint(); expect(saved.version).toBe(11);
     expect(saved.skills.burns.map(entry => [entry.amount, entry.remaining, entry.nextIn])).toEqual([[5, 457, 37], [4, 457, 37], [3, 457, 37]]);
     const restored = new CombatSimulation(saved.seed, saved.origin); restored.restore(saved);
     const once = restored.checkpoint(); restored.restore(once); expect(restored.checkpoint()).toEqual(once);
@@ -82,7 +82,7 @@ test("IndexedDB slots persist across reopen; corrupt slot is isolated; auto does
     const reopened = new IndexedDBCharacterRepository(), entries = await reopened.list();
     expect(entries.find(entry => entry.slot === "manual-1")?.save?.checkpoint).toEqual(checkpoint);
     expect(entries[0].save?.checkpoint.kills).toBe(42); expect(entries[2].save).toBeUndefined();
-    await expect(reopened.save("manual-2", { ...checkpoint, version: 11 } as never)).rejects.toThrow();
+    await expect(reopened.save("manual-2", { ...checkpoint, version: 10 } as never)).rejects.toThrow();
     await new Promise<void>((resolve, reject) => {
         const request = indexedDB.open("survivor-characters", 2);
         request.onerror = () => reject(request.error);

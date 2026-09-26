@@ -20,7 +20,7 @@ test("pickup recommendations rank real upgrades, expire after swaps, and respect
     const simulation: CombatSimulation = transport!.simulation;
     const source = simulation as unknown as { rewards: CombatRewards; collectEquipment(): void };
     const pickup = async (id: number, damage: number) => {
-        const starter = createStarterEquipment();
+        const starter = createStarterEquipment("ranger");
         const bonuses = { ...starter.bonuses, damage };
         source.rewards.drop({ ...starter, id, locked: false, bonuses, score: equipmentScore(bonuses) }, 0, 0);
         source.collectEquipment();

@@ -41,7 +41,7 @@ test("utility actives and permanent passives have independent slots, previews, h
         const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation, cp = sim.checkpoint();
         sim.restore(cp); return { cp, ratings: sim.getSnapshot().player.lootProfile.ratings, bonuses: sim.getSnapshot().player.passiveBonuses };
     });
-    expect(saved.cp.version).toBe(10); expect(saved.cp.skills.passives).toEqual(["magnet", "fortune", null]);
+    expect(saved.cp.version).toBe(11); expect(saved.cp.skills.passives).toEqual(["magnet", "fortune", null]);
     expect(saved.ratings.quality).toBe(36); expect(saved.bonuses.damageIncrease).toBeCloseTo(-.03);
     await advanceCombat(page); await expect(panel.getByRole("group", { name: "技能装配槽" }).locator(".loadout-slot")).toHaveCount(6);
     const box = (await panel.boundingBox())!; expect(Math.abs(box.x + box.width / 2 - 1280)).toBeLessThan(2);

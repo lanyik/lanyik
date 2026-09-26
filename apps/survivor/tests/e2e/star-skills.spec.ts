@@ -95,7 +95,7 @@ test("star tree, support states, cleansing and all seven spells cross the real W
     expect(guarded.matrices.every(Number.isFinite)).toBe(true); expect(guarded.statusMatrices.every(Number.isFinite)).toBe(true);
     await page.screenshot({ path: info.outputPath("star-bastion.png") }); expect(await read()).toEqual(guarded);
     const saved = await page.evaluate(async () => (await window.survivorApplication!.session.save("manual-1")).checkpoint);
-    expect(saved.version).toBe(10); expect(saved.skills.statuses.find(status => status.kind === StatusKind.Empowered)?.charges).toBe(2);
+    expect(saved.version).toBe(11); expect(saved.skills.statuses.find(status => status.kind === StatusKind.Empowered)?.charges).toBe(2);
     await advanceCombat(page, 1700); expect(await read()).toMatchObject({ motes: 0, guard: 0, weak: 0, ward: false, kinds: [] });
     expect(errors).toEqual([]);
 });

@@ -1,5 +1,6 @@
 import { deriveStats, type DerivedStats } from "./CombatStats";
-import { BONUS_IDS, BONUS_INFO, sumEquipment, type Attributes, type Equipment, type EquippedItems, type EquipmentBonuses } from "./Equipment";
+import { BONUS_IDS, BONUS_INFO, canEquipEquipment, sumEquipment, type Attributes, type Equipment, type EquippedItems, type EquipmentBonuses } from "./Equipment";
+import type { CharacterClassId } from "./CharacterClass";
 
 // These multipliers are already applied to the final values by deriveStats.
 // Exploration rewards have no effect on battle power.
@@ -14,6 +15,7 @@ export function battlePower(stats: DerivedStats): number {
 }
 
 export interface EquipmentContext {
+    readonly classId: CharacterClassId;
     readonly passiveBonuses?: Readonly<Partial<EquipmentBonuses>>;
     readonly level: number;
     readonly attributes: Attributes;
@@ -22,6 +24,7 @@ export interface EquipmentContext {
 }
 
 interface EquipmentComparison {
+    readonly canEquip: boolean;
     readonly current: Equipment | undefined;
     readonly power: number;
     readonly delta: number;
@@ -32,11 +35,13 @@ interface EquipmentComparison {
 
 export function compareEquipment(item: Equipment, player: EquipmentContext): EquipmentComparison {
     const current = player.equipment[item.value];
+    if (!canEquipEquipment(item, player.classId)) return { current, canEquip: false, power: battlePower(player.stats), delta: 0,
+        scoreDelta: item.score - (current?.score ?? 0), stats: player.stats, canClear: false };
     const stats = deriveStats(player.level, player.attributes, sumEquipment({ ...player.equipment, [item.value]: item }), player.passiveBonuses);
     const power = battlePower(stats);
     const delta = power - battlePower(player.stats);
     const scoreDelta = item.score - (current?.score ?? 0);
-    return { current, power, delta, scoreDelta, stats,
+    return { current, canEquip: true, power, delta, scoreDelta, stats,
         // Effective combat power already includes caps; raw score must not veto cleanup.
         canClear: !item.locked && current !== undefined && delta < 0 };
 }
