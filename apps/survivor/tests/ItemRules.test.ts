@@ -39,15 +39,15 @@ test("sorting is transitive across potion recipes and orb types, with IDs only b
 
 test("gold potions can restore the secondary resource with primary full; full resources consume nothing", () => {
     const simulation = new CombatSimulation("gold-potion");
-    const fixture = simulation as unknown as { inventory: InventoryItem[]; health: number; mana: number; potionCooldown: number };
-    fixture.inventory = [createConsumable(9, "legendary", "health", 2)]; fixture.mana = 0;
+    const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; }; health: number; mana: number; potionCooldown: number };
+    fixture.character.inventory = [createConsumable(9, "legendary", "health", 2)]; fixture.mana = 0;
     simulation.useConsumable("health", 9);
     const after = simulation.getSnapshot().player;
     expect(after.mana).toBeCloseTo(after.stats.maxMana * .15); expect(after.inventory[0].size).toBe(1);
     simulation.useConsumable("health", 9); expect(simulation.getSnapshot().player.inventory[0].size).toBe(1);
     fixture.potionCooldown = 0; fixture.mana = after.stats.maxMana;
     simulation.useConsumable("health", 9); expect(simulation.getSnapshot().player.inventory[0].size).toBe(1);
-    fixture.health = 1; fixture.inventory = [createConsumable(10, "legendary", "health-percent")];
+    fixture.health = 1; fixture.character.inventory = [createConsumable(10, "legendary", "health-percent")];
     simulation.useConsumable("health", 10);
     expect(simulation.getSnapshot().player.health).toBeCloseTo(1 + after.stats.maxHealth * .6 * (1 + after.stats.regenBonus));
     expect(simulation.getSnapshot().player.inventory).toHaveLength(0); simulation.dispose();
@@ -64,8 +64,8 @@ test("quick slots choose the smallest sufficient dose, then largest available, i
 
 test("automatic quality threshold is inclusive and preserves locked equipment and other categories", () => {
     const simulation = new CombatSimulation("quality-clear"), random = new DeterministicRandom("orbs");
-    const fixture = simulation as unknown as { inventory: InventoryItem[] };
-    fixture.inventory = [...RARITIES.map((rarity, index) => ({ ...createStarterEquipment(), id: 100 + index, rarity, locked: index === 1, bonuses: EMPTY_BONUSES })),
+    const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; };  };
+    fixture.character.inventory = [...RARITIES.map((rarity, index) => ({ ...createStarterEquipment(), id: 100 + index, rarity, locked: index === 1, bonuses: EMPTY_BONUSES })),
         generateOrb(random, 200), ...POTION_TYPES.map((type, i) => createConsumable(300 + i, "common", type))];
     simulation.setAutoRecycle("equipment", "rare");
     const player = simulation.getSnapshot().player;
@@ -78,10 +78,10 @@ test("automatic quality threshold is inclusive and preserves locked equipment an
 
 test("orb swaps are atomic with a full orb bag, preserve ratings and reject locked sockets", () => {
     const simulation = new CombatSimulation("orb-swap"), random = new DeterministicRandom("orbs");
-    const fixture = simulation as unknown as { inventory: InventoryItem[] };
-    fixture.inventory = Array.from({ length: GAME_CONFIG.inventory.orb.capacity }, (_, i) => generateOrb(random, 100 + i));
+    const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; };  };
+    fixture.character.inventory = Array.from({ length: GAME_CONFIG.inventory.orb.capacity }, (_, i) => generateOrb(random, 100 + i));
     simulation.equipOrb(100, 0); simulation.equipOrb(101, 1);
-    fixture.inventory.push(generateOrb(random, 1000), generateOrb(random, 1001));
+    fixture.character.inventory.push(generateOrb(random, 1000), generateOrb(random, 1001));
     const before = simulation.getSnapshot().player;
     expect(simulation.equipOrb(100, 2).ok).toBe(false);
     simulation.equipOrb(100, 1);

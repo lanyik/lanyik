@@ -10,9 +10,8 @@ import { StatusKind } from "../src/core/StatusSystem";
 
 function arena() {
     const simulation = new CombatSimulation("settlement-events");
-    const f = simulation as unknown as { entities: CombatWorld; resolution: CombatResolution; random: DeterministicRandom;
-        stats: DerivedStats; skills: SkillSystem; consumeCombatEvent: CombatEventConsumer; resolveImpacts(): void };
-    f.stats = { ...f.stats, accuracy: 2, lethalChance: 0, lifesteal: .5, evasion: 0, criticalResistance: 1, blockChance: 0, thorns: 1 };
+    const f = simulation as unknown as { character: { derivedStats: DerivedStats; }; entities: CombatWorld; resolution: CombatResolution; random: DeterministicRandom; skills: SkillSystem; consumeCombatEvent: CombatEventConsumer; resolveImpacts(): void };
+    f.character.derivedStats = { ...f.character.derivedStats, accuracy: 2, lethalChance: 0, lifesteal: .5, evasion: 0, criticalResistance: 1, blockChance: 0, thorns: 1 };
     const e = f.entities, slot = e.enemies.slots[0], target = e.world.ids[slot], player = e.world.ids[e.player];
     const facts: { kind: Kind; cause: Cause; amount: number; source: number; target: number; x: number }[] = [];
     const consume = f.consumeCombatEvent;

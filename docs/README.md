@@ -18,7 +18,7 @@ flowchart TB
     sim --> combat[结算与状态]
     combat --> skills[构筑与施法]
     combat --> growth[地域与成长]
-    growth --> items[物品与打造]
+    growth --> items[角色状态与库存事务]
     app --> saves[角色与永久进度]
     app --> explore[探索与家园]
     app --> view[界面与资产]
@@ -48,7 +48,7 @@ flowchart TB
 | 伤害、生命、状态与结算事实 | [战斗架构](game/combat-architecture.md) | [CombatResolution](../apps/survivor/src/core/CombatResolution.ts)、[StatusSystem](../apps/survivor/src/core/StatusSystem.ts) |
 | 构筑事务、施法与特效 | [技能与效果](game/skills-and-effects.md) | [SkillBuild](../apps/survivor/src/core/SkillBuild.ts)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts) |
 | 地域、成长、奖励与数值校准 | [战斗与成长](game/combat-and-progression.md) | [RegionalWorld](../apps/survivor/src/core/RegionalWorld.ts)、[CombatRewards](../apps/survivor/src/core/CombatRewards.ts)、[CombatStats](../apps/survivor/src/core/CombatStats.ts) |
-| 库存、配装、回收、打造与宝珠 | [物品合同](game/items.md) | [AutomaticLoadout](../apps/survivor/src/core/AutomaticLoadout.ts)、[Crafting](../apps/survivor/src/core/Crafting.ts) |
+| 角色事务、库存、配装、回收与打造 | [物品合同](game/items.md) | [CharacterState](../apps/survivor/src/core/CharacterState.ts)、[AutomaticLoadout](../apps/survivor/src/core/AutomaticLoadout.ts)、[Crafting](../apps/survivor/src/core/Crafting.ts) |
 | 存档、副本提交与永久灵境 | [角色存档](game/character-saves.md) | [CharacterCheckpoint](../apps/survivor/src/core/CharacterCheckpoint.ts)、[CharacterRepository](../apps/survivor/src/app/CharacterRepository.ts)、[SpiritRepository](../apps/survivor/src/worker/SpiritRepository.ts) |
 | 探索迷雾、家园、旅行与副本 | [探索与家园](game/exploration-and-homestead.md) | [core](../apps/survivor/src/core/)、[app](../apps/survivor/src/app/)中的探索和旅行模块 |
 | 移动、遮挡、出生与可达性 | [地形通行](game/terrain-navigation.md) | [CombatTerrain](../apps/survivor/src/core/CombatTerrain.ts)、[SurfaceMotion](../apps/survivor/src/core/SurfaceMotion.ts) |

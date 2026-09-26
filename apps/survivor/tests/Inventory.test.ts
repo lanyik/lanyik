@@ -1,4 +1,3 @@
-import type { CombatRewards } from "../src/core/CombatRewards";
 import { recycleRef } from "../src/core/Recycling";
 import { expect, test } from "vitest";
 import { GAME_CONFIG } from "../src/core/GameConfig";
@@ -36,8 +35,8 @@ test("merge preserves quantity and potency, stable surviving IDs, and stack limi
 
 test("using a stacked potion consumes exactly one dose and retains the stack ID", () => {
     const simulation = new CombatSimulation("potion-stack");
-    const fixture = simulation as unknown as { inventory: InventoryItem[] };
-    fixture.inventory = [createConsumable(100, "common", "mana", 3)];
+    const fixture = simulation as unknown as { character: { inventory: InventoryItem[] } };
+    fixture.character.inventory = [createConsumable(100, "common", "mana", 3)];
     simulation.castSkill("pulse"); simulation.useConsumable("mana", 100);
     expect(simulation.getSnapshot().player.inventory[0]).toMatchObject({ type: "consumable", value: "mana", size: 2, id: 100 });
     simulation.useConsumable("mana", 100);
@@ -47,18 +46,17 @@ test("using a stacked potion consumes exactly one dose and retains the stack ID"
 
 test("a blocked chest leaves potion stacks, RNG, gold and all rewards untouched", () => {
     const simulation = new CombatSimulation("equipment-transactions");
-    const fixture = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; world: RegionalWorld; playerX: number; playerZ: number;
-        random: DeterministicRandom; autoCast: boolean; attackCooldown: number; openNearbyChest(): void };
+    const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; nextId: number };  world: RegionalWorld; playerX: number; playerZ: number; random: DeterministicRandom; autoCast: boolean; attackCooldown: number; openNearbyChest(): void };
     const random = new DeterministicRandom("full-orbs");
-    fixture.inventory = Array.from({ length: GAME_CONFIG.inventory.orb.capacity }, (_, i) => generateOrb(random, 100 + i));
+    fixture.character.inventory = Array.from({ length: GAME_CONFIG.inventory.orb.capacity }, (_, i) => generateOrb(random, 100 + i));
     const chunk = [...fixture.world.chunks.values()].find(chunk => chunk.band !== "near" && chunk.chest?.hasOrb)!;
     fixture.playerX = chunk.chest!.x; fixture.playerZ = chunk.chest!.z;
     fixture.autoCast = false; fixture.attackCooldown = 1000;
     // A real residency shift must publish its chest changes even if the following opening is blocked.
-    const before = simulation.getSnapshot(), nextRandom = fixture.random.clone().nextUint32(), nextId = fixture.rewards.nextItemId;
+    const before = simulation.getSnapshot(), nextRandom = fixture.random.clone().nextUint32(), nextId = fixture.character.nextId;
     simulation.step({ x: 0, z: 0, active: false });
     expect(chunk.band).toBe("near");
-    expect(chunk.chestOpened).toBe(false); expect(fixture.rewards.nextItemId).toBe(nextId);
+    expect(chunk.chestOpened).toBe(false); expect(fixture.character.nextId).toBe(nextId);
     expect(fixture.random.clone().nextUint32()).toBe(nextRandom);
     expect(simulation.getSnapshot().player.inventory).toEqual(before.player.inventory);
     expect(simulation.getSnapshot().player.gold).toBe(before.player.gold);

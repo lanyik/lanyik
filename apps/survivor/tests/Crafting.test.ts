@@ -1,4 +1,3 @@
-import type { CombatRewards } from "../src/core/CombatRewards";
 import { recycleRef } from "../src/core/Recycling";
 import { describe, expect, test } from "vitest";
 import { CombatSimulation } from "../src/core/CombatSimulation";
@@ -16,8 +15,8 @@ function gear(id: number, affixes = [attack, armor]): Equipment {
 }
 function fixture(items: InventoryItem[], gold = 100_000, dust = 100_000) {
     const simulation = new CombatSimulation("craft-transactions");
-    const state = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; orbDust: number; };
-    state.inventory = items; state.rewards.gold = gold; state.orbDust = dust; state.rewards.nextItemId = 1000;
+    const state = simulation as unknown as { character: { inventory: InventoryItem[]; orbDust: number; gold: number; nextId: number } };
+    state.character.inventory = items; state.character.gold = gold; state.character.orbDust = dust; state.character.nextId = 1000;
     return simulation;
 }
 
@@ -39,7 +38,7 @@ describe("crafting transactions", () => {
             const simulation = fixture([source, ...items], full ? 100_000 : 0), before = simulation.getSnapshot().player;
             simulation.craft({ kind: "extract", source, affix: 0 });
             expect(simulation.getSnapshot().player).toEqual(before);
-            expect((simulation as unknown as { rewards: CombatRewards; }).rewards.nextItemId).toBe(1000);
+            expect((simulation as unknown as { character: { nextId: number } }).character.nextId).toBe(1000);
             simulation.dispose();
         }
     });

@@ -21,8 +21,8 @@ function gear(id: number, bonuses: Partial<EquipmentBonuses>, value: Equipment["
 // Arrange precise inventory boundaries; assertions exercise public gameplay transactions.
 function withInventory(items: InventoryItem[], level = 10) {
     const combat = new CombatSimulation("equipment-transactions");
-    const fixture = combat as unknown as { inventory: InventoryItem[]; level: number; recalculateStats(heal: boolean): void };
-    fixture.inventory = [...items]; fixture.level = level; fixture.recalculateStats(false);
+    const fixture = combat as unknown as { character: { inventory: InventoryItem[]; levelValue: number; recalculateStats(heal: boolean): void } };
+    fixture.character.inventory = [...items]; fixture.character.levelValue = level; fixture.character.recalculateStats(false);
     return combat;
 }
 
@@ -130,17 +130,16 @@ describe("equipment evaluation and safe cleanup", () => {
 
     test("blocked low-level chest upgrades preserve the chest, RNG and IDs until every reward fits", () => {
         const combat = withInventory(Array.from({ length: INVENTORY_CAPACITY }, (_, i) => gear(i + 100, { armor: 1 }, "head")));
-        const fixture = combat as unknown as { rewards: CombatRewards; world: RegionalWorld; playerX: number; playerZ: number;
-            random: DeterministicRandom; openNearbyChest(): void };
+        const fixture = combat as unknown as { character: { nextId: number };  world: RegionalWorld; playerX: number; playerZ: number; random: DeterministicRandom; openNearbyChest(): void };
         const chunk = [...fixture.world.chunks.values()].find(chunk => chunk.chest && chunk.band === "near")!;
         fixture.playerX = chunk.chest!.x; fixture.playerZ = chunk.chest!.z;
         combat.setAutoRecycle("equipment", "rainbow");
         const before = combat.getSnapshot();
         const random = fixture.random.clone();
-        const id = fixture.rewards.nextItemId;
+        const id = fixture.character.nextId;
         fixture.openNearbyChest();
         expect(chunk.chestOpened).toBe(false);
-        expect(fixture.rewards.nextItemId).toBe(id);
+        expect(fixture.character.nextId).toBe(id);
         expect(fixture.random.clone().nextUint32()).toBe(random.clone().nextUint32());
         expect(combat.getSnapshot().player.inventory).toEqual(before.player.inventory);
         expect(combat.getSnapshot().player.gold).toBe(before.player.gold);
@@ -148,7 +147,7 @@ describe("equipment evaluation and safe cleanup", () => {
         fixture.openNearbyChest();
         expect(chunk.chestOpened).toBe(true);
         expect(combat.getSnapshot().player.inventory.length).toBeLessThanOrEqual(INVENTORY_CAPACITY);
-        expect(fixture.rewards.nextItemId).toBe(id + (chunk.chest!.hasOrb ? 3 : 2));
+        expect(fixture.character.nextId).toBe(id + (chunk.chest!.hasOrb ? 3 : 2));
     });
 
     test("ground pickups preserve stronger gear even at a lower level and issue acquisition IDs only on success", () => {

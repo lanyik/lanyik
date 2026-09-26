@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
-import { CombatSimulation, experienceForLevel } from "../src/core/CombatSimulation";
+import { CombatSimulation } from "../src/core/CombatSimulation";
+import { experienceForLevel } from "../src/core/CharacterState";
 import { planAutomaticLoadout } from "../src/core/AutomaticLoadout";
 import { createStarterEquipment, EMPTY_BONUSES, equipmentScore, type Equipment, type EquippedItems } from "../src/core/Equipment";
 import { createOrb, type Orb } from "../src/core/Orbs";
@@ -27,8 +28,7 @@ function simulation(inventory: InventoryItem[], equipment: EquippedItems = { wea
     const sim = new CombatSimulation("automatic-loadout");
     const saved = sim.checkpoint();
     sim.restore({ ...saved, nextItemId: 10000, skills: { ...saved.skills, points: level - 1 }, player: { ...saved.player, inventory, equipment, level } });
-    const fixture = sim as unknown as { entities: CombatWorld; rewards: CombatRewards; world: RegionalWorld; chests: { count: number }; receiveItems(items: readonly InventoryItem[], protectedId?: number, receipt?: object): boolean;
-        gainExperience(amount: number): void };
+    const fixture = sim as unknown as { character: { receiveItems(items: readonly InventoryItem[], protectedId?: number, receipt?: object): boolean; gainExperience(amount: number): void; }; entities: CombatWorld; rewards: CombatRewards; world: RegionalWorld; chests: { count: number }; };
     return { sim, fixture };
 }
 
@@ -42,7 +42,7 @@ test("Z equips upgrades and unlocked orb sockets; stopping and manual replacemen
     expect(sim.getSnapshot().player.equipment.weapon).toMatchObject({ id: 2, autoEquipped: false });
     sim.step({ x: 0, z: 0, active: false });
     expect(sim.getSnapshot().player.equipment.weapon?.id).toBe(2);
-    sim.toggleAutoCombat(); fixture.receiveItems([gear(6, 100, 30)]);
+    sim.toggleAutoCombat(); fixture.character.receiveItems([gear(6, 100, 30)]);
     expect(sim.getSnapshot().player.equipment.weapon?.id).toBe(2);
     sim.dispose();
 });
@@ -103,10 +103,10 @@ test("orb optimization considers paired replacements instead of getting trapped 
 test("orb selection precedes quality recycling and level unlocks trigger another selection", () => {
     const { sim, fixture } = simulation([createOrb(10, "rare", "harmony"), createOrb(11, "rare", "harmony"), createOrb(12, "magic", "bounty")], {}, 49);
     sim.toggleAutoCombat(); expect(sim.getSnapshot().player.orbs.filter(Boolean)).toHaveLength(2);
-    fixture.gainExperience(experienceForLevel(49));
+    fixture.character.gainExperience(experienceForLevel(49));
     expect(sim.getSnapshot().player.orbs.filter(Boolean)).toHaveLength(3);
     sim.setAutoRecycle("orb", "rainbow");
-    expect(fixture.receiveItems([createOrb(13, "rainbow", "harmony")])).toBe(true);
+    expect(fixture.character.receiveItems([createOrb(13, "rainbow", "harmony")])).toBe(true);
     expect(sim.getSnapshot().player.orbs.some(orb => orb?.id === 13)).toBe(true);
     expect(sim.getSnapshot().player.recycled.orb).toBeGreaterThan(0);
     sim.dispose();
@@ -127,7 +127,7 @@ test("full equipment bags accept an upgrade when retiring the old item frees its
 test("a blocked multi-item receipt changes no equipment, sockets, recycling, resources or inventory", () => {
     const { sim, fixture } = simulation(Array.from({ length: 32 }, (_, i) => createConsumable(100 + i, "common", "health", 99)));
     sim.toggleAutoCombat(); const before = sim.checkpoint();
-    expect(fixture.receiveItems([gear(500, 100, 30), createOrb(501, "rainbow", "harmony"), createConsumable(502, "rare", "mana")])).toBe(false);
+    expect(fixture.character.receiveItems([gear(500, 100, 30), createOrb(501, "rainbow", "harmony"), createConsumable(502, "rare", "mana")])).toBe(false);
     expect(sim.checkpoint()).toEqual(before);
     sim.dispose();
 });
@@ -142,13 +142,13 @@ test("a full-bag failure is cached until an inventory change, including consumin
     const { sim, fixture } = simulation(Array.from({ length: 32 }, (_, i) => createConsumable(100 + i, "common", "health", 99)));
     sim.toggleAutoCombat();
     const rewards = [gear(500, 100, 30), createConsumable(501, "common", "health", 1)], receipt = {};
-    expect(fixture.receiveItems(rewards, 0, receipt)).toBe(false);
+    expect(fixture.character.receiveItems(rewards, 0, receipt)).toBe(false);
     const compare = vi.spyOn(evaluation, "compareEquipment");
-    for (let attempt = 0; attempt < 120; attempt++) expect(fixture.receiveItems(rewards, 0, receipt)).toBe(false);
+    for (let attempt = 0; attempt < 120; attempt++) expect(fixture.character.receiveItems(rewards, 0, receipt)).toBe(false);
     expect(compare.mock.calls.length).toBe(0);
     Object.assign(sim, { health: 1 }); sim.useConsumable("health");
     sim.step({ x: 0, z: 0, active: false });
-    expect(fixture.receiveItems(rewards, 0, receipt)).toBe(true);
+    expect(fixture.character.receiveItems(rewards, 0, receipt)).toBe(true);
     expect(compare.mock.calls.length).toBeGreaterThan(0); compare.mockRestore(); sim.dispose();
 });
 

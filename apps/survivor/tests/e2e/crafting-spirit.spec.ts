@@ -1,4 +1,3 @@
-import type { CombatRewards } from "../../src/core/CombatRewards";
 import { expect, test } from "@playwright/test";
 import { createStarterEquipment, withEquipmentAffixes, type Equipment } from "../../src/core/Equipment";
 import { createAffixItem } from "../../src/core/AffixItem";
@@ -27,8 +26,8 @@ test("crafting confirms destructive changes, supports affix dragging and persist
     const items: InventoryItem[] = [source, target, inheritance, { ...createAffixItem(20, { stat: "goldBonus", value: .5, rarity: "rare" }), size: 2 }, createOrb(30, "rare", "fortune")];
     await combatWorker(page).evaluate(({ items, realm }) => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; orbDust: number; entities: CombatWorld; resolveImpacts(): void };
-        fixture.inventory = items; fixture.rewards.gold = 100_000; fixture.orbDust = 1000; fixture.rewards.nextItemId = 1000; fixture.rewards.spiritRealm = realm;
+        const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; orbDust: number; gold: number; nextId: number; realm: import("../../src/core/SpiritRealm").SpiritRealm };  entities: CombatWorld; resolveImpacts(): void };
+        fixture.character.inventory = items; fixture.character.gold = 100_000; fixture.character.orbDust = 1000; fixture.character.nextId = 1000; fixture.character.realm = realm;
         const e = fixture.entities, slot = e.enemies.slots[0], source = e.world.ids[e.player], target = e.world.ids[slot];
         e.vitality.damage(source, target, e.vitals.health[slot], simulation.tick, 0);
         e.vitality.defeat(source, target, simulation.tick, 0);

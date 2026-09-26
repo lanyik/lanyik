@@ -19,8 +19,8 @@ test("item icons alone show details, Alt pins one tooltip, and potion stacks use
         createConsumable(9002, "common", "mana", 4), generateOrb(new DeterministicRandom("icon"), 9003)];
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { inventory: InventoryItem[]; mana: number; potionCooldown: number };
-        fixture.inventory = items; fixture.mana = 1; fixture.potionCooldown = 0;
+        const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; }; mana: number; potionCooldown: number };
+        fixture.character.inventory = items; fixture.mana = 1; fixture.potionCooldown = 0;
     }, items);
     await page.evaluate(async () => { const session = window.survivorApplication!.session; session.dispatch({ type: "sort-inventory" }); await session.settled; });
     await page.keyboard.press("KeyB");
@@ -80,8 +80,8 @@ test("a new run resets item selection and the selected orb socket before IDs are
     const equipment = { ...createStarterEquipment(), id: 2 };
     await combatWorker(page).evaluate(item => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { level: number; inventory: InventoryItem[] };
-        fixture.level = 200; fixture.inventory = [item];
+        const fixture = simulation as unknown as { character: { levelValue: number; inventory: InventoryItem[]; };  };
+        fixture.character.levelValue = 200; fixture.character.inventory = [item];
     }, equipment);
     const publish = async () => page.evaluate(async () => {
         const session = window.survivorApplication!.session; session.dispatch({ type: "sort-inventory" }); await session.settled;
@@ -98,7 +98,7 @@ test("a new run resets item selection and the selected orb socket before IDs are
     const orb = generateOrb(new DeterministicRandom("run-reset"), 3);
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        (simulation as unknown as { inventory: InventoryItem[] }).inventory = items;
+        (simulation as unknown as { character: { inventory: InventoryItem[]; };  }).character.inventory = items;
     }, [equipment, orb]);
     await publish(); await page.keyboard.press("KeyB");
     await expect(bag.locator('[data-item-id="2"]')).not.toHaveClass(/selected/);

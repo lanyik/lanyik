@@ -10,8 +10,8 @@ import { recycleRef, recycleReward } from "../src/core/Recycling";
 const weak = (id: number): Equipment => ({ ...createStarterEquipment(), id, locked: false, bonuses: EMPTY_BONUSES });
 function setup(items: InventoryItem[]) {
     const simulation = new CombatSimulation("recycling");
-    const fixture = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; collectEquipment(): void };
-    fixture.inventory = items;
+    const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; }; rewards: CombatRewards; collectEquipment(): void };
+    fixture.character.inventory = items;
     return { simulation, fixture };
 }
 describe("category recycling", () => {
@@ -51,10 +51,10 @@ describe("category recycling", () => {
     test("manual sale rejects locked, changed stacks and repeated operations without granting currency", () => {
         const potion = createConsumable(10, "rare", "mana", 3), locked = createStarterEquipment();
         const { simulation, fixture } = setup([potion, locked]), operation = { kind: "recycle" as const, item: recycleRef(potion) };
-        fixture.inventory[0] = { ...potion, size: 2 };
+        fixture.character.inventory[0] = { ...potion, size: 2 };
         simulation.craft(operation); simulation.craft({ kind: "recycle", item: recycleRef(locked) });
         expect(simulation.getSnapshot().player.gold).toBe(0);
-        const current = fixture.inventory[0]; simulation.craft({ kind: "recycle", item: recycleRef(current) });
+        const current = fixture.character.inventory[0]; simulation.craft({ kind: "recycle", item: recycleRef(current) });
         const after = simulation.getSnapshot().player;
         expect(after.gold).toBe(recycleReward(current).gold); expect(after.inventory).toEqual([locked]);
         simulation.craft({ kind: "recycle", item: recycleRef(current) }); expect(simulation.getSnapshot().player).toEqual(after); simulation.dispose();
@@ -62,7 +62,7 @@ describe("category recycling", () => {
     test("full bags still process incoming auto-recycled drops and installed orbs are protected", () => {
         const { simulation, fixture } = setup([createOrb(10, "common", "fortune")]);
         simulation.equipOrb(10, 0); simulation.setAutoRecycle("orb", "rainbow");
-        fixture.inventory = Array.from({ length: 48 }, (_, i) => createOrb(100 + i, "rainbow", "bounty"));
+        fixture.character.inventory = Array.from({ length: 48 }, (_, i) => createOrb(100 + i, "rainbow", "bounty"));
         fixture.rewards.drop(createOrb(999, "rare", "fortune"), 0, 0); fixture.collectEquipment();
         const after = simulation.getSnapshot().player;
         expect(after.orbDust).toBe(9); expect(after.orbs[0]?.id).toBe(10); expect(after.inventory).toHaveLength(48);

@@ -1,4 +1,3 @@
-import type { CombatRewards } from "../src/core/CombatRewards";
 import { afterEach, expect, test, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { CombatSimulation } from "../src/core/CombatSimulation";
@@ -17,9 +16,9 @@ import { StatusKind } from "../src/core/StatusSystem";
 afterEach(() => vi.unstubAllGlobals());
 function fixture() {
     const simulation = new CombatSimulation("character-save");
-    const state = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; orbDust: number };
-    state.inventory = [{ ...createStarterEquipment(), id: 2, locked: false }, createOrb(3, "magic", "bounty"), createConsumable(4, "legendary", "mana-percent", 7), createAffixItem(5, { stat: "damage", value: 30, rarity: "rare" })];
-    state.rewards.nextItemId = 6; state.rewards.gold = 4567; state.orbDust = 89;
+    const state = simulation as unknown as { character: { inventory: InventoryItem[]; orbDust: number; nextId: number; gold: number } };
+    state.character.inventory = [{ ...createStarterEquipment(), id: 2, locked: false }, createOrb(3, "magic", "bounty"), createConsumable(4, "legendary", "mana-percent", 7), createAffixItem(5, { stat: "damage", value: 30, rarity: "rare" })];
+    state.character.nextId = 6; state.character.gold = 4567; state.character.orbDust = 89;
     simulation.equipOrb(3, 0); simulation.setAutoRecycle("consumable", "common");
     return simulation;
 }
@@ -90,7 +89,7 @@ test("IndexedDB slots persist across reopen; corrupt slot is isolated; auto does
         request.onsuccess = () => {
             const db = request.result, tx = db.transaction("characters", "readwrite");
             tx.objectStore("characters").put({ ...entries[1].save, slot: "manual-2", generator: -1 }, "manual-2");
-            tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => reject(tx.error);
+            tx.oncomplete = () => { db.close(); resolve() }; tx.onabort = () => reject(tx.error);
         };
     });
     const checked = await reopened.list(); expect(checked[2].error).toContain("版本"); expect(checked[1].save?.checkpoint).toEqual(checkpoint);

@@ -104,7 +104,9 @@ test("only clearing every enemy produces the center chest; a full bag cannot con
 });
 
 test("scrolls roll independently without equipment drops and cover each boss", () => {
-    const e = new CombatWorld(0, 0), rewards = new CombatRewards(e, EMPTY_SPIRIT_REALM, "scroll-probability"), events = new CombatEvents();
+    const simulation = new CombatSimulation("scroll-probability", { x: 0, z: 0 }, EMPTY_SPIRIT_REALM, new HomesteadTerrain(), "homestead");
+    const { entities: e, rewards } = simulation as unknown as { entities: CombatWorld; rewards: CombatRewards };
+    const events = new CombatEvents();
     const seen = new Set<string>(), random = new DeterministicRandom(123);
     for (let i = 0; i < 32; i++) {
         const slot = e.spawnEnemy(challengeSpawns("rift-lord", 1)[2], { resident: true });
@@ -119,6 +121,7 @@ test("scrolls roll independently without equipment drops and cover each boss", (
         e.remove(slot); for (const query of [e.loot, e.experience]) while (query.count) e.remove(query.slots[0]); rewards.groundItems.clear();
     }
     expect([...seen].sort()).toEqual([...CHALLENGE_IDS].sort());
+    simulation.dispose();
 });
 
 test("committed kills override older slots, survive worker replacement and never replay XP or scroll consumption", async () => {

@@ -8,6 +8,7 @@
 
 | 修改内容 | 代码入口 | 联查边界 |
 |---|---|---|
+| 角色状态与提交 | [CharacterState](../../apps/survivor/src/core/CharacterState.ts) | 成长、经济、物品 ID、库存与派生属性的唯一写入者 |
 | 类型与库存 | [core 目录](../../apps/survivor/src/core/)中的 ItemDefinition、InventoryItem、Inventory | 稳定 ID、分类容量、堆叠与原子失败 |
 | 装备与比较 | [Equipment](../../apps/survivor/src/core/Equipment.ts)、[EquipmentEvaluation](../../apps/survivor/src/core/EquipmentEvaluation.ts) | 永久被动、上限、预览与实际穿戴 |
 | 自动配装 | [AutomaticLoadout](../../apps/survivor/src/core/AutomaticLoadout.ts) | 锁定、回收、预算与入包事务 |
@@ -16,6 +17,8 @@
 | UI | [presentation 目录](../../apps/survivor/src/presentation/) | IconFrame、IconTooltip、拖放与模态确认 |
 
 ## 类型、身份与库存
+
+CharacterState 同时拥有成长、金币/粉尘、灵境运行态、物品 ID、库存、装配及其派生缓存；Inventory、Crafting、AutomaticLoadout 只提供纯计算和计划。CombatSimulation 负责命令准入、生命/法力及技能账本接线、世界领取与快照发布，不再直接修改角色容器。事务同步完成，回调仅更新会话拥有的资源和通知，不重入命令或异步发布中间结果。
 
 物品以类型区分合法字段和操作，技能使用自己的语义值而不占背包；装备等级不能扩散成所有物品的必填字段。品质、星级、物品等级是独立维度，名称和图标不能只靠颜色表达差异。
 
@@ -41,7 +44,7 @@
 
 locked 是单一保护状态；autoEquipped 仅记录自动穿戴经历，不构成另一层锁。手动操作按规则清理经历标记，自动换下不随意改变手动锁定。回收保护已装备、锁定及其他不满足核心准入的物品。
 
-先配装再回收。整批领取/开箱把库存、装备、货币、ID 和随机状态作为同一计划提交，失败不能消耗箱子或部分吞物；保证奖励仍遵守保护规则。
+先配装再回收。CharacterState 在整批领取成功后提交库存、装配、货币与 ID；CombatSimulation 随后提交同批克隆的随机状态及箱子/地面来源。两者之间不让出执行权，失败保留随机数、来源及全部资源；保证奖励仍遵守保护规则。
 
 满包领取的失败缓存只在真实输入变化后失效，容量有界。每 tick 配装规划有预算，失败尝试也占预算；未获处理的物品或箱子保留在世界，不能为赶进度跳过事务。
 
@@ -71,6 +74,6 @@ IconFrame 表达物品类型与值，不能用伪物品 ID 拼凑空槽。浮窗
 
 ## 验证
 
-物品变更检查库存、EquipmentEvaluation、AutomaticLoadout、Crafting、Orbs 及命令测试，重点保护容量失败、身份稳定、锁定、过期确认、整批原子性和随机数不变。交互变更跑对应拖放、回收与 crafting-spirit 浏览器用例。
+物品变更检查 CharacterState、Inventory、EquipmentEvaluation、AutomaticLoadout、Crafting、Orbs 及命令测试，重点保护容量失败、身份稳定、锁定、过期确认、整批原子性和随机数不变。交互变更跑对应拖放、回收与 crafting-spirit 浏览器用例。
 
 执行命令见[测试策略](../testing.md)。地面物品和图标资源的池上限、布局及视觉数值直接查表现代码，新增外部资源同步[资产来源](../README.md#assets)。

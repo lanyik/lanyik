@@ -8,17 +8,18 @@
 
 | 模块 | 拥有的状态与职责 |
 |---|---|
-| [CombatSimulation](../../apps/survivor/src/core/CombatSimulation.ts) | 命令、固定阶段、角色/物品事务及检查点协调 |
+| [CombatSimulation](../../apps/survivor/src/core/CombatSimulation.ts) | 命令准入、固定阶段、生命/法力接线、世界领取及检查点协调 |
+| [CharacterState](../../apps/survivor/src/core/CharacterState.ts) | 成长、经济、库存/装配、物品 ID 与派生属性；事务约束归[物品合同](items.md) |
 | [CombatWorld](../../apps/survivor/src/core/CombatWorld.ts) | 实体身份、组件、空间查询、地形入口和有界缓冲 |
 | [CombatResolution](../../apps/survivor/src/core/CombatResolution.ts) | 命中、防御、吸血、反伤规则及玩家受击保护/被动盾冷却 |
 | [CombatVitality](../../apps/survivor/src/core/CombatVitality.ts) | 实际生命变化、死亡事实和实体移除 |
 | [StatusSystem](../../apps/survivor/src/core/StatusSystem.ts) | 状态来源、控制分类、期限、刷新、消费与投影 |
 | [BurnSystem](../../apps/survivor/src/core/BurnSystem.ts) | StatusSystem 持有的独立周期层、输出快照及相位 |
 | [CombatEvents](../../apps/survivor/src/core/CombatEvents.ts) | 模拟内部同步消费的结算事实 |
-| [CombatRewards](../../apps/survivor/src/core/CombatRewards.ts) | 击杀经济、物品身份、地面物品及死亡奖励 |
+| [CombatRewards](../../apps/survivor/src/core/CombatRewards.ts) | 击杀计数、死亡奖励生成与地面物品；通过 CharacterState 记账及分配 ID |
 | [CombatFeedback](../../apps/survivor/src/core/CombatFeedback.ts) | 把结算事实转成闪白和飘字，不参与数值规则 |
 
-调用方向为技能/普攻/怪物动作 → 命中请求 → 数值结算 → 生命提交 → 事实 → 奖励与表现。状态参与结算输入；常驻被动低频编译属性，不通过定时状态伪装。低频背包和角色命令仍在 CombatSimulation，不能将计划中的完整领域拆分当成现状。
+调用方向为技能/普攻/怪物动作 → 命中请求 → 数值结算 → 生命提交 → 事实 → 奖励与表现。状态参与结算输入；常驻被动低频编译属性，不通过定时状态伪装。角色事务由 CharacterState 提交，技能构筑与战斗实体仍由各自所有者维护。
 
 ## 结算与事件合同
 

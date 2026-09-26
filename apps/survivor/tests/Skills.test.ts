@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
-import { CombatSimulation, experienceForLevel } from "../src/core/CombatSimulation";
+import { CombatSimulation } from "../src/core/CombatSimulation";
+import { experienceForLevel } from "../src/core/CharacterState";
 import { CombatWorld, ActorAction, MoveIntent, Component } from "../src/core/CombatWorld";
 import { SkillSystem } from "../src/core/SkillSystem";
 import { SKILLS } from "../src/core/Skills";
@@ -14,15 +15,14 @@ import { moveEnemies } from "../src/core/CombatSystems";
 
 function arena() {
     const simulation = new CombatSimulation("skill-boundaries");
-    const fixture = simulation as unknown as { entities: CombatWorld; skills: SkillSystem; world: RegionalWorld;
-        autoCast: boolean; attackCooldown: number; gainExperience(value: number): void };
+    const fixture = simulation as unknown as { character: { gainExperience(value: number): void; }; entities: CombatWorld; skills: SkillSystem; world: RegionalWorld; autoCast: boolean; attackCooldown: number; };
     const { entities: e, skills, world } = fixture;
     while (e.enemies.count) e.remove(e.enemies.slots[0]);
     fixture.autoCast = false; fixture.attackCooldown = 1000;
     const stats = simulation.getSnapshot().player.stats, random = new DeterministicRandom("skills");
     const spawn = (x: number, z: number) => e.spawnEnemy({ x, z, kind: 0, elite: false, boss: false, level: 1, region: world.regionAt(x, z) }, world.chunks.get("0,0")!);
     const learnFrost = () => {
-        for (let level = 1; level < 8; level++) fixture.gainExperience(experienceForLevel(level));
+        for (let level = 1; level < 8; level++) fixture.character.gainExperience(experienceForLevel(level));
         const ranks = initialSkillRanks(); ranks[nodeIndex("icebolt")] = 3; ranks[nodeIndex("icebolt.power")] = 3; ranks[nodeIndex("frost")] = 1;
         expect(skills.commitBuild(ranks, 0, 8, false, 0)).toBeNull(); expect(skills.equip("frost", 1, 8)).toBe(true);
     };
@@ -61,7 +61,7 @@ test("automatic casting prioritizes protection and stationary spells ahead of mo
 
 test("autopilot stops pursuit to finish a heavy cast while manual movement still takes over", () => {
     const { simulation, fixture, skills, e, spawn } = arena();
-    fixture.gainExperience(experienceForLevel(1) + experienceForLevel(2)); skills.equip("vortex", 5, 3);
+    fixture.character.gainExperience(experienceForLevel(1) + experienceForLevel(2)); skills.equip("vortex", 5, 3);
     const target = spawn(6, 0); e.vitals.health[target] = 10000; e.vitals.mana[e.player] = 1000;
     fixture.autoCast = true; simulation.toggleAutoCombat();
     for (let i = 0; i < 12; i++) simulation.step({ x: 0, z: 0, active: false });
@@ -80,7 +80,7 @@ test("one point per earned level, atomic build revisions, six slots and cooldown
     expect(skills.equip("ward", 0, 1)).toBe(false);
     for (const slot of [-1, 6, .5, NaN]) expect(skills.equip("pulse", slot, 5)).toBe(false);
     expect(skills.loadout).toHaveLength(6);
-    fixture.gainExperience(experienceForLevel(1));
+    fixture.character.gainExperience(experienceForLevel(1));
     const ranks = [...skills.snapshot(0).build.ranks]; ranks[nodeIndex("pulse")] = 2;
     simulation.commitSkillBuild(ranks, 0);
     expect(simulation.getSnapshot().player.skills.ranks.pulse).toBe(2);

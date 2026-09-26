@@ -20,8 +20,8 @@ test("world map reuses terrain pages and restores inspection, target selection a
     await pauseCombat(page);
     // This regression inspects distant map controls; fog rules have their own locked/level-unlock scenario.
     await combatWorker(page).evaluate(() => {
-        const simulation = (self as unknown as { fixtureSimulation: { level: number; markChanged(): void } }).fixtureSimulation;
-        simulation.level = 1000; simulation.markChanged();
+        const simulation = (self as unknown as { fixtureSimulation: { character: { levelValue: number }; markChanged(): void } }).fixtureSimulation;
+        simulation.character.levelValue = 1000; simulation.markChanged();
     });
     await advanceCombat(page);
     const canvas = page.getByTestId("terrain-minimap"), panel = page.getByTestId("region-status");

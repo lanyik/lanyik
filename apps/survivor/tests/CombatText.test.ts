@@ -46,14 +46,14 @@ test("critical overkill reports actual lost health after death and remains isola
 test("incoming feedback follows dodge, shield, block, critical damage and reflected health loss", () => {
     for (const outcome of [Kind.Dodge, Kind.Shield, Kind.Block, Kind.PlayerCritical]) {
         const combat = new CombatSimulation("incoming-feedback");
-        const f = combat as unknown as { resolution: CombatResolution; entities: CombatWorld; random: DeterministicRandom; stats: DerivedStats; health: number; resolveImpacts(): void };
+        const f = combat as unknown as { character: { derivedStats: DerivedStats; }; resolution: CombatResolution; entities: CombatWorld; random: DeterministicRandom; health: number; resolveImpacts(): void };
         const slot = f.entities.enemies.slots[0], b = f.entities.combatText.buffer;
         const chance = vi.spyOn(f.random, "chance").mockReturnValue(false);
         if (outcome === Kind.Dodge) chance.mockReturnValueOnce(true);
         if (outcome === Kind.Block) chance.mockReturnValueOnce(false).mockReturnValueOnce(false).mockReturnValueOnce(true);
         if (outcome === Kind.PlayerCritical) chance.mockReturnValueOnce(false).mockReturnValueOnce(true).mockReturnValueOnce(false);
         f.resolution.shieldCooldown = outcome === Kind.Shield ? 0 : 1;
-        f.health = 10; f.entities.vitals.health[slot] = 2; f.stats = { ...f.stats, thorns: 1 };
+        f.health = 10; f.entities.vitals.health[slot] = 2; f.character.derivedStats = { ...f.character.derivedStats, thorns: 1 };
         f.entities.impacts.add(f.entities.world.ids[slot], f.entities.world.ids[f.entities.player], outcome === Kind.Block ? 1 : 10000);
         f.resolveImpacts();
         expect(b.kind[0]).toBe(outcome);

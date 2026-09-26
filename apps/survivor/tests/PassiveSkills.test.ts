@@ -168,7 +168,7 @@ test("full category preserves drops, bounds failed transactions and rotating sca
     const { sim, internals: f, drop } = simulation(["magnet"], inventory);
     for (let i = 0; i < 32; i++) drop({ ...createStarterEquipment(), id: 300 + i });
     drop(createConsumable(500, "common", "health"));
-    const receive = vi.spyOn(f as unknown as { receiveItems(items: readonly InventoryItem[]): boolean }, "receiveItems");
+    const receive = vi.spyOn((f as unknown as { character: { receiveItems(items: readonly InventoryItem[]): boolean } }).character, "receiveItems");
     for (let i = 1; i <= 3; i++) { receive.mockClear(); f.tickValue = i * pulseTicks; f.collectEquipment(); expect(receive.mock.calls.length).toBeLessThanOrEqual(16); }
     expect(f.entities.loot.count).toBe(32); expect(f.rewards.groundItems.has(500)).toBe(false);
     expect(sim.getSnapshot().player.inventory.some(item => item.id === 500)).toBe(true); sim.dispose();

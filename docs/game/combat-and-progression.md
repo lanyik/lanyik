@@ -8,6 +8,7 @@
 
 | 领域 | 代码入口 | 联查内容 |
 |---|---|---|
+| 成长与经济提交 | [CharacterState](../../apps/survivor/src/core/CharacterState.ts) | 经验、加点、经济与派生缓存；所有权约束见[物品合同](items.md) |
 | 地域与遭遇 | [RegionalWorld](../../apps/survivor/src/core/RegionalWorld.ts)、[EnemyDefinitions](../../apps/survivor/src/core/EnemyDefinitions.ts) | 原点、区域归属、独立随机流与出生 |
 | 奖励 | [CombatRewards](../../apps/survivor/src/core/CombatRewards.ts) | 死亡去重、掉落、地面池和领取事务 |
 | 派生属性 | [CombatStats](../../apps/survivor/src/core/CombatStats.ts) | 属性单位、装备/被动/灵境、上限和资源比例 |
@@ -26,7 +27,7 @@
 
 ## 奖励与经济归属
 
-CombatRewards 消费死亡事实并且只结算一次。死亡时复制必要信息，不能回读已经回收的实体槽；奖励顺序与随机流必须保持确定性，表现是否显示无权改变奖励。
+CombatRewards 消费死亡事实并且只结算一次；金币、灵魂和新物品 ID 统一提交 CharacterState，经验实体仍在实际拾取时计入成长。死亡时复制必要信息，不能回读已经回收的实体槽；奖励顺序与随机流必须保持确定性，表现是否显示无权改变奖励。
 
 经验、金币、灵魂和物品按各自容量/领取语义提交。掉落池有界，不能为保存每次掉落无界扩容；成功入包、开箱保证奖励及自动配装走[物品事务](items.md)。UI 只展示核心结果，不自行发放或补偿。
 

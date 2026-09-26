@@ -19,7 +19,7 @@ test("tree hover, bounded panning, held point allocation and one-click respec", 
     await pauseCombat(page);
     await combatWorker(page).evaluate(() => {
         const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        (sim as unknown as { gainExperience(value: number): void }).gainExperience(1000);
+        (sim as unknown as { character: { gainExperience(value: number): void; };  }).character.gainExperience(1000);
     });
     await advanceCombat(page); await page.keyboard.press("KeyK");
     const panel = page.getByRole("dialog", { name: "技能", exact: true }), points = panel.locator(".skill-points");
@@ -95,12 +95,11 @@ test("constellation drafts, six slots, drag inputs and casting recovery work thr
     await pauseCombat(page); expect(atlas).toHaveLength(1);
     await combatWorker(page).evaluate(() => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { entities: CombatWorld; world: RegionalWorld; autoCast: boolean; attackCooldown: number;
-            skills: SkillSystem; gainExperience(value: number): void };
+        const fixture = simulation as unknown as { character: { gainExperience(value: number): void; }; entities: CombatWorld; world: RegionalWorld; autoCast: boolean; attackCooldown: number; skills: SkillSystem; };
         const e = fixture.entities, p = e.position, x = p.x[e.player], z = p.z[e.player];
         while (e.enemies.count) e.remove(e.enemies.slots[0]);
         while (e.projectiles.count) e.remove(e.projectiles.slots[0]);
-        fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.gainExperience(39);
+        fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.character.gainExperience(39);
         simulation.equipSkill("dash", 1);
         const cp = fixture.skills.checkpoint(simulation.tick);
         fixture.skills.restore({ ...cp, readyAt: cp.readyAt.map(() => 0), recoveryUntil: 0 }, simulation.tick);
@@ -132,11 +131,11 @@ test("constellation drafts, six slots, drag inputs and casting recovery work thr
 
     await combatWorker(page).evaluate(indices => {
         const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = sim as unknown as { level: number; skills: SkillSystem; markChanged(): void };
+        const fixture = sim as unknown as { character: { levelValue: number; }; skills: SkillSystem; markChanged(): void };
         const cp = fixture.skills.checkpoint(sim.tick), ranks = [...cp.ranks];
         for (const [index, rank] of indices) ranks[index] = rank;
         // Keep the six rendered enemy fixtures: a full character restore reconstructs the world.
-        fixture.level = 9; fixture.skills.restore({ ...cp, ranks, points: 0 }, sim.tick); fixture.markChanged();
+        fixture.character.levelValue = 9; fixture.skills.restore({ ...cp, ranks, points: 0 }, sim.tick); fixture.markChanged();
     }, [[nodeIndex("starbolt"), 3], [nodeIndex("starbolt.power"), 3], [nodeIndex("ward"), 1]]);
     await advanceCombat(page);
     await panel.getByRole("button", { name: "星辰", exact: false }).click();

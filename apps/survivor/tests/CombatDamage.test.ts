@@ -8,13 +8,12 @@ import type { DerivedStats } from "../src/core/CombatStats";
 
 function encounter() {
     const combat = new CombatSimulation("damage-boundary");
-    const fixture = combat as unknown as { resolution: CombatResolution; entities: CombatWorld; world: RegionalWorld; stats: DerivedStats;
-        autoCast: boolean; attackCooldown: number; health: number };
+    const fixture = combat as unknown as { character: { derivedStats: DerivedStats; }; resolution: CombatResolution; entities: CombatWorld; world: RegionalWorld; autoCast: boolean; attackCooldown: number; health: number };
     const e = fixture.entities;
     for (const chunk of fixture.world.chunks.values()) chunk.chestOpened = true;
     while (e.enemies.count) e.remove(e.enemies.slots[0]);
     fixture.autoCast = false; fixture.attackCooldown = 1000; fixture.resolution.shieldCooldown = 1000;
-    fixture.stats = { ...fixture.stats, evasion: 0, blockChance: 0, accuracy: 1.1, thorns: 1, thornsCap: 2 };
+    fixture.character.derivedStats = { ...fixture.character.derivedStats, evasion: 0, blockChance: 0, accuracy: 1.1, thorns: 1, thornsCap: 2 };
     const home = fixture.world.chunks.get("0,0")!;
     const spawn = { x: 0, z: .8, kind: 0 as const, level: 1, elite: false, boss: false, region: fixture.world.regionAt(0, .8) };
     return { combat, fixture, e, home, spawn };
@@ -36,7 +35,7 @@ test("multiple impacts commit one death and cannot damage a pickup reusing the v
 test("automatic attacks include the exact range boundary and exclude targets beyond it", () => {
     for (const beyond of [0, .0001]) {
         const { combat, fixture, e, home, spawn } = encounter();
-        e.spawnEnemy({ ...spawn, x: fixture.stats.attackRange + beyond, z: 0 }, home);
+        e.spawnEnemy({ ...spawn, x: fixture.character.derivedStats.attackRange + beyond, z: 0 }, home);
         fixture.attackCooldown = 0;
         combat.step({ x: 0, z: 0, active: false });
         expect(e.projectiles.count).toBe(beyond === 0 ? 1 : 0);

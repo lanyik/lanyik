@@ -64,8 +64,8 @@ test("Z equips without extra locks, retires obsolete gear, and saves single-togg
     });
     await combatWorker(page).evaluate(items => {
         const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = sim as unknown as { inventory: InventoryItem[]; rewards: CombatRewards; resolution: { damageImmunity: number } };
-        fixture.inventory = items; fixture.rewards.nextItemId = 10000; fixture.resolution.damageImmunity = 100000;
+        const fixture = sim as unknown as { character: { inventory: InventoryItem[]; nextId: number };  resolution: { damageImmunity: number } };
+        fixture.character.inventory = items; fixture.character.nextId = 10000; fixture.resolution.damageImmunity = 100000;
     }, [gear(900, 20, 2), createOrb(901, "rare", "harmony"), createOrb(902, "rare", "harmony")]);
     await page.keyboard.press("KeyZ");
     const player = () => page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat!.player);

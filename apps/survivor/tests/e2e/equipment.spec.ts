@@ -62,7 +62,7 @@ test("compares gear on hover, protects upgrades during cleanup and equips a real
     // Arrange inventory data only; comparisons, cleanup, pickup and equip use production commands.
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        (simulation as unknown as { inventory: InventoryItem[] }).inventory = items;
+        (simulation as unknown as { character: { inventory: InventoryItem[]; };  }).character.inventory = items;
     }, inventory);
     await page.evaluate(async () => {
         const session = window.survivorApplication!.session;

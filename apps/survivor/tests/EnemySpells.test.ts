@@ -96,13 +96,12 @@ test("healing grants a timed protective blessing and a reused entity slot cannot
 
 test("a protective blessing reduces committed damage by 25 percent and expires on its deadline", () => {
     const simulation = new CombatSimulation("blessing-damage");
-    const runtime = simulation as unknown as { entities: CombatWorld; world: RegionalWorld; stats: DerivedStats;
-        tickValue: number };
+    const runtime = simulation as unknown as { character: { derivedStats: DerivedStats; }; entities: CombatWorld; world: RegionalWorld; tickValue: number };
     try {
         const e = runtime.entities, home = runtime.world.chunks.get("0,0")!;
         const slot = e.spawnEnemy({ x: 1, z: 0, kind: EnemyKind.Grunt, boss: false, elite: false, level: 1,
             region: runtime.world.regionAt(1, 0) }, home);
-        runtime.stats = { ...runtime.stats, accuracy: 2, lethalChance: 0 };
+        runtime.character.derivedStats = { ...runtime.character.derivedStats, accuracy: 2, lethalChance: 0 };
         e.vitals.health[slot] = e.vitals.maxHealth[slot] = 1000;
         const damage = () => { const before = e.vitals.health[slot]; hitEnemy(simulation, slot, 20); return before - e.vitals.health[slot]; };
         const normal = damage(); expect(normal).toBeGreaterThan(0);

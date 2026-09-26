@@ -8,8 +8,7 @@ import { GAME_CONFIG } from "../src/core/GameConfig";
 
 function fixture() {
     const simulation = new CombatSimulation("pickup-attraction");
-    const runtime = simulation as unknown as { rewards: CombatRewards; entities: CombatWorld; inventory: InventoryItem[];
-        advanceExperience(): void; collectEquipment(): void };
+    const runtime = simulation as unknown as { character: { inventory: InventoryItem[]; }; rewards: CombatRewards; entities: CombatWorld; advanceExperience(): void; collectEquipment(): void };
     return { simulation, runtime, world: runtime.entities };
 }
 
@@ -35,14 +34,14 @@ test("out-of-range loot stays put; full bags preserve attracted drops and collec
         const radius = simulation.getSnapshot().player.stats.pickupRadius;
         runtime.rewards.drop({ ...createStarterEquipment(), id: 900 }, radius + 1, 0);
         runtime.collectEquipment(); expect(world.position.x[world.loot.slots[0]]).toBe(radius + 1);
-        runtime.inventory = Array.from({ length: GAME_CONFIG.inventory.equipment.capacity }, (_, i) => ({ ...createStarterEquipment(), id: 1000 + i }));
+        runtime.character.inventory = Array.from({ length: GAME_CONFIG.inventory.equipment.capacity }, (_, i) => ({ ...createStarterEquipment(), id: 1000 + i }));
         runtime.rewards.drop({ ...createStarterEquipment(), id: 901 }, radius * .8, 0);
         for (let i = 0; i < 120; i++) runtime.collectEquipment();
         expect(world.loot.count).toBe(2); const slot = world.loot.slots[1];
         expect(world.position.x[slot]).toBeLessThan(.4);
         runtime.collectEquipment(); expect(world.position.previousX[slot]).toBe(world.position.x[slot]);
-        runtime.inventory.pop(); runtime.collectEquipment();
+        runtime.character.inventory.pop(); runtime.collectEquipment();
         expect(world.loot.count).toBe(1); expect(world.item.id[world.loot.slots[0]]).toBe(900);
-        expect(runtime.inventory.filter(item => item.id === 901)).toHaveLength(1);
+        expect(runtime.character.inventory.filter(item => item.id === 901)).toHaveLength(1);
     } finally { simulation.dispose(); }
 });

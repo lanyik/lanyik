@@ -26,7 +26,7 @@ test("new skill choreography and boss attacks cross the real Worker boundary and
     for (const [id, rank] of Object.entries({ fireball: 10, "fireball.power": 5, pyroblast: 3, meteor: 1, starbolt: 10, "starbolt.power": 5, infusion: 3, blades: 1 })) fireRanks[nodeIndex(id)] = rank;
     await combatWorker(page).evaluate(ranks => {
         const sim = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const f = sim as unknown as { entities: CombatWorld; world: RegionalWorld; skills: SkillSystem; autoCast: boolean; attackCooldown: number; gainExperience(amount: number): void };
+        const f = sim as unknown as { entities: CombatWorld; world: RegionalWorld; skills: SkillSystem; autoCast: boolean; attackCooldown: number; };
         const e = f.entities, p = e.position, player = e.player;
         const saved = sim.checkpoint();
         sim.restore({ ...saved, player: { ...saved.player, level: 39 }, skills: { ...saved.skills, ranks, points: 0 } });

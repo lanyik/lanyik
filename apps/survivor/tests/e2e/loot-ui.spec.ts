@@ -28,8 +28,8 @@ test("quality cleanup, orb mouse/touch swaps and all ground quality effects rend
     ];
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
-        const fixture = simulation as unknown as { rewards: CombatRewards; inventory: InventoryItem[]; entities: CombatWorld; };
-        fixture.inventory = items;
+        const fixture = simulation as unknown as { character: { inventory: InventoryItem[]; }; rewards: CombatRewards; entities: CombatWorld; };
+        fixture.character.inventory = items;
         fixture.entities.effects.buffer.count = 0;
         const { x, z } = simulation.getSnapshot().player;
         items.forEach((item, i) => fixture.rewards.drop({ ...item, id: item.id + 1000 }, x - 4 + i * .9, z + 3));
