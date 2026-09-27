@@ -126,6 +126,7 @@ function staticTileColor(tile: Readonly<TileInfo>): Rgb {
     if (tile.type === Land.tundra) return PALETTE.tundra;
     if (tile.type === Land.snow) return PALETTE.snow;
     if (tile.type === Land.mountain) return PALETTE.mountain;
+    if (tile.modifiers?.includes("soil")) return [106, 94, 75];
     return shadeRgb(PALETTE.temperate, tile.modifiers?.includes("wood") ? 0.78 : 1);
 }
 

@@ -4,7 +4,19 @@
 
 美术方向已确定为写实暗黑，完整世界、技能和界面的目标及里程碑归[视觉改造项目](visual-overhaul.md)。本页描述当前实现，现有资产以免费、可离线构建和随源码合法分发的资源为基础。新增资产先核对许可、原始归属与构建复现，再检查比例、材质响应和轮廓是否符合场景样板；不因资源分辨率更高就直接替换。
 
-对应 `scripts/lib/survivor-environment.mjs`、`src/objects/Forest.ts`、`TerrainMesh.ts`、`TerrainArrayTexture.ts`、`terrainMaterial.ts` 和 `SunLight.ts`。源文件及哈希固定于 `assets/environment/sources.json`。
+对应 `scripts/lib/survivor-environment.mjs`、`survivor-scenery.mjs`、`src/objects/Forest.ts`、`TerrainMesh.ts`、`TerrainArrayTexture.ts`、`terrainMaterial.ts` 和 `SunLight.ts`。源文件及哈希固定于 [environment 来源清单](../../apps/survivor/assets/environment/sources.json)。
+
+## 副本路线布景
+
+现有四个首领副本共用 [ChallengeLayout](../../apps/survivor/src/core/ChallengeLayout.ts) 的固定营地→石路→河岸→首领空地布局，独立随机流不消费战斗随机数。61 名敌人的种类、强度和出生位置沿用副本规则。该布景属于有限副本，尚未扩展为荒野聚落建筑系统。
+
+首批扫描模型为 Poly Haven 的 [Rock Moss Set 01](https://polyhaven.com/a/rock_moss_set_01)（Kless Gyzen，六块石头）与 [Stone Fire Pit](https://polyhaven.com/a/stone_fire_pit)（Sebastian Platen）。原始 glTF、二进制与 1K 颜色/法线/粗糙度或 ARM 贴图进入来源清单；保留 [CC0 原文](../../apps/survivor/assets/environment/polyhaven-CC0.txt)，归属随清单发布。构建校验全部字节与 SHA-256，使用已有 meshoptimizer 离线保边减面，单石 900–2978 三角形、营火台 699 三角形；UV 保留，几何归一到半径/高度均为 1 的圆柱。原始扫描尺寸不作为游戏体型，布局显式提供半径、高度及朝向，与碰撞共用边界。
+
+[ChallengeScenery](../../apps/survivor/src/presentation/ChallengeScenery.ts) 使用六组石头、一组营火台、橡树枝干和叶片，共 9 个静态实例池；当前为 83 个石材实例（13 个实体、70 个嵌地路石）及 67 棵树。路石顶部为 .025 游戏单位，仅作可跨越表面细节。树木复用原有橡树生成器、源贴图和比例，有限场地使用近景几何，尚无风动与距离 LOD。枝干和叶片复用 `installForestOcclusion`，以玩家上方 .9 游戏单位为观察中心、半径 2 单位；绘制前转换至当前视图空间，保留完整阴影及实体碰撞，避免前景树冠遮住玩家。纹理按每来源共享，PBR 颜色以 sRGB 解码，表面通道为线性数据，直接参与现有太阳阴影与天空照明。
+
+所有几何、纹理、解码图像和实例缓冲随 `CombatLayer` 一次加载、计入必要资源账户，切图复用并按地点隐藏，最终统一销毁；失败/取消释放已完成部分，无运行时外网请求。构建移除随机几何 UUID，`survivorScenery.test.js` 验证重复构建字节一致、几何处于权威包围圆柱内及许可原文发布。通行、遮挡和出生保证归[地形通行](terrain-navigation.md#副本固定布景)。
+
+副本道路、首领空地与岸边用已有扫描土壤层；`soil` 地格语义归[世界生成](../world-style-generation-v1.md#生成地表与作者编辑)。`COMBAT_WATER_APPEARANCE` 为游戏共用水面指定低饱和深浅色、较小波幅、高光和浪线强度，与改变水体生成/通行的参数分开。仍是现有海岸距离场，尚未完成连续自然岸线几何、贴岸湿润渐变或新的浅水透射模型。
 
 演示与游戏共用的原始地形图集、图集描述和战争迷雾纹理由 [public/textures/sources.json](../../public/textures/sources.json) 登记字节数、SHA-256 与仓库来源提交。这三份是继承的演示输入，不套用后续扫描素材的 CC0 标记；原有第三方许可与归属文本保持原样。游戏构建复用现有 `sourceReader` 校验三份输入，只复制 `war-fog.jpg`，另生成 `terrain.png`、`land-atlas.json` 和 `terrain-surface.bin`。不再整目录复制演示纹理；已无消费者的旧草地、云、烟雾、纸张、山丘光照和盾牌图片已移除。根 `public/` 的演示脚本、模型、截图和受跟踪构建产物仍各有消费者。
 
@@ -42,7 +54,7 @@
 
 ## 地表数据和着色
 
-[ambientCG Grass005](https://ambientcg.com/view?id=Grass005) 用于 land，[Forest Ground 04](https://polyhaven.com/a/forest_ground_04) 用于 soil，[Rocky Terrain](https://polyhaven.com/a/rocky_terrain) 用于 mountain；均为 CC0，Grass005 是 bitmap 元素与程序化混合制作的草坪。原先无地类引用的 `_plains` 槽明确改为 soil，移除未使用 Rocky Terrain 02 源文件。固定 1K 颜色、OpenGL 法线、粗糙度、AO 输入，颜色饱和度 .7、亮度 .95，缩至 512 格；其余五格保留原语义。26 份源文件固定字节数与 SHA-256，Grass005 还记录原压缩包 SHA-256 与包内路径。
+[ambientCG Grass005](https://ambientcg.com/view?id=Grass005) 用于 land，[Forest Ground 04](https://polyhaven.com/a/forest_ground_04) 用于 soil，[Rocky Terrain](https://polyhaven.com/a/rocky_terrain) 用于 mountain；均为 CC0，Grass005 是 bitmap 元素与程序化混合制作的草坪。原先无地类引用的 `_plains` 槽明确改为 soil，移除未使用 Rocky Terrain 02 源文件。固定 1K 颜色、OpenGL 法线、粗糙度、AO 输入，颜色饱和度 .7、亮度 .95，缩至 512 格；其余五格保留原语义。源文件固定字节数与 SHA-256，Grass005 还记录原压缩包 SHA-256 与包内路径。
 
 草地按原有连续宏观噪声 .48–.78 混入最多 72% 林地土壤，颜色和表面通道使用同一权重；坡面再混合裸岩。不增加数组层数，土壤混合活跃时多读取两次颜色和两次表面纹理。通用图集可以省略 soil，此时不执行草土混合。full/fast 共用该代码。
 
@@ -62,8 +74,8 @@
 
 这是静态天空，尚无昼夜变化、逐帧体积云或动态光照编辑入口。帧循环只采样现有纹理，不重新烘焙；恢复时生成新的 PMREM 并重新绑定，旧图立即释放。PMREM 生成器及其临时目标在烘焙结束或失败时释放；没有新增下载资源。线性场景目标、抗锯齿、预算及输出所有权见[渲染流送](../render-streaming.md#场景照明与颜色输出)。
 
-游戏通过 `GameConfig.presentation.shadowRadius=420` 开启固定 2048² 近景太阳阴影，半宽约 12.35 游戏单位（沿光照平面度量）。陆地、森林、家园实体建筑投影并受影，水面和草受影；前景树冠透视只改变颜色覆盖，不改变遮光。目标、远行坐标、区块裁剪和释放由[近景太阳阴影合同](../render-streaming.md#近景太阳阴影)统一定义。当前无屏幕空间接触阴影或动态植被风动投影，B2 阴影沿用已登记源资产，未引入新模型或贴图。
+游戏通过 `GameConfig.presentation.shadowRadius=420` 开启固定 2048² 近景太阳阴影，半宽约 12.35 游戏单位（沿光照平面度量）。陆地、森林、家园建筑及副本实体投影并受影，水面和草受影；荒野前景树冠透视只改变颜色覆盖，不改变遮光。目标、远行坐标、区块裁剪和释放由[近景太阳阴影合同](../render-streaming.md#近景太阳阴影)统一定义。当前无屏幕空间接触阴影或动态植被风动投影。
 
 CPU 数组与 GPU mip 进入已有资源账本；世界加载等待两个请求，失败明确拒绝，取消或 dispose 终止在途请求，晚到数据不上传，所有材质共同引用的数组只释放一次。验证同时覆盖真实 full/fast 渲染、材质加载/取消及森林所有权，不能只用 shader 文本断言代替画面检查。
 
-游戏显式设置 GPU 账本上限为 512 MiB：B1 原生 1440p、4× MSAA 样本的必要工作集约 390 MiB，B2 阴影短样本峰值约 437.4 MiB，原 256 MiB 已不足。此上限约束所有账户，并非预先分配 512 MiB，也不代表驱动实际显存；更高像素比仍需独立测量。地图库的通用默认预算不由游戏样本改写。
+游戏显式设置 GPU 账本上限为 512 MiB：B1 原生 1440p、4× MSAA 样本的必要工作集约 390 MiB，B2 阴影短样本峰值约 437.4 MiB，新增副本布景后的荒野复查约 483.6 MiB，原 256 MiB 已不足。测量条件与逐帧数据归[视觉样板记录](measurements/visual-route.json)。此上限约束所有账户，并非预先分配 512 MiB，也不代表驱动实际显存；更高像素比仍需独立测量。地图库的通用默认预算不由游戏样本改写。

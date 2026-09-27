@@ -5,6 +5,7 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { Tree } from "../vendor/ez-tree.mjs";
 import { sourceReader } from "./actor-source.mjs";
 import sharp from "sharp";
+import { prepareSurvivorScenery } from "./survivor-scenery.mjs";
 
 class BinaryFileReader {
     async readAsArrayBuffer(blob) {
@@ -55,6 +56,14 @@ async function prepareTrees(read, output) {
         const bounds = new Box3();
         for (const geometry of Object.values(parts[0])) { geometry.computeBoundingBox(); bounds.union(geometry.boundingBox); }
         const scale = height / (bounds.max.y - bounds.min.y);
+        if (species === "oak") {
+            const directory = resolve(output, "environment/scenery"); await mkdir(directory, { recursive: true });
+            const scenery = Object.fromEntries(Object.entries(parts[0]).map(([name, geometry]) => {
+                const copy = geometry.clone().translate(0, -bounds.min.y, 0).scale(scale / 34, scale / 34, scale / 34);
+                const json = copy.toJSON(); delete json.uuid; copy.dispose(); return [name, json];
+            }));
+            await writeFile(resolve(directory, "oak.json"), JSON.stringify(scenery));
+        }
         const materials = [new MeshStandardMaterial({ color: 0xb4aca0, roughness: 1 }), new MeshStandardMaterial({ color: tint, roughness: .9 })];
         materials[0].name = "bark"; materials[1].name = "foliage";
         materials[1].userData.forestFoliage = true;
@@ -94,6 +103,7 @@ async function prepareTrees(read, output) {
 export async function prepareSurvivorEnvironment(input, output, root) {
     const read = await sourceReader(input);
     await prepareTrees(read, output);
+    await prepareSurvivorScenery(read, output);
     for (const file of ["ez-tree-LICENSE.txt", "texture-attribution.md"]) await writeFile(resolve(output, "environment", file), await read(file));
     await cp(resolve(input, "sources.json"), resolve(output, "environment/sources.json"));
     // Shared demo inputs are explicit and verified; never publish the whole source directory.

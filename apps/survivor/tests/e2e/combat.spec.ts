@@ -172,7 +172,8 @@ test("plays with skeletal hero and instanced enemies, independent character/bag 
     expect(errors).toEqual([]);
 });
 
-for (const file of ["actors/RiftSpider.glb", "actors/RiftSpider-normal.png", "effects/skills.png", "homestead/models.json"]) test(`reports failed combat resource ${file} and reloads after recovery`, async ({ page }) => {
+for (const file of ["actors/RiftSpider.glb", "actors/RiftSpider-normal.png", "effects/skills.png", "homestead/models.json",
+    "environment/scenery/models.json", "environment/scenery/rock-normal.png"]) test(`reports failed combat resource ${file} and reloads after recovery`, async ({ page }) => {
     const model = `**/${file}`;
     await page.route(model, route => route.fulfill({ status: 503, body: "actor unavailable" }));
     await page.goto("/", { waitUntil: "domcontentloaded" });

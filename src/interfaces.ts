@@ -30,6 +30,7 @@ export interface CityInfo {
 //changes, only additions to the atlas/shader config that reads them. Current ones:
 //  "hill"  - raised-looking tile (style attribute, see TerrainMesh)
 //  "wood"  - scatters tree models on the tile (see Forest.ts)
+//  "soil"  - bare ground on Land.land; requires a soil atlas cell, suppresses grass
 //  "river" - (on a Land.land tile) an animated water channel through the hex,
 //            auto-connected to neighboring river/lake/sea/coastal tiles
 //  "lake"  - (on a Land.land tile) water fills the hex except a grass shore rim;

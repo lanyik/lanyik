@@ -2315,7 +2315,7 @@ function assertOptions(options) {
 function grassTiles(map, points) {
   return points.filter(({ x, y }) => {
     const tile = getMapTile(map, x, y);
-    return tile?.type === "land" /* land */ && !tile.city && !isLakeTile(tile);
+    return tile?.type === "land" /* land */ && !tile.city && !tile.modifiers?.includes("soil") && !isLakeTile(tile);
   }).map((point) => ({ x: point.x, y: point.y }));
 }
 function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOptions) {

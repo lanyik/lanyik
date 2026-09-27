@@ -386,7 +386,14 @@ export class TerrainMesh extends Group {
     private cellIndexFor(x: number, y: number): number {
         const tile: TileInfo | undefined = getMapTile(this.map, x, y);
         if (!tile) return -1;
-        return this.atlasCellIndex[tile.type];
+        return this.materialIndex(tile);
+    }
+
+    private materialIndex(tile: TileInfo): number {
+        if (!tile.modifiers?.includes("soil")) return this.atlasCellIndex[tile.type];
+        const cell = this.options.atlas.textures.soil;
+        if (tile.type !== Land.land || !cell) throw new Error("Soil tiles require Land.land and a soil atlas cell");
+        return cell.cellY * (this.options.atlas.width / this.options.atlas.cellSize) + cell.cellX;
     }
 
     //Edge-blend priority of a tile's terrain type (see enums.ts LandPriority).
@@ -394,7 +401,7 @@ export class TerrainMesh extends Group {
     //towards "nothing".
     private priorityFor(x: number, y: number): number {
         const tile: TileInfo | undefined = getMapTile(this.map, x, y);
-        return tile ? LandPriority[tile.type] : -Infinity;
+        return tile ? tile.modifiers?.includes("soil") ? 2.5 : LandPriority[tile.type] : -Infinity;
     }
 
     //-1 no tile, 0 non-water, 1 sea, 2 coastal - drives the land layer's beach
@@ -440,9 +447,9 @@ export class TerrainMesh extends Group {
             attrs.offset[i * 2 + 0] = center.x - origin.x;
             attrs.offset[i * 2 + 1] = center.y - origin.y; // chunk-local Z
 
-            attrs.style[i * 4 + 0] = this.atlasCellIndex[info.type];
+            attrs.style[i * 4 + 0] = this.materialIndex(info);
             attrs.style[i * 4 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
-            attrs.style[i * 4 + 2] = LandPriority[info.type] ?? 0;
+            attrs.style[i * 4 + 2] = this.priorityFor(tile.x, tile.y);
             attrs.style[i * 4 + 3] = surface.isShoreline(tile.x, tile.y)
                 ? -1
                 : surface.getEffectiveRelief(tile.x, tile.y);

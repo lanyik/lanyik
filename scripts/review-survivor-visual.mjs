@@ -10,22 +10,24 @@ import assert from "node:assert/strict";
 import { summarizeLatencies } from "./lib/benchmark-latency.mjs";
 
 const [url = "http://127.0.0.1:4174", destination = ".browser-artifacts/visual-current", mode] = process.argv.slice(2);
-if (process.argv.length > 5 || mode && !/^--play=(forest|clearing|shore)$/.test(mode)) throw new Error("Usage: node scripts/review-survivor-visual.mjs <url> <output-directory> [--play=forest|clearing|shore]");
+if (process.argv.length > 5 || mode && !/^(--route|--play=(forest|clearing|shore|camp|path|bank|boss))$/.test(mode)) throw new Error("Usage: node scripts/review-survivor-visual.mjs <url> <output-directory> [--route|--play=<stop>]");
+const interactive = mode?.startsWith("--play="), route = mode === "--route" || interactive && /camp|path|bank|boss/.test(mode);
 const output = resolve(destination);
 await mkdir(output, { recursive: true });
 const fixturePath = join(output, "fixture.mjs");
 await build({ entryPoints: ["scripts/lib/survivor-visual-fixture.ts"], bundle: true, outfile: fixturePath, format: "esm", platform: "node" });
-const { VISUAL_SAMPLE, visualCheckpoints } = await import(pathToFileURL(fixturePath).href);
-const checkpoints = visualCheckpoints();
+const fixture = await import(pathToFileURL(fixturePath).href);
+const VISUAL_SAMPLE = route ? fixture.ROUTE_SAMPLE : fixture.VISUAL_SAMPLE;
+const checkpoints = route ? fixture.routeCheckpoints() : fixture.visualCheckpoints();
 await writeFile(join(output, "checkpoints.json"), JSON.stringify(checkpoints, null, 2));
-const browser = await chromium.launch({ headless: !mode, args: ["--use-angle=d3d11"] });
+const browser = await chromium.launch({ headless: !interactive, args: ["--use-angle=d3d11"] });
 const errors = [], warnings = [], samples = [];
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 try {
     const context = await browser.newContext({ viewport: VISUAL_SAMPLE.viewport, deviceScaleFactor: 1,
-        recordVideo: mode ? undefined : { dir: output, size: { width: 1280, height: 720 } } });
+        recordVideo: interactive ? undefined : { dir: output, size: { width: 1280, height: 720 } } });
     const scripts = [], scriptReads = [];
-    if (!mode) context.on("response", response => {
+    if (!interactive) context.on("response", response => {
         const path = new URL(response.url()).pathname;
         if (!/\.(?:mjs|js)$/.test(path)) return;
         scriptReads.push(response.body().then(body => scripts.push({ path, sha256: createHash("sha256").update(body).digest("hex") })));
@@ -50,7 +52,7 @@ try {
         }, { checkpoint: entry.checkpoint, camera: VISUAL_SAMPLE.camera });
         await page.locator('.survivor[data-state="ready"]').waitFor();
     };
-    if (mode) {
+    if (interactive) {
         await select(checkpoints.find(entry => entry.id === mode.slice(7)));
         await page.evaluate(() => window.survivorApplication.session.dispatch({ type: "toggle-pause" }));
         console.log("Playable visual sample is open; close the browser window to finish.");
@@ -110,7 +112,7 @@ try {
             servedScripts: scripts.sort((a, b) => a.path.localeCompare(b.path)),
             host: { os: `${platform()} ${release()}`, cpu: cpus()[0]?.model, browser: browser.version() },
             url, fixture: VISUAL_SAMPLE, warnings,
-            scope: "Three paused material checkpoints and one live movement/combat sample; production Worker and gameplay. Resource bytes are ledger estimates, not driver VRAM. GPU samples are asynchronous and absent when unsupported. Video is 720p; screenshots and rendering are native 1440p. This is lighting/shadow evidence, not final art or a 60 FPS certification.", samples };
+            scope: "Paused production checkpoints and one live movement/combat sample. Resource bytes are ledger estimates, not driver VRAM. GPU samples are asynchronous and absent when unsupported. Video is 720p; screenshots and rendering are native 1440p. This is short visual evidence, not final art or a 60 FPS certification.", samples };
         await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2));
         console.log(JSON.stringify({ output, samples: samples.map(({ id, summary }) => ({ id,
             cpuP95Ms: summary.cpu?.p95Ms, gpuP95Ms: summary.gpu?.p95Ms, frameP99Ms: summary.interval?.p99Ms })) }, null, 2));

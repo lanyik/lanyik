@@ -12,7 +12,8 @@ import type { SkillCheckpoint } from "./SkillSystem";
 import { validateSpiritRealm } from "./SpiritRealm";
 import { validateExploration, type ExplorationSnapshot } from "./Exploration";
 import type { WorldLocation } from "./Homestead";
-import { CHALLENGE_IDS, CHALLENGE_ARENA, ChallengeTerrain, challengeSpawns, isChallenge, type ChallengeProgressMap } from "./BossChallenge";
+import { CHALLENGE_IDS, CHALLENGE_ARENA, challengeSpawns, isChallenge, type ChallengeProgressMap } from "./BossChallenge";
+import { ChallengeTerrain } from "./ChallengeTerrain";
 import { ENEMY_DEFINITIONS, enemyStats } from "./EnemyDefinitions";
 import { PASSIVE_UNLOCK_LEVELS, isPassiveId, passiveNodeId } from "./PassiveSkills";
 

@@ -3,7 +3,15 @@
 导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
 
 `CombatEnvironment.ts` 固定渲染与权威模拟共享的高度、格子尺度、森林密度和水岸参数。
-荒野生产模拟 Worker 注入 `ProceduralCombatTerrain`，家园注入 [HomesteadTerrain](exploration-and-homestead.md)；独立单测/数值基准的开放战斗场使用 `OPEN_TERRAIN`，生产不存在查询失败后放行的降级路径。
+荒野生产模拟 Worker 注入 `ProceduralCombatTerrain`，家园注入 [HomesteadTerrain](exploration-and-homestead.md)，首领副本注入 `ChallengeTerrain`；独立单测/数值基准的开放战斗场使用 `OPEN_TERRAIN`，生产不存在查询失败后放行的降级路径。
+
+## 副本固定布景
+
+[ChallengeTerrain](../../apps/survivor/src/core/ChallengeTerrain.ts) 与 [ChallengeLayout](../../apps/survivor/src/core/ChallengeLayout.ts) 共用有限布景：圆形外边界内再排除西侧河道、石材实体和树干。河道使用解析岸线并留 1.2 游戏单位的陆地余量覆盖六边形边缘混合；碰撞再加实际身体半径。平地权威高度仍为 0，嵌地路石只是 .025 单位的表面细节。
+
+石材按与离线模型归一化一致的保守圆柱阻挡；树干半径为 `.2×scale`，攻击遮挡高度为 `2.5×scale`，树冠不阻挡。移动沿用 `SurfaceMotion` 扫掠，低弹道按圆柱求首个交点，高于实体顶面的弹道可越过；水域不充当攻击掩体。传送和检查点校验使用同一个地形实例合同，没有看得见但能穿过的营火台。
+
+布局独立保留四种副本出生体型、入口、奖励圆心及连续路线净空。`ChallengeTerrain.test.ts` 验证整条路线按 .6 身体半径双向连续扫掠、四种人口的完整净空、快速移动和上下弹道。布局只读且有限，不增加按帧构建或随旅行增长的缓存；副本人口与存档事务归[探索与家园](exploration-and-homestead.md#boss-挑战副本)。
 
 ## 通行数据
 

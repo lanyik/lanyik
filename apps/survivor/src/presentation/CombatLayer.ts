@@ -46,6 +46,7 @@ import { HomesteadModels } from "./HomesteadModels";
 import type { WorldLocation } from "../core/Homestead";
 import { isChallenge } from "../core/BossChallenge";
 import { ChallengeMist } from "./ChallengeMist";
+import { ChallengeScenery } from "./ChallengeScenery";
 const RARITY_COLORS = RARITIES.map(rarity => new Color(GAME_CONFIG.quality[rarity].color));
 const CHEST_COLORS = [new Color(0xb87838), new Color(0xd7e0ed), new Color(0xffc34b), new Color(0x70f5ed), new Color(0xff79dc)] as const;
 const WHITE = new Color(0xffffff);
@@ -97,6 +98,7 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly mist = new BoundaryMist();
     private readonly challengeMist = new ChallengeMist();
     private homestead: HomesteadModels | undefined;
+    private scenery: ChallengeScenery | undefined;
     private location: WorldLocation = "wilds";
     private actorLoading: Promise<void> | undefined;
     private assetAbort: AbortController | undefined;
@@ -165,27 +167,30 @@ export class CombatLayer implements WorldRenderLayer {
                 ActorModels.load(MAX_ENEMIES, this.viewCenter, controller.signal).catch(reject),
                 SkillEffects.load(controller.signal).catch(reject),
                 LootModels.load(this.viewCenter, controller.signal).catch(reject),
-                HomesteadModels.load(controller.signal).catch(reject)
+                HomesteadModels.load(controller.signal).catch(reject),
+                ChallengeScenery.load(controller.signal, this.player).catch(reject)
             ]).then(results => {
-                const [actorResult, effectResult, lootResult, homeResult] = results;
-                if (actorResult.status === "rejected" || effectResult.status === "rejected" || lootResult.status === "rejected" || homeResult.status === "rejected" || this.disposed || controller.signal.aborted) {
+                const [actorResult, effectResult, lootResult, homeResult, sceneryResult] = results;
+                if (actorResult.status === "rejected" || effectResult.status === "rejected" || lootResult.status === "rejected" || homeResult.status === "rejected" || sceneryResult.status === "rejected" || this.disposed || controller.signal.aborted) {
                     if (actorResult.status === "fulfilled") actorResult.value.dispose();
                     if (effectResult.status === "fulfilled") effectResult.value.dispose();
                     if (lootResult.status === "fulfilled") lootResult.value.dispose();
                     if (homeResult.status === "fulfilled") homeResult.value.dispose();
-                    throw actorResult.status === "rejected" ? actorResult.reason : effectResult.status === "rejected" ? effectResult.reason : lootResult.status === "rejected" ? lootResult.reason : homeResult.status === "rejected" ? homeResult.reason : controller.signal.reason;
+                    if (sceneryResult.status === "fulfilled") sceneryResult.value.dispose();
+                    throw actorResult.status === "rejected" ? actorResult.reason : effectResult.status === "rejected" ? effectResult.reason : lootResult.status === "rejected" ? lootResult.reason : homeResult.status === "rejected" ? homeResult.reason : sceneryResult.status === "rejected" ? sceneryResult.reason : controller.signal.reason;
                 }
                 const actors = actorResult.value, effects = effectResult.value, models = lootResult.value;
                 let numbers: DamageNumbers | undefined;
                 try {
                     numbers = new DamageNumbers(document.createElement("canvas"));
                     this.resources.acquireRequired("combat-actor-models", {}, true, [
-                        ...collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward, models.root, numbers.mesh, homeResult.value.root]),
+                        ...collectObject3DResourceAllocations([actors.hero, ...actors.enemies.flat(), effects.mesh, effects.ground, effects.ward, models.root, numbers.mesh, homeResult.value.root, sceneryResult.value.root]),
                         ...[...actors.poseBuffers, ...numbers.buffers].map(array => ({ identity: array.buffer, cost: { cpuBytes: array.byteLength } }))
                     ]);
                     this.damageNumbers = numbers; this.root.add(numbers.mesh);
-                } catch (error) { numbers?.dispose(); actors.dispose(); effects.dispose(); models.dispose(); homeResult.value.dispose(); throw error; }
+                } catch (error) { numbers?.dispose(); actors.dispose(); effects.dispose(); models.dispose(); homeResult.value.dispose(); sceneryResult.value.dispose(); throw error; }
                 this.homestead = homeResult.value; this.root.add(this.homestead.root); this.homestead.root.visible = false;
+                this.scenery = sceneryResult.value; this.root.add(this.scenery.root); this.scenery.root.visible = false;
                 this.actors = actors;
                 this.effects = effects;
                 this.lootModels = models;
@@ -220,6 +225,8 @@ export class CombatLayer implements WorldRenderLayer {
         this.renderOrigin.set(playerX, playerZ);
         this.homestead.root.visible = this.location === "homestead";
         this.homestead.root.position.set(-playerX, 0, -playerZ);
+        this.scenery!.root.visible = isChallenge(this.location);
+        this.scenery!.root.position.set(-playerX, 0, -playerZ);
         if (this.location === "homestead") this.homestead.update(state.player.animationTime);
         this.root.position.set(playerX * this.host.tileSize, 0, playerZ * this.host.tileSize);
         this.player.position.set(0, this.height(playerX, playerZ), 0);
@@ -402,6 +409,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.mist.dispose();
         this.challengeMist.dispose();
         this.homestead?.dispose();
+        this.scenery?.dispose();
         for (const mesh of [this.projectiles, this.telegraphs, this.chargeWarnings, this.experience]) mesh.dispose();
         for (const geometry of Object.values(this.geometries)) geometry.dispose();
         for (const material of [

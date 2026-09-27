@@ -9,7 +9,8 @@ import type { SpiritRepository } from "./SpiritRepository";
 import { ProceduralCombatTerrain } from "../adapters/ProceduralCombatTerrain";
 import type { CharacterCheckpoint } from "../core/CharacterCheckpoint";
 import { HomesteadTerrain, type WorldLocation } from "../core/Homestead";
-import { ChallengeTerrain, isChallenge } from "../core/BossChallenge";
+import { isChallenge } from "../core/BossChallenge";
+import { ChallengeTerrain } from "../core/ChallengeTerrain";
 import type { CharacterRepository } from "../app/CharacterRepository";
 const SNAPSHOT_TICKS = ticksPerUpdate(GAME_CONFIG.timing.snapshotHz);
 

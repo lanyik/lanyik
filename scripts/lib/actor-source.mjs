@@ -20,7 +20,7 @@ export async function sourceReader(directory) {
 }
 
 /** Node loads geometry and rigs; sharp handles image decoding separately during baking. */
-export async function loadActorSource(read, file, imageAliases = {}) {
+export async function loadModelSource(read, file, imageAliases = {}) {
     const bytes = await read(file);
     let json, bin;
     if (file.endsWith(".glb")) {
@@ -62,11 +62,15 @@ export async function loadActorSource(read, file, imageAliases = {}) {
     const binHeader = Buffer.alloc(8); binHeader.writeUInt32LE(binary.length); binHeader.writeUInt32LE(0x004e4942, 4);
     const packed = Buffer.concat([header, padded, binHeader, binary]);
     const gltf = await new GLTFLoader().parseAsync(packed.buffer.slice(packed.byteOffset, packed.byteOffset + packed.byteLength), "");
-    const meshes = [];
-    gltf.scene.traverse(object => { if (object.isSkinnedMesh) meshes.push(object); });
-    if (!meshes.length) throw new Error(`${file}: missing skinned meshes`);
     gltf.scene.updateMatrixWorld(true);
-    return { ...gltf, meshes, materials };
+    return { ...gltf, materials };
+}
+
+export async function loadActorSource(read, file, imageAliases = {}) {
+    const model = await loadModelSource(read, file, imageAliases), meshes = [];
+    model.scene.traverse(object => { if (object.isSkinnedMesh) meshes.push(object); });
+    if (!meshes.length) throw new Error(`${file}: missing skinned meshes`);
+    return { ...model, meshes };
 }
 
 function restBones(scene) {

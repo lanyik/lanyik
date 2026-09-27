@@ -213,17 +213,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         fBent = shore - cn * coastCurvature * 0.5;
     }
 
-    // shoreline: lighten towards a foamy/sandy tint as the water nears the
-    // (bent) coastline. Blending towards waterColorShallow itself would be a
-    // no-op on a map with no "sea" tiles (every water tile is already
-    // priority 1 = shallow, so texColor is already waterColorShallow) - blend
-    // towards a brightened version instead so the effect is visible
-    // regardless of whether the tile started as deep or shallow.
+    // Depth changes water colour; foam has its own colour/opacity below.
+    // Forced whitening here would leave a chalk ring even with zero foam.
     float e0Beach = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
     float shoreT = smoothstep(e0Beach, 1.0, fBent);
     if (shoreT > 0.0) {
-        vec3 shoreColor = mix(waterColorShallow, vec3(1.0), 0.5);
-        texColor = mix(texColor, vec4(shoreColor, 1.0), shoreT);
+        texColor = mix(texColor, vec4(waterColorShallow, 1.0), shoreT);
     }
 
     vec3 normal = normalize(vNormal);

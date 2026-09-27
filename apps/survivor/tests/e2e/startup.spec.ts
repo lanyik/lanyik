@@ -24,7 +24,7 @@ test("WebGL creation failure displays its cause and retries after graphics becom
     await expect.poll(() => page.workers().length).toBe(0);
 });
 
-for (const asset of ["actors/RiftSpider-normal.png", "homestead/models.json"]) test(`closing during a stalled ${asset} aborts loading and releases the world`, async ({ page }) => {
+for (const asset of ["actors/RiftSpider-normal.png", "homestead/models.json", "environment/scenery/rock-normal.png"]) test(`closing during a stalled ${asset} aborts loading and releases the world`, async ({ page }) => {
     test.setTimeout(60_000);
     await page.route(`**/${asset}`, () => {});
     const requested = page.waitForRequest(`**/${asset}`);

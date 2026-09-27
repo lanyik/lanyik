@@ -4,7 +4,8 @@ import type { CombatRequest } from "../../src/worker/CombatProtocol";
 import { IndexedDBSpiritRepository } from "../../src/worker/SpiritRepository";
 import { ProceduralCombatTerrain } from "../../src/adapters/ProceduralCombatTerrain";
 import { HomesteadTerrain } from "../../src/core/Homestead";
-import { ChallengeTerrain, isChallenge } from "../../src/core/BossChallenge";
+import { isChallenge } from "../../src/core/BossChallenge";
+import { ChallengeTerrain } from "../../src/core/ChallengeTerrain";
 import { IndexedDBCharacterRepository } from "../../src/app/CharacterRepository";
 
 /** Browser fixture entry. Production workers never expose their simulation. */

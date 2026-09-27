@@ -100,7 +100,8 @@ flowchart TB
 - [玩法区块分批记录](game/measurements/regional-streaming.json)：提前准备前后 CPU 对照、异步切片/等待与确定性回放，保留 P99 和均值代价及冷启动限制。
 - [怪物绕障与占位对照](game/measurements/enemy-navigation.json)：凹墙到达、围攻重叠与同场景 CPU 成本；行为改善与计算开销分别报告，不代表浏览器帧率。
 - [B1 光照前后对照](game/measurements/visual-lighting.json)：原生 1440p 固定检查点、真实移动窗口、逐帧 CPU/GPU 与资源账本；单机短样本，不代表完整游戏帧率验收。
-- [B2 近景阴影对照](game/measurements/visual-shadows.json)：同检查点开启阴影前后、脚本哈希、逐帧 CPU/GPU 和固定目标/区块工作集；完整路线布景仍待实施。
+- [B2 近景阴影对照](game/measurements/visual-shadows.json)：同检查点开启阴影前后、脚本哈希、逐帧 CPU/GPU 和固定目标/区块工作集；该批不含后续副本布景。
+- [B2 副本路线对照](game/measurements/visual-route.json)：营地/石路/河岸同检查点前后、首领观察点、荒野复查及资源账本；首领点调整过观察位置，明确排除在配对比较之外。
 
 <a id="assets"></a>
 
@@ -112,6 +113,7 @@ flowchart TB
 |---|---|
 | [LICENSE](../LICENSE) | 代码许可，不替代素材许可 |
 | [共用纹理来源](../public/textures/sources.json) | 演示/游戏共享纹理的明确构建输入 |
+| [游戏环境来源](../apps/survivor/assets/environment/sources.json)、[扫描资产许可原文](../apps/survivor/assets/environment/polyhaven-CC0.txt) | 地表、树木及副本扫描石材的离线输入与归属 |
 | [离线树木生成器](../scripts/vendor/README.md)、[上游许可](../scripts/vendor/ez-tree-LICENSE.txt) | 固定版本与复现方式 |
 | [环境归属原文](../apps/survivor/assets/environment/texture-attribution.md) | 上游归属，不等同于当前加载清单 |
 | [技能素材来源](../apps/survivor/assets/effects/sources.json)、[原始许可](../apps/survivor/assets/effects/kenney-LICENSE.txt) | 特效输入及分发边界 |

@@ -5,7 +5,8 @@ import type { CombatAdvance, CombatRequest, CombatUpdate } from "../../src/worke
 import { MemorySpiritRepository } from "./MemorySpiritRepository";
 import type { CharacterCheckpoint } from "../../src/core/CharacterCheckpoint";
 import { HomesteadTerrain, type WorldLocation } from "../../src/core/Homestead";
-import { ChallengeTerrain, isChallenge } from "../../src/core/BossChallenge";
+import { isChallenge } from "../../src/core/BossChallenge";
+import { ChallengeTerrain } from "../../src/core/ChallengeTerrain";
 import type { CharacterRepository } from "../../src/app/CharacterRepository";
 
 /** Unit-test transport: exercise the real protocol and transfer ownership without browser globals. */

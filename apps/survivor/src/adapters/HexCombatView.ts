@@ -21,7 +21,7 @@ import { GAME_CONFIG } from "../core/GameConfig";
 import { WORLD_VIEW } from "../core/WorldView";
 import { HexRegionMap } from "./HexRegionMap";
 import type { AttachRegionMap } from "../app/RegionMapBinding";
-import { COMBAT_ENVIRONMENT, COMBAT_WATER_STYLE } from "./CombatEnvironment";
+import { COMBAT_ENVIRONMENT, COMBAT_WATER_STYLE, COMBAT_WATER_APPEARANCE } from "./CombatEnvironment";
 import { ProceduralCombatTerrain } from "./ProceduralCombatTerrain";
 import { createHomesteadMap } from "./HomesteadMap";
 import { HOMESTEAD, type WorldLocation } from "../core/Homestead";
@@ -86,6 +86,7 @@ export class HexCombatView implements CombatView {
         this.map = new HexMap({
             element: "#survivor-world",
             ...COMBAT_ENVIRONMENT,
+            ...COMBAT_WATER_APPEARANCE,
             texturesBaseUrl: `${import.meta.env.BASE_URL}textures/`,
             treeModel: `${import.meta.env.BASE_URL}Assets/models/oak`,
             maxPixelRatio: 1.5,

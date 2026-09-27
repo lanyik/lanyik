@@ -6,7 +6,8 @@ import { REGION_RADIUS, RegionalWorld, type RegionInfo } from "../core/RegionalW
 import { Exploration, type ExplorationSnapshot } from "../core/Exploration";
 import { MapFog } from "./MapFog";
 import { overviewBounds, overviewHeading, overviewPoint } from "./MapProjection";
-import { CHALLENGE_ARENA, ChallengeTerrain, isChallenge } from "../core/BossChallenge";
+import { CHALLENGE_ARENA, isChallenge } from "../core/BossChallenge";
+import { ChallengeTerrain } from "../core/ChallengeTerrain";
 
 export class HexRegionMap implements RegionMapBinding {
     private readonly challengeTerrain = new ChallengeTerrain();

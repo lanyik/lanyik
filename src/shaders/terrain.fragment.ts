@@ -442,8 +442,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         // for coastal - coastFK.y), and its shore-distance field at the same
         // physical point equals (2 - f) in this side's units (both fields
         // are 1.0 on the mesh edge and bent by the same noise), so feeding
-        // that through the water shader's own shore lightening (base
-        // brightened towards white, see water.fragment.ts) makes the strip
+        // that through the water shader's configured shallow colour makes the strip
         // continue the water tile's color seamlessly - no darker band, no
         // lighter ring around deep-sea islands. A mean-neutral ripple (like
         // the river water below) keeps it alive without shifting brightness.
@@ -451,8 +450,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         if (seaT > 0.0) {
             vec3 seaBase = coastFK.y < 1.5 ? seaColorDeep : seaColorShallow;
             float shoreT = smoothstep(e0Beach, 1.0, 2.0 - f);
-            vec3 shoreCol = mix(seaColorShallow, vec3(1.0), 0.5);
-            vec3 seaColor = mix(seaBase, shoreCol, shoreT);
+            vec3 seaColor = mix(seaBase, seaColorShallow, shoreT);
             float t = uTime;
             float ripple = worldNoise(vWorldXZ, 8, vec2(t * 0.35, t * 0.2));
             ripple = 0.5 * ripple + 0.5 * worldNoise(vWorldXZ, 9, - vec2(t * 0.25, t * 0.4));
@@ -468,7 +466,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
             // a thin non-animated lapping-foam strip for maps that disable
             // coastal wave bands but still want the curved waterline readable.
             float foamStrip = smoothstep(0.98, 1.005, f) - smoothstep(1.04, 1.1, f);
-            texColor.rgb = mix(texColor.rgb, vec3(1.0), clamp(foamStrip, 0.0, 1.0) * 0.35);
+            texColor.rgb = mix(texColor.rgb, foamColor, clamp(foamStrip, 0.0, 1.0) * foamOpacity * 0.35);
         }
     }
 

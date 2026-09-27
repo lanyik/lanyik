@@ -18,6 +18,10 @@ and their execution policy are defined in [testing.md](./testing.md).
 returned reservation handles; `map.resourceBudget` is intentionally a frozen
 diagnostics-only view so an extension cannot clear or force the shared ledger.
 
+`installForestOcclusion` is a renderer-entry helper for extension layers with
+standard foliage materials. The caller owns its view-space focus uniform;
+the coverage and shadow contract is defined in [render streaming](render-streaming.md).
+
 Direct users of the exported `HexMapRendererHost` must pass an exclusively owned
 `resources: ResourceBudgetAccount`; the host disposes it, including on construction
 failure. `HexMap` supplies this account itself. HDR output and sky resources share

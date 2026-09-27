@@ -63,6 +63,13 @@ test("draggable world nodes preview real maps; challenge progress survives leave
         return { visible: mist.visible, meshes: mist.children.length };
     })).toEqual({ visible: true, meshes: 2 });
     await page.screenshot({ path: info.outputPath("challenge-fog-arena.png") });
+    const sceneryId = await page.evaluate(() => {
+        const view = (window.survivorApplication!.session as unknown as { view: { map: HexMap } }).view;
+        const root = view.map.getScene().getObjectByName("challenge-scenery")!;
+        if (!root.visible || root.children.length !== 9) throw new Error("Production challenge scenery was not mounted");
+        if (!root.children.every(mesh => mesh.castShadow && mesh.receiveShadow)) throw new Error("Scenery lost its shared shadows");
+        return root.uuid;
+    });
     const defeat = async (all = false) => {
         await combatWorker(page).evaluate(all => {
             const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
@@ -77,6 +84,10 @@ test("draggable world nodes preview real maps; challenge progress survives leave
     };
     await defeat(); await expect(page.getByTestId("enemy-count")).toHaveText("60");
     await page.evaluate(async () => { await window.survivorApplication!.session.travel("homestead"); await window.survivorApplication!.session.travel("rift-lord"); });
+    expect(await page.evaluate(() => {
+        const view = (window.survivorApplication!.session as unknown as { view: { map: HexMap } }).view;
+        return view.map.getScene().getObjectByName("challenge-scenery")!.uuid;
+    })).toBe(sceneryId);
     await expect(page.getByTestId("enemy-count")).toHaveText("60");
     expect(await page.evaluate(() => window.survivorApplication!.session.getSnapshot().combat!.player.inventory.find(item => item.type === "scroll")!.size)).toBe(1);
     await page.evaluate(cp => window.survivorApplication!.session.load(cp), old);

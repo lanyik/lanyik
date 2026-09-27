@@ -6406,8 +6406,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         // for coastal - coastFK.y), and its shore-distance field at the same
         // physical point equals (2 - f) in this side's units (both fields
         // are 1.0 on the mesh edge and bent by the same noise), so feeding
-        // that through the water shader's own shore lightening (base
-        // brightened towards white, see water.fragment.ts) makes the strip
+        // that through the water shader's configured shallow colour makes the strip
         // continue the water tile's color seamlessly - no darker band, no
         // lighter ring around deep-sea islands. A mean-neutral ripple (like
         // the river water below) keeps it alive without shifting brightness.
@@ -6415,8 +6414,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
         if (seaT > 0.0) {
             vec3 seaBase = coastFK.y < 1.5 ? seaColorDeep : seaColorShallow;
             float shoreT = smoothstep(e0Beach, 1.0, 2.0 - f);
-            vec3 shoreCol = mix(seaColorShallow, vec3(1.0), 0.5);
-            vec3 seaColor = mix(seaBase, shoreCol, shoreT);
+            vec3 seaColor = mix(seaBase, seaColorShallow, shoreT);
             float t = uTime;
             float ripple = worldNoise(vWorldXZ, 8, vec2(t * 0.35, t * 0.2));
             ripple = 0.5 * ripple + 0.5 * worldNoise(vWorldXZ, 9, - vec2(t * 0.25, t * 0.4));
@@ -6432,7 +6430,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
             // a thin non-animated lapping-foam strip for maps that disable
             // coastal wave bands but still want the curved waterline readable.
             float foamStrip = smoothstep(0.98, 1.005, f) - smoothstep(1.04, 1.1, f);
-            texColor.rgb = mix(texColor.rgb, vec3(1.0), clamp(foamStrip, 0.0, 1.0) * 0.35);
+            texColor.rgb = mix(texColor.rgb, foamColor, clamp(foamStrip, 0.0, 1.0) * foamOpacity * 0.35);
         }
     }
 
@@ -7195,17 +7193,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         fBent = shore - cn * coastCurvature * 0.5;
     }
 
-    // shoreline: lighten towards a foamy/sandy tint as the water nears the
-    // (bent) coastline. Blending towards waterColorShallow itself would be a
-    // no-op on a map with no "sea" tiles (every water tile is already
-    // priority 1 = shallow, so texColor is already waterColorShallow) - blend
-    // towards a brightened version instead so the effect is visible
-    // regardless of whether the tile started as deep or shallow.
+    // Depth changes water colour; foam has its own colour/opacity below.
+    // Forced whitening here would leave a chalk ring even with zero foam.
     float e0Beach = 1.0 - clamp(beachWidth, 0.001, 1.0) * 0.5;
     float shoreT = smoothstep(e0Beach, 1.0, fBent);
     if (shoreT > 0.0) {
-        vec3 shoreColor = mix(waterColorShallow, vec3(1.0), 0.5);
-        texColor = mix(texColor, vec4(shoreColor, 1.0), shoreT);
+        texColor = mix(texColor, vec4(waterColorShallow, 1.0), shoreT);
     }
 
     vec3 normal = normalize(vNormal);
@@ -7283,7 +7276,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
 
     vec3 fastDeepColor = mix(waterColorDeep, waterColorShallow, 0.45);
     vec3 color = vPriority < 0.5 ? fastDeepColor : waterColorShallow;
-    color = mix(color, mix(waterColorShallow, vec3(1.0), 0.42), smoothstep(0.72, 1.0, vShoreT));
+    color = mix(color, waterColorShallow, smoothstep(0.72, 1.0, vShoreT));
     color = worldDiffuse(color, normalize(vNormal), 1.0);
     if (vFogState < 1.5) color *= fogDarkenFactor;
     waterColor = vec4(color, 1.0);
@@ -7369,14 +7362,20 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     cellIndexFor(x, y) {
       const tile = getMapTile(this.map, x, y);
       if (!tile) return -1;
-      return this.atlasCellIndex[tile.type];
+      return this.materialIndex(tile);
+    }
+    materialIndex(tile) {
+      if (!tile.modifiers?.includes("soil")) return this.atlasCellIndex[tile.type];
+      const cell = this.options.atlas.textures.soil;
+      if (tile.type !== "land" /* land */ || !cell) throw new Error("Soil tiles require Land.land and a soil atlas cell");
+      return cell.cellY * (this.options.atlas.width / this.options.atlas.cellSize) + cell.cellX;
     }
     //Edge-blend priority of a tile's terrain type (see enums.ts LandPriority).
     //Returns -Infinity for out-of-map neighbors so a border tile never blends
     //towards "nothing".
     priorityFor(x, y) {
       const tile = getMapTile(this.map, x, y);
-      return tile ? LandPriority[tile.type] : -Infinity;
+      return tile ? tile.modifiers?.includes("soil") ? 2.5 : LandPriority[tile.type] : -Infinity;
     }
     //-1 no tile, 0 non-water, 1 sea, 2 coastal - drives the land layer's beach
     //slope and the water layer's edge-color resolution (see shaders).
@@ -7415,9 +7414,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         const center = getHexCenter(tile.x, tile.y, size);
         attrs.offset[i * 2 + 0] = center.x - origin.x;
         attrs.offset[i * 2 + 1] = center.y - origin.y;
-        attrs.style[i * 4 + 0] = this.atlasCellIndex[info.type];
+        attrs.style[i * 4 + 0] = this.materialIndex(info);
         attrs.style[i * 4 + 1] = info.modifiers?.includes("hill") ? 1 : 0;
-        attrs.style[i * 4 + 2] = LandPriority[info.type] ?? 0;
+        attrs.style[i * 4 + 2] = this.priorityFor(tile.x, tile.y);
         attrs.style[i * 4 + 3] = surface.isShoreline(tile.x, tile.y) ? -1 : surface.getEffectiveRelief(tile.x, tile.y);
         const sample = surface.sampleGenerated(tile.x, tile.y);
         attrs.fogState[i * 4 + 0] = this.fogStates.get(`${tile.x},${tile.y}`) ?? 2;
@@ -8735,7 +8734,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
   function grassTiles(map, points) {
     return points.filter(({ x, y }) => {
       const tile = getMapTile(map, x, y);
-      return tile?.type === "land" /* land */ && !tile.city && !isLakeTile(tile);
+      return tile?.type === "land" /* land */ && !tile.city && !tile.modifiers?.includes("soil") && !isLakeTile(tile);
     }).map((point) => ({ x: point.x, y: point.y }));
   }
   function buildGrassLod(map, chunkKey, tiles, lod, options, waterOptions, coastOptions) {
@@ -10020,7 +10019,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     const tiles = [];
     const considerTile = (x, y) => {
       const tile = getMapTile(map, x, y);
-      if (tile?.type === "land" /* land */ && !tile.city && !isLakeTile(tile)) tiles.push({ x, y });
+      if (tile?.type === "land" /* land */ && !tile.city && !tile.modifiers?.includes("soil") && !isLakeTile(tile)) tiles.push({ x, y });
     };
     if (onlyTiles) {
       for (const point of onlyTiles) considerTile(point.x, point.y);
@@ -13594,6 +13593,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     if (tile.type === "tundra" /* tundra */) return PALETTE.tundra;
     if (tile.type === "snow" /* snow */) return PALETTE.snow;
     if (tile.type === "mountain" /* mountain */) return PALETTE.mountain;
+    if (tile.modifiers?.includes("soil")) return [106, 94, 75];
     return shadeRgb(PALETTE.temperate, tile.modifiers?.includes("wood") ? 0.78 : 1);
   }
   function* generatedRiverCoverage(options, resolver) {
@@ -23334,6 +23334,7 @@ float getShadow(sampler2DShadow shadowMap, vec2 shadowMapSize, float shadowInten
   exports.getWorldChunkMetadata = getWorldChunkMetadata;
   exports.getWorldSourceTile = getWorldSourceTile;
   exports.groupTilesByWorldChunk = groupTilesByWorldChunk;
+  exports.installForestOcclusion = installForestOcclusion;
   exports.isMutableWorldSource = isMutableWorldSource;
   exports.isWorldOverviewSource = isWorldOverviewSource;
   exports.isWorldVegetationSource = isWorldVegetationSource;

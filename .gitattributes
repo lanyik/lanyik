@@ -17,6 +17,9 @@ apps/survivor/assets/homestead/License.txt -text -whitespace
 apps/survivor/assets/environment/*-LICENSE.txt -text -whitespace
 apps/survivor/assets/environment/*_medium.json -text -whitespace
 apps/survivor/assets/environment/texture-attribution.md -text -whitespace
+apps/survivor/assets/environment/polyhaven-CC0.txt -text -whitespace
+apps/survivor/assets/environment/**/*.gltf -text -whitespace
+apps/survivor/assets/environment/**/*.bin -text
 scripts/vendor/*-LICENSE.txt -text -whitespace
 scripts/vendor/ez-tree.mjs -whitespace linguist-vendored
 apps/survivor/assets/actors/**/*.gltf -text

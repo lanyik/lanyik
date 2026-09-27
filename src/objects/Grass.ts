@@ -431,7 +431,7 @@ export function createGrassField(
     const tiles: { x: number, y: number }[] = [];
     const considerTile = (x: number, y: number): void => {
         const tile = getMapTile(map, x, y);
-        if (tile?.type === Land.land && !tile.city && !isLakeTile(tile)) tiles.push({ x, y });
+        if (tile?.type === Land.land && !tile.city && !tile.modifiers?.includes("soil") && !isLakeTile(tile)) tiles.push({ x, y });
     };
     if (onlyTiles) {
         for (const point of onlyTiles) considerTile(point.x, point.y);

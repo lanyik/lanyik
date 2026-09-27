@@ -1,8 +1,6 @@
 import { EnemyKind, enemyName } from "./EnemyDefinitions";
 import type { ItemDefinition } from "./ItemDefinition";
 import type { InventoryItem } from "./InventoryItem";
-import type { CombatTerrain } from "./CombatTerrain";
-import { SurfaceMotion } from "./SurfaceMotion";
 import type { RegionInfo, RegionalSpawn } from "./RegionalWorld";
 
 export const CHALLENGES = Object.freeze({
@@ -52,16 +50,3 @@ export function challengeSpawns(id: ChallengeId, level: number): readonly Region
     return result;
 }
 export const challengeBossName = (id: ChallengeId): string => enemyName(CHALLENGES[id].boss, true);
-
-/** Fixed circle shared with the map and fog wall. Swept motion also contains dashes and charges. */
-export class ChallengeTerrain implements CombatTerrain {
-    private readonly motion = new SurfaceMotion((x, z, radius) => {
-        const dx = x - CHALLENGE_ARENA.x, dz = z - CHALLENGE_ARENA.z, distance = Math.hypot(dx, dz);
-        return distance + radius > CHALLENGE_ARENA.radius ? { x: -dx / distance, z: -dz / distance, round: true } : undefined;
-    });
-    public height(): number { return 0; }
-    public traceAttack(): number { return Infinity; }
-    public isClear(x: number, z: number, radius: number): boolean { return Math.hypot(x - CHALLENGE_ARENA.x, z - CHALLENGE_ARENA.z) + radius <= CHALLENGE_ARENA.radius; }
-    public move(x: number, z: number, dx: number, dz: number, radius: number, slide: boolean) { return this.motion.move(x, z, dx, dz, radius, slide); }
-    public dispose(): void {}
-}

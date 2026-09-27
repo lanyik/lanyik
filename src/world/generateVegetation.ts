@@ -185,7 +185,7 @@ function assertOptions(options: WorldVegetationGenerationOptions): void {
 function grassTiles(map: MapInfo, points: readonly Point[]): Point[] {
     return points.filter(({ x, y }) => {
         const tile = getMapTile(map, x, y);
-        return tile?.type === Land.land && !tile.city && !isLakeTile(tile);
+        return tile?.type === Land.land && !tile.city && !tile.modifiers?.includes("soil") && !isLakeTile(tile);
     }).map(point => ({ x: point.x, y: point.y }));
 }
 

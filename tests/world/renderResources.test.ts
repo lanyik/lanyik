@@ -94,6 +94,32 @@ function points(startX: number): Point[] {
 }
 
 describe("streamed render resource sharing", () => {
+    test("bare soil selects its atlas layer, blends above grass and suppresses both vegetation paths", async () => {
+        vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
+        vi.spyOn(TextureLoader.prototype, "load").mockReturnValue(new Texture());
+        const map: MapInfo = { w: 2, h: 1, data: { 0: { 0: { type: Land.land, modifiers: ["soil"] } }, 1: { 0: { type: Land.land } } } };
+        const selected = [{ x: 0, y: 0 }], surface = createWorldSurfaceView({ map, tileSize: 10, mountainHeight: 0 });
+        const layout = generateWorldVegetation({ map, points: selected, size: 10, grassDensity: 10, grassBladeWidth: .3,
+            grassBladeHeight: 1, treesPerTile: 0, treeScale: 1, treeModel: "test-tree", riverWidth: .28,
+            riverBankWidth: .14, riverCurvature: .5, lakeShoreWidth: .18, beachWidth: .35, waterCornerRounding: .4, coastCurvature: .5 });
+        expect(layout.grass).toEqual([]);
+        expect(createGrassField(map, { size: 10, density: 10, surface }, selected)).toBeNull();
+        const atlas = { image: "terrain.png", width: 2, height: 1, cellSize: 1, cellSpacing: 0,
+            textures: { ...Object.fromEntries(Object.values(Land).map(type => [type, { cellX: 0, cellY: 0 }])), soil: { cellX: 1, cellY: 0 } } };
+        const terrain = new TerrainMesh(map, { size: 10, texturesBaseUrl: "textures/", terrainTextureAnisotropy: 1, atlas, surface }, selected);
+        const mesh = terrain.children.find(child => getWorldChunkMetadata(child)) as Mesh;
+        const geometry = terrain.activateChunk(getWorldChunkMetadata(mesh)!, 0)!;
+        expect(geometry.getAttribute("style").getX(0)).toBe(1);
+        expect(geometry.getAttribute("style").getZ(0)).toBe(2.5);
+        const readiness = expect(terrain.ready).rejects.toMatchObject({ name: "AbortError" });
+        terrain.dispose(); await readiness;
+        const invalid = new TerrainMesh(map, { size: 10, texturesBaseUrl: "textures/", terrainTextureAnisotropy: 1, surface,
+            atlas: { ...atlas, textures: Object.fromEntries(Object.values(Land).map(type => [type, { cellX: 0, cellY: 0 }])) } }, selected);
+        const missing = invalid.children.find(child => getWorldChunkMetadata(child))!;
+        expect(() => invalid.activateChunk(getWorldChunkMetadata(missing)!, 0)).toThrow("soil atlas cell");
+        const rejected = expect(invalid.ready).rejects.toMatchObject({ name: "AbortError" }); invalid.dispose(); await rejected;
+    });
+
     test("uploads identical static and Worker vegetation at every LOD", async () => {
         const map = mapWithVegetation();
         const selected = points(0);

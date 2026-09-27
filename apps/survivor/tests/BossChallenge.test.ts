@@ -4,7 +4,8 @@ import { CombatSimulation } from "../src/core/CombatSimulation";
 import { CombatWorld } from "../src/core/CombatWorld";
 import { CombatRewards } from "../src/core/CombatRewards";
 import { CombatEvents, CombatEventKind, EffectCause } from "../src/core/CombatEvents";
-import { CHALLENGE_IDS, CHALLENGE_ARENA, CHALLENGE_SPAWN, ChallengeTerrain, createChallengeScroll, challengeSpawns, type ChallengeId } from "../src/core/BossChallenge";
+import { CHALLENGE_IDS, CHALLENGE_ARENA, CHALLENGE_SPAWN, createChallengeScroll, challengeSpawns, type ChallengeId } from "../src/core/BossChallenge";
+import { ChallengeTerrain } from "../src/core/ChallengeTerrain";
 import { HomesteadTerrain } from "../src/core/Homestead";
 import { EMPTY_SPIRIT_REALM } from "../src/core/SpiritRealm";
 import { BASE_LOOT_PROFILE } from "../src/core/Loot";
@@ -55,7 +56,8 @@ test("challenge strength is applied to health and damage, while the enclosing te
     const terrain = new ChallengeTerrain();
     for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
         const p = terrain.move(CHALLENGE_ARENA.x, CHALLENGE_ARENA.z, Math.cos(angle) * 100, Math.sin(angle) * 100, .3, true);
-        expect(terrain.isClear(p.x, p.z, .3)).toBe(true); expect(Math.hypot(p.x - CHALLENGE_ARENA.x, p.z - CHALLENGE_ARENA.z)).toBeGreaterThan(23);
+        expect(terrain.isClear(p.x, p.z, .3)).toBe(true);
+        expect(terrain.isClear(p.x + Math.cos(angle) * .4, p.z + Math.sin(angle) * .4, .3)).toBe(false);
     }
     start.dispose(); run.dispose();
 });

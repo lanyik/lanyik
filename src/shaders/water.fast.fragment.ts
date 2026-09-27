@@ -37,7 +37,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
 
     vec3 fastDeepColor = mix(waterColorDeep, waterColorShallow, 0.45);
     vec3 color = vPriority < 0.5 ? fastDeepColor : waterColorShallow;
-    color = mix(color, mix(waterColorShallow, vec3(1.0), 0.42), smoothstep(0.72, 1.0, vShoreT));
+    color = mix(color, waterColorShallow, smoothstep(0.72, 1.0, vShoreT));
     color = worldDiffuse(color, normalize(vNormal), 1.0);
     if (vFogState < 1.5) color *= fogDarkenFactor;
     waterColor = vec4(color, 1.0);
