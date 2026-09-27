@@ -53,6 +53,16 @@ const fixture = {
         const rotation = (name: string) => (actors.hero.getObjectByName(`hero0_${name}`) as Bone).quaternion.toArray();
         return { bones: mesh.skeleton.bones.length, legs: rotation("calf_l"), arm: rotation("upperarm_l"), drawCalls: renderer.info.render.calls, maxY, minY };
     },
+    transition(milliseconds: number) {
+        if (milliseconds === 0) {
+            actors.reset(); actors.hero.rotation.y = 0;
+            Object.assign(player, { feedback: new PlayerFeedback(), animationTime: .2, x: 0, z: 0, gameOver: false });
+            draw(200);
+            player.feedback.castPhase = 3; player.feedback.castProgress = .2;
+        }
+        player.animationTime = .2 + milliseconds / 1000; draw(200 + milliseconds);
+        return (actors.hero.getObjectByName("hero0_upperarm_l") as Bone).quaternion.toArray();
+    },
     async samples() {
         const results = [];
         for (const kind of ["attack", "cast", "hurt", "impact", "pickup", "death", "wind"] as SoundKind[]) {

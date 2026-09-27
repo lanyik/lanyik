@@ -1,16 +1,17 @@
 import { afterEach, expect, test } from "vitest";
 import { readFile } from "node:fs/promises";
-import { Bone, Mesh, SkinnedMesh, Vector3 } from "three";
+import { Bone, Mesh, Quaternion, SkinnedMesh, Vector3, type AnimationClip } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { HeroAnimation } from "../src/presentation/HeroAnimation";
 import { PlayerFeedback } from "../src/core/PlayerFeedback";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
-async function fixture() {
+async function fixture(prepareClips?: (clips: AnimationClip[]) => void) {
     const bytes = await readFile(new URL("../.assets/actors/Ranger.glb", import.meta.url));
     const gltf = await new GLTFLoader().parseAsync(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), "");
     const mesh = gltf.scene.getObjectByName("Ranger") as SkinnedMesh;
+    prepareClips?.(gltf.animations);
     const animation = new HeroAnimation(gltf.scene, mesh, gltf.animations);
     cleanups.push(() => { mesh.skeleton.dispose(); gltf.scene.traverse(node => { if (node instanceof Mesh) {
         node.geometry.dispose(); for (const material of Array.isArray(node.material) ? node.material : [node.material]) material.dispose();
@@ -21,6 +22,49 @@ async function fixture() {
     const draw = (seconds: number) => { player.animationTime = seconds; animation.write(player, seconds * 1000, true, false); };
     return { mesh, animation, player, bone, draw, root: gltf.scene, clips: gltf.animations };
 }
+
+test("initial playback and reset preserve valid bone transforms on every startup frame", async () => {
+    const { animation, player, bone, draw } = await fixture(); player.z = 0;
+    const bones = ["thigh_l", "calf_l", "spine_01"].map(bone);
+    for (const start of [0, 1]) {
+        animation.reset(); draw(start);
+        const positions = bones.map(bone => bone.position.clone());
+        for (let frame = 1; frame <= 8; frame++) {
+            draw(start + frame / 60);
+            for (const [index, bone] of bones.entries()) {
+                expect(bone.quaternion.length()).toBeCloseTo(1, 5);
+                expect(bone.position.distanceTo(positions[index])).toBeLessThan(.01);
+            }
+        }
+    }
+});
+
+test("both layers reach the halfway rotation and an interrupted blend continues from the displayed pose", async () => {
+    const names = ["upperarm_l", "thigh_l"];
+    const { player, bone, draw } = await fixture(clips => {
+        // Known, constant endpoints isolate blending from the source clip's own motion.
+        for (const clip of clips) for (const name of names) {
+            const track = clip.tracks.find(track => track.name === `hero0_${name}.quaternion`)!;
+            const rotation = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), clip.name === "windup" ? Math.PI / 2 : 0);
+            for (let offset = 0; offset < track.values.length; offset += 4) rotation.toArray(track.values, offset);
+        }
+    });
+    player.z = 0; draw(0); draw(.2);
+    player.feedback.castPhase = 1; player.feedback.castProgress = .5; player.feedback.castLocksMovement = true;
+    draw(.2);
+    const expectAngle = (degrees: number) => {
+        const expected = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), degrees * Math.PI / 180);
+        for (const name of names) {
+            expect(bone(name).quaternion.angleTo(expected)).toBeLessThan(.001);
+            expect(bone(name).quaternion.length()).toBeCloseTo(1, 5);
+        }
+    };
+    expectAngle(0); draw(.26); expectAngle(45);
+    player.feedback.castPhase = 0; player.feedback.castLocksMovement = false;
+    draw(.26); expectAngle(45);
+    draw(.32); expectAngle(22.5);
+    draw(.38); expectAngle(0);
+});
 
 test("real skeletal masks keep moving legs identical while the hands attack, including interrupted blends", async () => {
     const walking = await fixture(), attacking = await fixture();

@@ -14,7 +14,7 @@ class PoseLayer {
     private readonly rotation = new Quaternion();
     private clip: HeroClip | undefined;
     private sequence = -1;
-    private changedAt = 0;
+    private changedAt: number | undefined;
 
     constructor(private readonly bones: readonly Bone[], clips: readonly AnimationClip[]) {
         this.previous = new Float32Array(bones.length * 7); this.from = this.previous.slice(); this.target = this.previous.slice();
@@ -42,17 +42,23 @@ class PoseLayer {
     }
     public write(clip: HeroClip, phase: number, sequence: number, clock: number): void {
         const fresh = this.clip === undefined;
-        if (this.clip !== clip || this.sequence !== sequence) { this.from.set(this.previous); this.clip = clip; this.sequence = sequence; this.changedAt = clock; }
+        if (this.clip !== clip || this.sequence !== sequence) {
+            this.from.set(this.previous); this.clip = clip; this.sequence = sequence;
+            this.changedAt = fresh ? undefined : clock; // First playback has no outgoing pose to blend from.
+        }
         const spec = HERO_CLIPS[clip], time = (spec.loop ? ((phase % 1) + 1) % 1 : Math.max(0, Math.min(1, phase))) * spec.duration;
         for (const track of this.tracks.get(clip)!) this.target.set(track.sample.evaluate(time), track.offset);
-        const t = fresh ? 1 : Math.max(0, Math.min(1, (clock - this.changedAt) / .12)), blend = t * t * (3 - 2 * t);
+        const t = this.changedAt === undefined ? 1 : Math.max(0, Math.min(1, (clock - this.changedAt) / .12)), blend = t * t * (3 - 2 * t);
         for (let i = 0; i < this.bones.length; i++) {
             const bone = this.bones[i], offset = i * 7;
             for (let axis = 0; axis < 3; axis++) this.previous[offset + axis] = this.from[offset + axis] * (1 - blend) + this.target[offset + axis] * blend;
             bone.position.fromArray(this.previous, offset);
             bone.quaternion.fromArray(this.target, offset + 3);
-            this.rotation.fromArray(this.from, offset + 3);
-            if (!fresh && blend < 1) bone.quaternion.slerpQuaternions(this.rotation, bone.quaternion, blend);
+            if (blend < 1) {
+                // Keep the target separate: writing the source into the destination must not overwrite it.
+                this.rotation.copy(bone.quaternion);
+                bone.quaternion.fromArray(this.from, offset + 3).slerp(this.rotation, blend);
+            }
             bone.quaternion.toArray(this.previous, offset + 3);
         }
     }
