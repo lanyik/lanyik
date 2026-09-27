@@ -102,6 +102,7 @@ flowchart TB
 - [B1 光照前后对照](game/measurements/visual-lighting.json)：原生 1440p 固定检查点、真实移动窗口、逐帧 CPU/GPU 与资源账本；单机短样本，不代表完整游戏帧率验收。
 - [B2 近景阴影对照](game/measurements/visual-shadows.json)：同检查点开启阴影前后、脚本哈希、逐帧 CPU/GPU 和固定目标/区块工作集；该批不含后续副本布景。
 - [B2 副本路线对照](game/measurements/visual-route.json)：营地/石路/河岸同检查点前后、首领观察点、荒野复查及资源账本；首领点调整过观察位置，明确排除在配对比较之外。
+- [B2 树木风动对照](game/measurements/visual-wind.json)：四个相同副本检查点的前后帧时、绘制次数、荒野复查与资源账本；连续环境时钟未锁定同一风相位。
 
 <a id="assets"></a>
 

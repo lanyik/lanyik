@@ -333,6 +333,7 @@ export type {
 export { WorldRenderLayerRegistry } from "./rendering/WorldRenderLayer";
 export { GroundProjection } from "./rendering/GroundProjection";
 export { installForestOcclusion } from "./rendering/ForestOcclusion";
+export { installForestWind } from "./rendering/ForestWind";
 export type {
     WorldRenderLayer,
     WorldRenderLayerHost,

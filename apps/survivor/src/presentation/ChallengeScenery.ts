@@ -1,24 +1,37 @@
-import { BufferGeometryLoader, Color, DoubleSide, Group, InstancedMesh, MeshStandardMaterial, Object3D, SRGBColorSpace, Vector4,
+import { BufferGeometryLoader, Color, DoubleSide, Group, InstancedMesh, MeshDepthMaterial, MeshStandardMaterial, Object3D, Sphere, SRGBColorSpace, Vector3, Vector4,
     type BufferGeometry, type Texture } from "three";
-import { installForestOcclusion } from "three-hex-map";
+import { installForestOcclusion, installForestWind } from "three-hex-map";
 import { CHALLENGE_SCENERY } from "../core/ChallengeLayout";
 import { AssetLoader } from "./AssetLoader";
 
-/** Finite, static instance pools; all assets and decoded images belong to CombatLayer. */
+/** Finite instance pools; wind deforms vertices without changing authoritative transforms. */
 export class ChallengeScenery {
     public readonly root = new Group();
     private readonly meshes: InstancedMesh[] = [];
+    private readonly depths: MeshDepthMaterial[] = [];
+    private readonly windTime = { value: 0 };
     private constructor(private readonly geometries: Record<string, BufferGeometry>, private readonly textures: Record<string, Texture>,
         private readonly materials: MeshStandardMaterial[], player: Object3D) {
         this.root.name = "challenge-scenery";
         const focus = { value: new Vector4() };
         for (const material of materials.slice(2)) installForestOcclusion(material, focus);
+        let treeHeight = 0;
+        for (const name of ["oak-branches", "oak-leaves"]) {
+            geometries[name].computeBoundingBox(); treeHeight = Math.max(treeHeight, geometries[name].boundingBox!.max.y);
+        }
         const transform = new Object3D();
         for (const [name, geometry] of Object.entries(geometries)) {
             const tree = name.startsWith("oak-"), props = CHALLENGE_SCENERY.props.filter(prop => prop.model === name);
             const material = materials[name === "firepit" ? 1 : name === "oak-branches" ? 2 : name === "oak-leaves" ? 3 : 0];
             const mesh = new InstancedMesh(geometry, material, tree ? CHALLENGE_SCENERY.trees.length : props.length);
             mesh.name = `challenge-${name}`; mesh.castShadow = mesh.receiveShadow = true;
+            if (tree) {
+                const padding = installForestWind(material, this.windTime, treeHeight);
+                const depth = new MeshDepthMaterial(); installForestWind(depth, this.windTime, treeHeight);
+                this.depths.push(depth); mesh.customDepthMaterial = depth;
+                geometry.boundingBox!.expandByVector(new Vector3(padding, 0, padding));
+                geometry.boundingBox!.getBoundingSphere(geometry.boundingSphere = new Sphere());
+            }
             if (tree) mesh.onBeforeRender = (_renderer, _scene, camera) => {
                 // Player-local focus follows the current camera and render origin; shadows retain full coverage.
                 focus.value.set(0, .9, 0, 1).applyMatrix4(player.matrixWorld).applyMatrix4(camera.matrixWorldInverse);
@@ -65,9 +78,11 @@ export class ChallengeScenery {
             Object.values(textures).forEach(texture => texture.dispose()); materials.forEach(material => material.dispose()); throw error;
         } finally { loader.dispose(); }
     }
+    public update(timestampMs: number): void { this.windTime.value = (timestampMs / 1000) % (20 * Math.PI); }
     public dispose(): void {
         this.root.removeFromParent(); this.meshes.forEach(mesh => mesh.dispose());
         Object.values(this.geometries).forEach(geometry => geometry.dispose());
         this.materials.forEach(material => material.dispose()); Object.values(this.textures).forEach(texture => texture.dispose());
+        this.depths.forEach(material => material.dispose());
     }
 }

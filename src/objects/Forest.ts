@@ -11,6 +11,7 @@ import {
     BufferGeometry,
     Material,
     MeshStandardMaterial,
+    MeshDepthMaterial,
     Color,
     Texture,
     Vector4
@@ -47,9 +48,11 @@ import { collectCpuBufferAllocations, collectGeometryAllocations, ResourceBudget
 import { forestLayoutAllocations, VegetationResources } from "../rendering/VegetationResources";
 import { forestInstanceCount } from "../world/generateVegetation";
 import { installForestOcclusion } from "../rendering/ForestOcclusion";
+import { installForestWind } from "../rendering/ForestWind";
 
 export interface ForestOptions {
     foregroundFocus?: { value: Vector4 };
+    windTime?: { value: number };
     size: number;
     surface: WorldSurfaceView;
     resourceAccount?: ResourceBudgetAccount;
@@ -116,6 +119,7 @@ interface ForestBuildContext {
 interface PreparedForestPart {
     geometry: BufferGeometry;
     material: Material | Material[];
+    depthMaterial?: MeshDepthMaterial;
 }
 
 interface PreparedForestModel {
@@ -269,7 +273,8 @@ export class ForestSharedResources {
     private disposed = false;
     private readonly retained: VegetationResources;
 
-    constructor(modelAssets?: ModelAssetCache, resourceAccount?: ResourceBudgetAccount, private readonly focus?: { value: Vector4 }) {
+    constructor(modelAssets?: ModelAssetCache, resourceAccount?: ResourceBudgetAccount, private readonly focus?: { value: Vector4 },
+        private readonly windTime?: { value: number }) {
         this.retained = new VegetationResources(resourceAccount);
         this.ownsModelAssets = modelAssets === undefined;
         this.modelAssets = modelAssets ?? new ModelAssetCache();
@@ -319,13 +324,29 @@ export class ForestSharedResources {
                     const baseMaterials = meshesByLod[0].map(mesh =>
                         prepareForestMaterials(mesh.material, albedoScale, materialCache, createdMaterials, this.focus)
                     );
-                    const lods = meshesByLod.map((meshes, lod) => meshes.map((mesh, part) => {
+                    const lods: PreparedForestPart[][] = meshesByLod.map((meshes, lod) => meshes.map((mesh, part) => {
                         const geometry = mesh.geometry.clone();
                         geometry.applyMatrix4(mesh.matrixWorld);
                         geometry.applyMatrix4(acquired[lod].model.fixup);
                         createdGeometries.add(geometry);
                         return { geometry, material: baseMaterials[part] };
                     }));
+                    if (this.windTime) {
+                        // One deformation scale for every part and LOD, including enlarged far leaves.
+                        const bounds = new Box3();
+                        for (const geometry of createdGeometries) { geometry.computeBoundingBox(); bounds.union(geometry.boundingBox!); }
+                        const height = bounds.max.y;
+                        let padding = 0;
+                        for (const material of createdMaterials) padding = Math.max(padding, installForestWind(material as MeshStandardMaterial, this.windTime, height));
+                        const depths = baseMaterials.map(() => {
+                            const material = new MeshDepthMaterial();
+                            installForestWind(material, this.windTime!, height); createdMaterials.add(material); return material;
+                        });
+                        for (const parts of lods) parts.forEach((part, index) => {
+                            part.depthMaterial = depths[index];
+                            part.geometry.boundingBox!.expandByVector(new Vector3(padding, 0, padding));
+                        });
+                    }
                     if (this.disposed) {
                         throw new Error("ForestSharedResources was disposed while loading a model");
                     }
@@ -472,6 +493,7 @@ export class ForestField extends Group {
                 const part = parts[index];
                 mesh.geometry = part.geometry;
                 mesh.material = part.material;
+                mesh.customDepthMaterial = part.depthMaterial;
             });
             let cached = record.lodCache.get(lod);
             if (!cached) {
@@ -510,6 +532,7 @@ export class ForestField extends Group {
                 if (!source) return;
                 copy.geometry = source.geometry;
                 copy.material = source.material;
+                copy.customDepthMaterial = source.customDepthMaterial;
                 copy.count = source.count;
                 copy.instanceMatrix = source.instanceMatrix;
                 copy.instanceColor = source.instanceColor;
@@ -706,7 +729,7 @@ export async function createForest(
 
     const tileRanges = new Map<string, TileTreeRange>();
     const chunkRecords = new Map<string, ForestChunkRecord>();
-    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount, options.foregroundFocus);
+    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount, options.foregroundFocus, options.windTime);
     let modelIndex = 0;
 
     try {
@@ -732,8 +755,14 @@ export async function createForest(
                 const origin = getWorldChunkOrigin(chunkKey, size);
                 root.position.set(origin.x, 0, origin.y);
                 root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
-                const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
+                const instancedMeshes = preparedParts.map(({ geometry, material, depthMaterial }, partIndex) => {
                     const instancedMesh = new InstancedMesh(geometry, material, 0);
+                    instancedMesh.customDepthMaterial = depthMaterial;
+                    if (depthMaterial && Array.isArray(material)) instancedMesh.onBeforeShadow = (_renderer, _object, _camera, _shadowCamera, _geometry, depth) => {
+                        // Three copies each group's maps into the shared custom depth material.
+                        // Refresh its program/uniform bindings even when alphaTest stays nonzero.
+                        depth.needsUpdate = true;
+                    };
                     instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
                     instancedMesh.count = 0;
                     instancedMesh.frustumCulled = true;

@@ -21,6 +21,9 @@ diagnostics-only view so an extension cannot clear or force the shared ledger.
 `installForestOcclusion` is a renderer-entry helper for extension layers with
 standard foliage materials. The caller owns its view-space focus uniform;
 the coverage and shadow contract is defined in [render streaming](render-streaming.md).
+`installForestWind` composes vertex deformation into Standard and depth materials;
+callers own the time uniform and depth material and apply the returned bounds padding.
+Its transform, LOD and lifetime contract is defined in [forest wind](render-streaming.md#森林风动).
 
 Direct users of the exported `HexMapRendererHost` must pass an exclusively owned
 `resources: ResourceBudgetAccount`; the host disposes it, including on construction

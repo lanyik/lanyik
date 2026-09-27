@@ -12,7 +12,7 @@
 
 首批扫描模型为 Poly Haven 的 [Rock Moss Set 01](https://polyhaven.com/a/rock_moss_set_01)（Kless Gyzen，六块石头）与 [Stone Fire Pit](https://polyhaven.com/a/stone_fire_pit)（Sebastian Platen）。原始 glTF、二进制与 1K 颜色/法线/粗糙度或 ARM 贴图进入来源清单；保留 [CC0 原文](../../apps/survivor/assets/environment/polyhaven-CC0.txt)，归属随清单发布。构建校验全部字节与 SHA-256，使用已有 meshoptimizer 离线保边减面，单石 900–2978 三角形、营火台 699 三角形；UV 保留，几何归一到半径/高度均为 1 的圆柱。原始扫描尺寸不作为游戏体型，布局显式提供半径、高度及朝向，与碰撞共用边界。
 
-[ChallengeScenery](../../apps/survivor/src/presentation/ChallengeScenery.ts) 使用六组石头、一组营火台、橡树枝干和叶片，共 9 个静态实例池；当前为 83 个石材实例（13 个实体、70 个嵌地路石）及 67 棵树。路石顶部为 .025 游戏单位，仅作可跨越表面细节。树木复用原有橡树生成器、源贴图和比例，有限场地使用近景几何，尚无风动与距离 LOD。枝干和叶片复用 `installForestOcclusion`，以玩家上方 .9 游戏单位为观察中心、半径 2 单位；绘制前转换至当前视图空间，保留完整阴影及实体碰撞，避免前景树冠遮住玩家。纹理按每来源共享，PBR 颜色以 sRGB 解码，表面通道为线性数据，直接参与现有太阳阴影与天空照明。
+[ChallengeScenery](../../apps/survivor/src/presentation/ChallengeScenery.ts) 使用六组石头、一组营火台、橡树枝干和叶片，共 9 个实例池；当前为 83 个石材实例（13 个实体、70 个嵌地路石）及 67 棵树。路石顶部为 .025 游戏单位，仅作可跨越表面细节。树木复用原有橡树生成器、源贴图和比例，有限场地使用近景几何，尚无距离 LOD；枝干与叶片已接入下述共用风动，实例矩阵仍为静态。两份树木深度材质归布景所有，随布景销毁。枝干和叶片复用 `installForestOcclusion`，以玩家上方 .9 游戏单位为观察中心、半径 2 单位；绘制前转换至当前视图空间，保留完整阴影及实体碰撞，避免前景树冠遮住玩家。纹理按每来源共享，PBR 颜色以 sRGB 解码，表面通道为线性数据，直接参与现有太阳阴影与天空照明。
 
 所有几何、纹理、解码图像和实例缓冲随 `CombatLayer` 一次加载、计入必要资源账户，切图复用并按地点隐藏，最终统一销毁；失败/取消释放已完成部分，无运行时外网请求。构建移除随机几何 UUID，`survivorScenery.test.js` 验证重复构建字节一致、几何处于权威包围圆柱内及许可原文发布。通行、遮挡和出生保证归[地形通行](terrain-navigation.md#副本固定布景)。
 
@@ -52,6 +52,8 @@
 
 叶片 `alphaTest=.42`、双面，`forestFoliage` 材质标记启用薄叶背光透射（第一盏平行光，背光余弦平方、系数 .22），透射同样受太阳阴影遮挡。枝干与叶片投影并受影，深度 pass 保留 alpha-test 轮廓；没有半透明排序、逐树材质或逐树骨架。几何和生成材质由 ForestSharedResources 释放，原始纹理由模型资产 lease 所有；中远档继续共享近档材质。
 
+荒野三种树与副本橡树共用[森林风动](../render-streaming.md#森林风动)。树冠缓慢摆动并带细小颤动，根部固定；最大侧向偏移不超过模型高度的 5%，不改变树干碰撞。模型各部件和 LOD 共用高度，稳定旋转/缩放提供个体相位；颜色、法线与太阳阴影同步变化。仅使用既有几何和材质，不修改来源资产或增加运行时下载。荒野已有三档 LOD 的轮廓差异与切档方式保持现状，风动不等同于解决所有远近切换问题。
+
 ## 地表数据和着色
 
 [ambientCG Grass005](https://ambientcg.com/view?id=Grass005) 用于 land，[Forest Ground 04](https://polyhaven.com/a/forest_ground_04) 用于 soil，[Rocky Terrain](https://polyhaven.com/a/rocky_terrain) 用于 mountain；均为 CC0，Grass005 是 bitmap 元素与程序化混合制作的草坪。原先无地类引用的 `_plains` 槽明确改为 soil，移除未使用 Rocky Terrain 02 源文件。固定 1K 颜色、OpenGL 法线、粗糙度、AO 输入，颜色饱和度 .7、亮度 .95，缩至 512 格；其余五格保留原语义。源文件固定字节数与 SHA-256，Grass005 还记录原压缩包 SHA-256 与包内路径。
@@ -74,7 +76,7 @@
 
 这是静态天空，尚无昼夜变化、逐帧体积云或动态光照编辑入口。帧循环只采样现有纹理，不重新烘焙；恢复时生成新的 PMREM 并重新绑定，旧图立即释放。PMREM 生成器及其临时目标在烘焙结束或失败时释放；没有新增下载资源。线性场景目标、抗锯齿、预算及输出所有权见[渲染流送](../render-streaming.md#场景照明与颜色输出)。
 
-游戏通过 `GameConfig.presentation.shadowRadius=420` 开启固定 2048² 近景太阳阴影，半宽约 12.35 游戏单位（沿光照平面度量）。陆地、森林、家园建筑及副本实体投影并受影，水面和草受影；荒野前景树冠透视只改变颜色覆盖，不改变遮光。目标、远行坐标、区块裁剪和释放由[近景太阳阴影合同](../render-streaming.md#近景太阳阴影)统一定义。当前无屏幕空间接触阴影或动态植被风动投影。
+游戏通过 `GameConfig.presentation.shadowRadius=420` 开启固定 2048² 近景太阳阴影，半宽约 12.35 游戏单位（沿光照平面度量）。陆地、森林、家园建筑及副本实体投影并受影，水面和草受影；树冠风动同步投影，前景透视只改变颜色覆盖，不改变遮光。目标、远行坐标、区块裁剪和释放由[近景太阳阴影合同](../render-streaming.md#近景太阳阴影)统一定义。当前无屏幕空间接触阴影。
 
 CPU 数组与 GPU mip 进入已有资源账本；世界加载等待两个请求，失败明确拒绝，取消或 dispose 终止在途请求，晚到数据不上传，所有材质共同引用的数组只释放一次。验证同时覆盖真实 full/fast 渲染、材质加载/取消及森林所有权，不能只用 shader 文本断言代替画面检查。
 

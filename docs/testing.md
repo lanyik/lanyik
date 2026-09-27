@@ -236,6 +236,8 @@ Windows 独显回归可显式设置 `$env:PLAYWRIGHT_ANGLE_BACKEND='d3d11'` 后�
 
 浏览器 `linear-lighting.spec.ts` 验证 HDR 高亮、透明线性混合、Raw/标准材质同输出、真实环境反射及缩放记账；`near-shadows.spec.ts` 读回实际像素，验证 full/fast 地形和 Standard 同受影、环境光保留、alpha-test、实例 morph 投影与原点重置。单测验证绝对 texel 对齐、镜头外投影区块驻留和 32 MiB 固定预留；恢复及 500 次切图 soak 显式启用阴影。根演示加 `?shadows`（已有查询参数时用 `&shadows`）可查看同档效果。
 
+`forest-wind.spec.ts` 通过实际颜色/深度材质像素检查树根固定、树冠位移、不同细分档共享相位、周期边界连续及 4096/8192 单位原点平移；单测检查共享深度材质跨 LOD/副本保留并只释放一次，以及裁剪边界覆盖风动。路线和荒野样板使用生产树木，不冻结环境时钟；前后照片和短测不属于同风相位重放，动作以短视频和受控像素测试复核。
+
 ## Meaning of the 500-iteration soak
 
 One iteration is one `HexMap.loadWorld()` replacement, not a tick or terrain tile.

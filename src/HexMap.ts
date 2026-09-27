@@ -153,6 +153,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
     private terrain: TerrainMesh | undefined;
     private forest: ForestField | undefined;
     private readonly forestFocus = { value: new Vector4() };
+    private readonly forestWindTime = { value: 0 };
     private readonly cameraSurfaceAnchor = new Vector3(Infinity, Infinity, Infinity);
     private cameraSurfaceRevision = -1;
     private cameraSurfaceWorldRevision = -1;
@@ -887,6 +888,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
         this.emit("beforeframe", { t, dtS });
         if (this.disposed) return;
+        this.forestWindTime.value = (t / 1000) % (20 * Math.PI);
         this.interactions.update(Math.min(dtS, 0.05));
         this.controls.update(dtS);
         this.wrapCameraToWorld();
@@ -1356,7 +1358,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         const record = this.worldChunkLayers.get(context.key);
         if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
         const forestBuildRevision = record.forestBuildRevision ??= 0;
-        this.streamedForestResources ??= new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount, this.forestFocus);
+        this.streamedForestResources ??= new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount, this.forestFocus, this.forestWindTime);
         const preparation = this.prepareWorldVegetation(context, record);
         const vegetationSignature = record.vegetationSignature!;
         const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
@@ -2143,6 +2145,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
         const forest = (await createForest(this.mapData, {
             foregroundFocus: this.forestFocus,
+            windTime: this.forestWindTime,
             resourceAccount: this.vegetationResourceAccount,
             size: this.options.size,
             surface: this.worldSurface!,

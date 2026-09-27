@@ -227,6 +227,7 @@ export class CombatLayer implements WorldRenderLayer {
         this.homestead.root.position.set(-playerX, 0, -playerZ);
         this.scenery!.root.visible = isChallenge(this.location);
         this.scenery!.root.position.set(-playerX, 0, -playerZ);
+        this.scenery!.update(timestampMs);
         if (this.location === "homestead") this.homestead.update(state.player.animationTime);
         this.root.position.set(playerX * this.host.tileSize, 0, playerZ * this.host.tileSize);
         this.player.position.set(0, this.height(playerX, playerZ), 0);

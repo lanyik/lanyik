@@ -9068,6 +9068,53 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     material.customProgramCacheKey = () => `${key}:foreground-dither-v1`;
   }
 
+  // src/rendering/ForestWind.ts
+  function installForestWind(material, time, height) {
+    if (!Number.isFinite(height) || height <= 0) throw new RangeError("Forest wind requires a positive model height");
+    const compile = material.onBeforeCompile, key = material.customProgramCacheKey();
+    material.onBeforeCompile = (shader, renderer) => {
+      compile.call(material, shader, renderer);
+      shader.uniforms.forestWindTime = time;
+      shader.uniforms.forestWindHeight = { value: height };
+      shader.vertexShader = shader.vertexShader.replace("#include <common>", `
+            #include <common>
+            uniform float forestWindTime;
+            uniform float forestWindHeight;
+            // Translation-free phase: stable across floating origins, wrapped copies and all LODs.
+            // All instances bend along the same parent-space direction despite their authored yaw.
+            vec4 forestBend(float y) {
+                vec2 direction = normalize(vec2(1.0, .4));
+                float phase = 0.0;
+                #ifdef USE_INSTANCING
+                    float scale = max(length(instanceMatrix[0].xz), .0001);
+                    vec2 yaw = instanceMatrix[0].xz / scale;
+                    direction = vec2(dot(instanceMatrix[0].xz, direction), dot(instanceMatrix[2].xz, direction)) / scale;
+                    phase = dot(yaw, vec2(3.1, 5.7)) + scale * 2.3;
+                #endif
+                float h = clamp(y / forestWindHeight, 0.0, 1.0);
+                float gust = .7 * sin(forestWindTime * .8 + phase) + .3 * sin(forestWindTime * 1.3 + phase * 1.7);
+                float flutterPhase = forestWindTime * 4.7 + phase + h * 11.0;
+                vec2 across = vec2(-direction.y, direction.x);
+                vec2 bend = direction * (.045 * gust) + across * (.004 * sin(flutterPhase));
+                vec2 slope = 2.0 * h * bend + across * (.044 * h * h * cos(flutterPhase));
+                if (y <= 0.0 || y >= forestWindHeight) slope = vec2(0.0);
+                return vec4(forestWindHeight * h * h * bend, slope);
+            }
+        `).replace("#include <beginnormal_vertex>", `
+            #include <beginnormal_vertex>
+            objectNormal.y -= dot(objectNormal.xz, forestBend(position.y).zw);
+            #ifdef USE_TANGENT
+                objectTangent.xz += objectTangent.y * forestBend(position.y).zw;
+            #endif
+        `).replace("#include <begin_vertex>", `
+            #include <begin_vertex>
+            transformed.xz += forestBend(transformed.y).xy;
+        `);
+    };
+    material.customProgramCacheKey = () => `${key}:forest-wind-v1`;
+    return height * 0.05;
+  }
+
   // src/objects/Forest.ts
   var HIDDEN_TREE_MATRIX = new Float32Array([
     0,
@@ -9180,8 +9227,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     return Array.isArray(source) ? source.map(prepare) : prepare(source);
   }
   var ForestSharedResources = class {
-    constructor(modelAssets, resourceAccount, focus) {
+    constructor(modelAssets, resourceAccount, focus, windTime) {
       this.focus = focus;
+      this.windTime = windTime;
       this.models = /* @__PURE__ */ new Map();
       this.geometries = /* @__PURE__ */ new Set();
       this.materials = /* @__PURE__ */ new Set();
@@ -9241,6 +9289,26 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
               createdGeometries.add(geometry);
               return { geometry, material: baseMaterials[part] };
             }));
+            if (this.windTime) {
+              const bounds = new three.Box3();
+              for (const geometry of createdGeometries) {
+                geometry.computeBoundingBox();
+                bounds.union(geometry.boundingBox);
+              }
+              const height = bounds.max.y;
+              let padding = 0;
+              for (const material of createdMaterials) padding = Math.max(padding, installForestWind(material, this.windTime, height));
+              const depths = baseMaterials.map(() => {
+                const material = new three.MeshDepthMaterial();
+                installForestWind(material, this.windTime, height);
+                createdMaterials.add(material);
+                return material;
+              });
+              for (const parts of lods) parts.forEach((part, index) => {
+                part.depthMaterial = depths[index];
+                part.geometry.boundingBox.expandByVector(new three.Vector3(padding, 0, padding));
+              });
+            }
             if (this.disposed) {
               throw new Error("ForestSharedResources was disposed while loading a model");
             }
@@ -9363,6 +9431,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
           const part = parts[index];
           mesh.geometry = part.geometry;
           mesh.material = part.material;
+          mesh.customDepthMaterial = part.depthMaterial;
         });
         let cached = record.lodCache.get(lod);
         if (!cached) {
@@ -9398,6 +9467,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
           if (!source) return;
           copy.geometry = source.geometry;
           copy.material = source.material;
+          copy.customDepthMaterial = source.customDepthMaterial;
           copy.count = source.count;
           copy.instanceMatrix = source.instanceMatrix;
           copy.instanceColor = source.instanceColor;
@@ -9555,7 +9625,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     };
     const tileRanges = /* @__PURE__ */ new Map();
     const chunkRecords = /* @__PURE__ */ new Map();
-    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount, options.foregroundFocus);
+    const resources = sharedResources ?? new ForestSharedResources(options.modelAssets, options.resourceAccount, options.foregroundFocus, options.windTime);
     let modelIndex = 0;
     try {
       for (const [modelPath, tiles] of tilesByModel) {
@@ -9578,8 +9648,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
           const origin = getWorldChunkOrigin(chunkKey, size);
           root.position.set(origin.x, 0, origin.y);
           root.name = `forest-chunk-${chunkKey}-${modelIndex}`;
-          const instancedMeshes = preparedParts.map(({ geometry, material }, partIndex) => {
+          const instancedMeshes = preparedParts.map(({ geometry, material, depthMaterial }, partIndex) => {
             const instancedMesh = new three.InstancedMesh(geometry, material, 0);
+            instancedMesh.customDepthMaterial = depthMaterial;
+            if (depthMaterial && Array.isArray(material)) instancedMesh.onBeforeShadow = (_renderer, _object, _camera2, _shadowCamera, _geometry2, depth) => {
+              depth.needsUpdate = true;
+            };
             instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
             instancedMesh.count = 0;
             instancedMesh.frustumCulled = true;
@@ -18382,6 +18456,7 @@ float getShadow(sampler2DShadow shadowMap, vec2 shadowMapSize, float shadowInten
     constructor(options) {
       super();
       this.forestFocus = { value: new three.Vector4() };
+      this.forestWindTime = { value: 0 };
       this.cameraSurfaceAnchor = new three.Vector3(Infinity, Infinity, Infinity);
       this.cameraSurfaceRevision = -1;
       this.cameraSurfaceWorldRevision = -1;
@@ -18499,6 +18574,7 @@ float getShadow(sampler2DShadow shadowMap, vec2 shadowMapSize, float shadowInten
         }
         this.emit("beforeframe", { t, dtS });
         if (this.disposed) return;
+        this.forestWindTime.value = t / 1e3 % (20 * Math.PI);
         this.interactions.update(Math.min(dtS, 0.05));
         this.controls.update(dtS);
         this.wrapCameraToWorld();
@@ -19449,7 +19525,7 @@ float getShadow(sampler2DShadow shadowMap, vec2 shadowMapSize, float shadowInten
       const record = this.worldChunkLayers.get(context.key);
       if (!record || this.options.treesPerTile <= 0) return Promise.resolve();
       const forestBuildRevision = record.forestBuildRevision ?? (record.forestBuildRevision = 0);
-      this.streamedForestResources ?? (this.streamedForestResources = new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount, this.forestFocus));
+      this.streamedForestResources ?? (this.streamedForestResources = new ForestSharedResources(this.modelAssets, this.vegetationResourceAccount, this.forestFocus, this.forestWindTime));
       const preparation = this.prepareWorldVegetation(context, record);
       const vegetationSignature = record.vegetationSignature;
       const density = this.worldVegetationDensity(record.requestedVegetationScale ?? 1);
@@ -20162,6 +20238,7 @@ float getShadow(sampler2DShadow shadowMap, vec2 shadowMapSize, float shadowInten
       if (!this.mapData) return false;
       const forest = await createForest(this.mapData, {
         foregroundFocus: this.forestFocus,
+        windTime: this.forestWindTime,
         resourceAccount: this.vegetationResourceAccount,
         size: this.options.size,
         surface: this.worldSurface,
@@ -23335,6 +23412,7 @@ float getShadow(sampler2DShadow shadowMap, vec2 shadowMapSize, float shadowInten
   exports.getWorldSourceTile = getWorldSourceTile;
   exports.groupTilesByWorldChunk = groupTilesByWorldChunk;
   exports.installForestOcclusion = installForestOcclusion;
+  exports.installForestWind = installForestWind;
   exports.isMutableWorldSource = isMutableWorldSource;
   exports.isWorldOverviewSource = isWorldOverviewSource;
   exports.isWorldVegetationSource = isWorldVegetationSource;

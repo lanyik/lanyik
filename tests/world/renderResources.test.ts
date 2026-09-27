@@ -507,7 +507,7 @@ describe("streamed render resource sharing", () => {
                 offset: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1,
                 forestAlbedoScale: 1.5, forestLods: { middle: "test-tree/lod1", far: "test-tree/lod2" }
             } } }) } as unknown as ModelAssetCache;
-        const resources = new ForestSharedResources(assets);
+        const resources = new ForestSharedResources(assets, undefined, undefined, { value: 0 });
         const forest = (await createForest(map, { size: 10, treesPerTile: 2, surface }, points(0), resources))!;
         const root = forest.children[0] as Group, mesh = root.children[0] as Mesh;
         const material = mesh.material as MeshStandardMaterial;
@@ -520,9 +520,17 @@ describe("streamed render resource sharing", () => {
         expect(material.color.r).toBeCloseTo(.45);
         expect(source.color.r).toBeCloseTo(.3);
         const metadata = getWorldChunkMetadata(root)!;
-        for (const lod of [0, 1, 2] as const) { forest.activateChunk(metadata, lod, [root]); expect(mesh.material).toBe(material); }
+        const depth = mesh.customDepthMaterial!, depthDisposed = vi.fn();
+        expect(depth).toBeDefined(); depth.addEventListener("dispose", depthDisposed);
+        const copy = root.clone(true), copiedMesh = copy.children[0] as Mesh;
+        for (const lod of [0, 1, 2] as const) {
+            forest.activateChunk(metadata, lod, [root, copy]);
+            expect(mesh.material).toBe(material); expect(copiedMesh.customDepthMaterial).toBe(depth);
+            expect(mesh.geometry.boundingBox!.max.x).toBeCloseTo(.55); // Includes the full bounded deformation.
+        }
         const textureDisposed = vi.fn(); normalMap.addEventListener("dispose", textureDisposed);
         forest.dispose(); resources.dispose();
+        expect(depthDisposed).toHaveBeenCalledTimes(1);
         expect(release).toHaveBeenCalledTimes(3);
         expect(textureDisposed).not.toHaveBeenCalled(); // The model leases own source textures.
         source.dispose(); geometry.dispose(); normalMap.dispose(); roughnessMap.dispose();
