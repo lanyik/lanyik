@@ -16,6 +16,8 @@ export interface HexMapOptions {
     antialias?: boolean;
     terrainShaderQuality?: "full" | "fast";
     skyVisible?: boolean;
+    /** Fixed 2048 sun shadow map half-width in world units; 0 disables near shadows. */
+    shadowRadius?: number;
     /** Folder containing terrain assets and land-atlas.json. */
     texturesBaseUrl?: string;
     gridVisible?: boolean;
@@ -185,6 +187,7 @@ export const DEFAULT_HEX_MAP_OPTIONS: Readonly<Omit<ResolvedHexMapOptions,
     antialias: true,
     terrainShaderQuality: "full",
     skyVisible: true,
+    shadowRadius: 0,
     texturesBaseUrl: "textures/",
     gridVisible: false,
     gridColor: 0x42322b,
@@ -310,6 +313,9 @@ export function validateHexMapOptions(options: ResolvedHexMapOptions): void {
         throw new RangeError("terrainTextureAnisotropy must be a positive safe integer");
     }
     positive("renderDistance", options.renderDistance);
+    if (!Number.isFinite(options.shadowRadius) || options.shadowRadius < 0 || options.shadowRadius > options.renderDistance) {
+        throw new RangeError("shadowRadius must be finite, non-negative, and <= renderDistance");
+    }
     if (!Number.isFinite(options.horizonFogStart) || options.horizonFogStart < 0) {
         throw new RangeError("horizonFogStart must be a non-negative finite number");
     }

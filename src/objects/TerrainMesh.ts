@@ -11,6 +11,8 @@ import {
     Vector2,
     Vector4,
     Box3,
+    Sphere,
+    DoubleSide,
     Color,
     Group,
     Sprite,
@@ -21,6 +23,7 @@ import {
     Texture,
     Material
 } from "three";
+import type { Camera } from "three";
 
 import { loadTerrainArrayTexture, terrainAtlasCellIndices } from "../rendering/TerrainArrayTexture";
 import { createSunDirection } from "../rendering/SunLight";
@@ -299,6 +302,7 @@ export class TerrainMesh extends Group {
     public readonly ready: Promise<void>;
     private landChunks: Mesh[] = [];
     private landMaterial: RawShaderMaterial | undefined;
+    private landDepthMaterial: RawShaderMaterial | undefined;
     private waterChunks: Mesh[] = [];
     private waterMaterial: RawShaderMaterial | undefined;
     private readonly baseLodGeometries = new Map<string, BufferGeometry>();
@@ -622,6 +626,11 @@ export class TerrainMesh extends Group {
             const bounds = this.chunkHeightBounds(record.layer);
             metadata.bounds.minY = bounds.minY;
             metadata.bounds.maxY = bounds.maxY;
+            const local = metadata.bounds;
+            for (const geometry of record.lodGeometries.values()) {
+                geometry.boundingBox = new Box3(new Vector3(local.minX, local.minY, local.minZ), new Vector3(local.maxX, local.maxY, local.maxZ));
+                geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
+            }
         }
     }
 
@@ -634,6 +643,7 @@ export class TerrainMesh extends Group {
     private buildLandLayer(tiles: Point[]): void {
         this.landMaterial ??= new RawShaderMaterial({
             glslVersion: GLSL3,
+            shadowSide: DoubleSide,
             fog: true,
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },
@@ -669,6 +679,10 @@ export class TerrainMesh extends Group {
                 ? TERRAIN_FAST_FRAGMENT_SHADER
                 : TERRAIN_FRAGMENT_SHADER
         });
+        // Depth reuses the authoritative displacement and chunk-local pattern uniforms.
+        this.landDepthMaterial ??= new RawShaderMaterial({ glslVersion: GLSL3,
+            uniforms: this.landMaterial.uniforms, vertexShader: TERRAIN_VERTEX_SHADER,
+            fragmentShader: "precision highp float; out vec4 depthColor; void main() { depthColor = vec4(1.0); }" });
         if (tiles.length === 0) return;
 
         for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
@@ -678,11 +692,13 @@ export class TerrainMesh extends Group {
             //only when the scheduler activates this chunk.
             const geometry = new InstancedBufferGeometry();
             const mesh = new Mesh(geometry, this.landMaterial);
+            mesh.castShadow = mesh.receiveShadow = true;
+            mesh.customDepthMaterial = this.landDepthMaterial;
             const origin = getWorldChunkOrigin(chunkKey, this.options.size);
             mesh.position.set(origin.x, 0, origin.y);
             const coordinates = this.prepareChunkCoordinates(mesh, origin);
             mesh.name = `terrain-chunk-land-${chunkKey}`;
-            mesh.frustumCulled = false;
+            mesh.frustumCulled = true;
             tagWorldChunk(
                 mesh,
                 chunkKey,
@@ -716,7 +732,7 @@ export class TerrainMesh extends Group {
         // The callback is also used by physical toroidal copies: read the drawn
         // object's matrix for projection/camera placement, and its pattern metadata
         // separately so texture continuity never shifts a ground decal.
-        mesh.onBeforeRender = function (this: Mesh, _renderer, _scene, camera, _geometry, material) {
+        const apply = function (this: Mesh, camera: Camera, material: Material) {
             const shader = material as RawShaderMaterial;
             const patternOffset = shader.uniforms.worldOffset.value as Vector2;
             coordinates.apply(shader, origin.x + patternOffset.x, origin.y + patternOffset.y);
@@ -730,6 +746,10 @@ export class TerrainMesh extends Group {
                 camera.position.x - renderX, camera.position.y, camera.position.z - renderZ
             );
             shader.uniformsNeedUpdate = true;
+        };
+        mesh.onBeforeRender = function (_renderer, _scene, camera, _geometry, material) { apply.call(this, camera, material); };
+        mesh.onBeforeShadow = function (_renderer, _object, _camera, shadowCamera, _geometry, material) {
+            apply.call(this, shadowCamera, material);
         };
         return coordinates;
     }
@@ -1174,6 +1194,9 @@ export class TerrainMesh extends Group {
             this.lodBuilds += 1;
         }
         const previous = record.mesh.geometry;
+        const bounds = metadata.bounds;
+        geometry.boundingBox = new Box3(new Vector3(bounds.minX, bounds.minY, bounds.minZ), new Vector3(bounds.maxX, bounds.maxY, bounds.maxZ));
+        geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new Sphere());
         record.mesh.geometry = geometry;
         if (record.lod === undefined && !previous.getAttribute("position")) previous.dispose();
         record.lod = lod;
@@ -1602,6 +1625,7 @@ export class TerrainMesh extends Group {
         for (const geometry of this.baseLodGeometries.values()) geometry.dispose();
         this.baseLodGeometries.clear();
         this.landMaterial?.dispose();
+        this.landDepthMaterial?.dispose();
         this.waterMaterial?.dispose();
         this.atlasTexture?.dispose(); // shared by both materials - dispose once
         this.surfaceTexture?.dispose();

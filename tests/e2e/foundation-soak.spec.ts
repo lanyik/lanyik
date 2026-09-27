@@ -17,7 +17,7 @@ test("long-running world replacement keeps lifecycle, work and WebGL resources b
     page.on("console", message => {
         if (message.type() === "error") runtimeErrors.push(message.text());
     });
-    await page.goto("/?infinite&x=0&y=0&quality=fast", { waitUntil: "domcontentloaded" });
+    await page.goto("/?infinite&x=0&y=0&quality=fast&shadows", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => {
         const api = window as unknown as { getWorldDiagnostics?: () => { status: string; generating: boolean } };
         const state = api.getWorldDiagnostics?.();

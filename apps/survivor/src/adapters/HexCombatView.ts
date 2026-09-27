@@ -104,6 +104,7 @@ export class HexCombatView implements CombatView {
             horizonFogStart: GAME_CONFIG.presentation.horizonFogStart,
             horizonFogEnd: GAME_CONFIG.presentation.horizonFogEnd,
             horizonFogColor: GAME_CONFIG.presentation.horizonFogColor,
+            shadowRadius: GAME_CONFIG.presentation.shadowRadius,
             lodNearDistance: 420,
             lodFarDistance: 1000,
             vegetationRenderDistance: WORLD_VIEW.vegetationEnd * WORLD_VIEW.unitScale

@@ -6,6 +6,7 @@ import {
     InstancedBufferAttribute,
     Mesh,
     RawShaderMaterial,
+    GLSL3,
     Color,
     ColorRepresentation,
     DoubleSide,
@@ -111,6 +112,7 @@ export class GrassSharedResources {
         this.retained.retain("blade", collectGeometryAllocations([this.blade]));
         const bladeHeight = options.bladeHeight ?? options.size * 0.18;
         this.material = new RawShaderMaterial({
+            glslVersion: GLSL3,
             fog: true,
             uniforms: {
                 worldOffset: { value: new Vector2(0, 0) },

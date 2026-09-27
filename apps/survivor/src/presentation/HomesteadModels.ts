@@ -13,6 +13,7 @@ export class HomesteadModels {
         this.root.add(this.sea.root);
         for (const building of HOMESTEAD.buildings) {
             const mesh = new Mesh(models[building.model], this.material);
+            mesh.castShadow = mesh.receiveShadow = true;
             mesh.name = `homestead-${building.model}`; mesh.position.set(building.x, .025, building.z);
             this.root.add(mesh);
         }

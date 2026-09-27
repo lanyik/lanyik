@@ -105,6 +105,8 @@ export const GAME_CONFIG = Object.freeze({
         horizonFogEnd: WORLD_VIEW.terrainFogEnd * WORLD_VIEW.unitScale,
         /** 远景雾基色，格式：0xRRGGBB；天空雾还会采样天空颜色。 */
         horizonFogColor: 0x849b9f,
+        /** 近景太阳阴影的半宽，单位：地图显示单位；固定 2048²。 */
+        shadowRadius: 420,
         /** 技能地面效果共用的俯视投影贴图。 */
         groundProjection: Object.freeze({
             /** 投影覆盖的正方形边长，单位：游戏单位；不是覆盖半径。 */

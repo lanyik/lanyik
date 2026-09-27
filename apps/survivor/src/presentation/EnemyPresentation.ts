@@ -6,6 +6,7 @@ import { GAME_CONFIG, MAX_ENEMIES, MAX_PROJECTILES } from "../core/GameConfig";
 import { ENEMY_SPECIAL } from "../core/EnemyDefinitions";
 import { strikeSegment } from "../core/EnemyStrikes";
 import { installActorFade } from "./ActorVisibility";
+import { MeshDepthMaterial } from "three";
 
 const FX = GAME_CONFIG.skills.maxEffects, UP = new Vector3(0, 1, 0);
 const STONE = new Color("#827567"), EDGE = new Color("#ada391"), FANG = new Color("#c1a999"), HOT = new Color("#e1c3a0");
@@ -82,6 +83,10 @@ export class EnemyPresentation {
             new MeshBasicMaterial({ transparent: true, opacity: .48, depthWrite: false, depthTest: false, side: DoubleSide }), MAX_ENEMIES * 8);
         const center = new Vector2();
         for (const mesh of [this.blades, this.rocks, this.threads]) installActorFade(mesh.material as MeshBasicMaterial, center);
+        for (const mesh of [this.blades, this.rocks]) {
+            mesh.castShadow = mesh.receiveShadow = true;
+            const depth = new MeshDepthMaterial(); installActorFade(depth, center); mesh.customDepthMaterial = depth;
+        }
         this.root.add(this.rocks, this.blades, this.threads);
     }
     private pool(geometry: InstancedMesh["geometry"], material: MeshBasicMaterial | MeshStandardMaterial, capacity: number): InstancedMesh {
@@ -227,6 +232,7 @@ export class EnemyPresentation {
     }
     public reset(): void { this.warnings.count = this.rocks.count = this.blades.count = this.threads.count = 0; }
     public dispose(): void {
+        this.blades.customDepthMaterial?.dispose(); this.rocks.customDepthMaterial?.dispose();
         for (const mesh of [this.warnings, this.rocks, this.blades, this.threads]) { mesh.dispose(); mesh.geometry.dispose(); (mesh.material as MeshBasicMaterial).dispose(); }
     }
 }

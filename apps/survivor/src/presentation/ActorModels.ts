@@ -2,6 +2,7 @@ import { DynamicDrawUsage, Group, InstancedMesh, Mesh, MeshStandardMaterial, Ski
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { InstancedBufferAttribute, type Vector2, type Vector3 } from "three";
 import { installActorFade } from "./ActorVisibility";
+import { MeshDepthMaterial } from "three";
 import { ActorAction } from "../core/CombatWorld";
 import { ACTOR_POSES, ActorPoseMixer } from "./ActorPose";
 import { HeroAnimation } from "./HeroAnimation";
@@ -85,6 +86,7 @@ export class ActorModels {
                     mesh.material.emissiveMap = atlases[kind][3];
                     mesh.material.needsUpdate = true;
                     if (kind === 0) {
+                        mesh.castShadow = mesh.receiveShadow = true;
                         if (!(mesh instanceof SkinnedMesh) || !heroSource) throw new Error("Ranger: missing skeletal rig");
                         actors.hero.add(heroSource.scene);
                         actors.heroAnimation = new HeroAnimation(actors.hero, mesh, heroSource.animations);
@@ -93,6 +95,10 @@ export class ActorModels {
                         installActorFade(mesh.material, viewCenter, true);
                         mesh.geometry.setAttribute("actorHome", new InstancedBufferAttribute(new Float32Array(capacity * 2), 2).setUsage(DynamicDrawUsage));
                         const instance = new InstancedMesh(mesh.geometry, mesh.material, capacity);
+                        instance.castShadow = instance.receiveShadow = true;
+                        const depth = new MeshDepthMaterial();
+                        installActorFade(depth, viewCenter, true);
+                        actors.materials.add(depth); instance.customDepthMaterial = depth;
                         instance.userData.cycle = cycle;
                         instance.userData.idleCycle = idleCycle;
                         if (kind === 3) {

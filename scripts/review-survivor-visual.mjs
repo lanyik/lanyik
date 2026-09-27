@@ -76,9 +76,12 @@ try {
                     clearTimeout(timeout);
                     map.off("afterframe", sample);
                     const renderer = map.renderer, gl = renderer.getContext(), extension = gl.getExtension("WEBGL_debug_renderer_info");
+                    const sun = map.rendererHost.scene.children.find(object => object.isDirectionalLight);
                     resolve({ frames, input, wallMs: performance.now() - started, tick: session.getSnapshot().combat.tick,
                         gameOver: session.getSnapshot().combat.gameOver, gpuTiming: map.gpuTimingStats,
                         resources: map.resourceBudget.stats, rendererMemory: { ...renderer.info.memory },
+                        shadows: { radius: map.options.shadowRadius, enabled: renderer.shadowMap.enabled,
+                            mapSize: sun.shadow.mapSize.toArray(), allocated: !!sun.shadow.map },
                         drawingBuffer: [gl.drawingBufferWidth, gl.drawingBufferHeight],
                         renderer: extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
                         camera: { position: map.getCamera().position.toArray(), target: map.controls.target.toArray(), fov: map.getCamera().fov }
@@ -86,6 +89,7 @@ try {
                 }; map.on("afterframe", sample);
             }), VISUAL_SAMPLE.sampleMs);
             assert.deepEqual(raw.drawingBuffer, [2560, 1440], "Review requires a native 1440p drawing buffer");
+            assert.deepEqual(raw.shadows, { radius: 420, enabled: true, mapSize: [2048, 2048], allocated: true }, "Review requires the production near-shadow profile");
             const stats = key => { const values = raw.frames.map(frame => frame[key]).filter(value => value !== undefined); return values.length ? summarizeLatencies(values, 1000 / 60) : null; };
             samples.push({ id, ...raw, summary: { interval: stats("intervalMs"), cpu: stats("cpuMs"), gpu: stats("gpuMs") } });
             await page.screenshot({ path: join(output, `${id}.png`) });
@@ -106,7 +110,7 @@ try {
             servedScripts: scripts.sort((a, b) => a.path.localeCompare(b.path)),
             host: { os: `${platform()} ${release()}`, cpu: cpus()[0]?.model, browser: browser.version() },
             url, fixture: VISUAL_SAMPLE, warnings,
-            scope: "Three paused material checkpoints and one live movement/combat sample; production Worker and gameplay. Resource bytes are ledger estimates, not driver VRAM. GPU samples are asynchronous and absent when unsupported. Video is 720p; screenshots and rendering are native 1440p. This is B1 lighting evidence, not final art or a 60 FPS certification.", samples };
+            scope: "Three paused material checkpoints and one live movement/combat sample; production Worker and gameplay. Resource bytes are ledger estimates, not driver VRAM. GPU samples are asynchronous and absent when unsupported. Video is 720p; screenshots and rendering are native 1440p. This is lighting/shadow evidence, not final art or a 60 FPS certification.", samples };
         await writeFile(join(output, "report.json"), JSON.stringify(report, null, 2));
         console.log(JSON.stringify({ output, samples: samples.map(({ id, summary }) => ({ id,
             cpuP95Ms: summary.cpu?.p95Ms, gpuP95Ms: summary.gpu?.p95Ms, frameP99Ms: summary.interval?.p99Ms })) }, null, 2));

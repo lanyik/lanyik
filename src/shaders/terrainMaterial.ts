@@ -41,7 +41,7 @@ vec3 lightTerrainSurface(vec3 albedo, vec4 surface) {
     float specular = distribution * geometry * fresnel / max(.001, 4.0 * nl * nv);
     vec3 reflection = normalize(mix(reflect(-v, n), n, pow(roughness, 4.0)));
     float environmentFresnel = .04 + .96 * pow(1.0 - nv, 5.0);
-    return worldDiffuse(albedo * .96, n, surface.w) + worldSunColor * specular * nl
+    return worldDiffuse(albedo * .96, n, surface.w) + worldSunColor * specular * nl * worldDirectVisibility
         + worldSky(reflection, roughness) * environmentFresnel * surface.w;
 }
 #endif

@@ -84,6 +84,7 @@ const map = new HexMap({
     size: 48,
     texturesBaseUrl: "textures/",
     gridVisible: false,
+    shadowRadius: query.has("shadows") ? 420 : 0,
     gridColor: 0x42322b,
     gridWidth: 0.04,
     gridOpacity: 0.35,

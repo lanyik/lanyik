@@ -33,6 +33,9 @@ describe("HexMap option boundary", () => {
 
     test("rejects ambiguous selectors and unsafe resource budgets before WebGL allocation", () => {
         expect(() => resolveHexMapOptions({ element: "" })).toThrow(/non-empty CSS selector/);
+        for (const shadowRadius of [-1, NaN, Infinity, 3000]) {
+            expect(() => resolveHexMapOptions({ element: "#map", shadowRadius })).toThrow(/shadowRadius/);
+        }
         expect(() => resolveHexMapOptions({
             element: "#map",
             gpuChunkCacheBytes: Number.MAX_SAFE_INTEGER + 1

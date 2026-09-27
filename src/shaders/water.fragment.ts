@@ -235,7 +235,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     // sun glitter: sharp specular highlight off the wave-perturbed normal
     vec3 halfDir = normalize(light + viewDir);
     float spec = pow(max(dot(normal, halfDir), 0.0), 60.0);
-    color += spec * worldSunColor * sparkleIntensity;
+    color += spec * worldSunColor * sparkleIntensity * worldDirectVisibility;
 
     // The same prefiltered sky as model materials; no planar reflection pass.
     float fresnel = pow(1.0 - clamp(dot(normal, viewDir), 0.0, 1.0), 3.0);

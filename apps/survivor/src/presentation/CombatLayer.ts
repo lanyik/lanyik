@@ -116,7 +116,6 @@ export class CombatLayer implements WorldRenderLayer {
         projectile: new SphereGeometry(0.09, 8, 6),
         experience: new OctahedronGeometry(0.11, 0),
         shield: new RingGeometry(0.42, 0.49, 32),
-        shadow: new CircleGeometry(0.34, 24),
         telegraph: new CircleGeometry(1, 32, -Math.PI / 2 - MELEE_HALF_ARC, MELEE_HALF_ARC * 2),
         charge: new PlaneGeometry(1, 1)
     } as const;
@@ -124,7 +123,6 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly warningMaterial = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .28, depthWrite: false, depthTest: false, side: DoubleSide });
     private readonly experienceMaterial = new MeshBasicMaterial({ color: 0x66f5ff });
     private readonly auraMaterial = new MeshBasicMaterial({ color: 0x70ecff, transparent: true, opacity: 0.48, side: DoubleSide, depthWrite: false });
-    private readonly shadowMaterial = new MeshBasicMaterial({ color: 0x06090b, transparent: true, opacity: 0.3, side: DoubleSide, depthWrite: false });
     private readonly dummy = new Object3D();
     private readonly color = new Color();
     private readonly viewCenter = new Vector2();
@@ -410,8 +408,7 @@ export class CombatLayer implements WorldRenderLayer {
             this.projectileMaterial,
             this.warningMaterial,
             this.experienceMaterial,
-            this.auraMaterial,
-            this.shadowMaterial
+            this.auraMaterial
         ]) material.dispose();
         this.resources.dispose();
     }
@@ -428,10 +425,7 @@ export class CombatLayer implements WorldRenderLayer {
         aura.position.y = 0;
         aura.rotation.x = -Math.PI / 2;
         this.shield.add(aura);
-        const shadow = new Mesh(this.geometries.shadow, this.shadowMaterial);
-        shadow.position.y = 0;
-        shadow.rotation.x = -Math.PI / 2;
-        this.groundPlayer.add(shadow, this.shield);
+        this.groundPlayer.add(this.shield);
         this.player.add(this.playerBody);
     }
 

@@ -1,13 +1,14 @@
 import { Color, Material, Object3D, RawShaderMaterial, type PerspectiveCamera, type Texture, type WebGLRenderTarget } from "three";
 import { createSunDirection, SUN_COLOR, SUN_INTENSITY } from "./SunLight";
 import type { SkyFog } from "./SkyFog";
+import type { NearShadows } from "./NearShadows";
 
 /** Binds raw terrain/water/grass to the scene lighting, without per-object material clones. */
 export class WorldLighting {
     private readonly uniforms;
     private readonly materials = new Map<Material, () => void>();
     private readonly defines: Record<string, string>;
-    constructor(environment: WebGLRenderTarget, camera: PerspectiveCamera, private readonly fog?: SkyFog) {
+    constructor(environment: WebGLRenderTarget, camera: PerspectiveCamera, private readonly fog?: SkyFog, private readonly shadows?: NearShadows) {
         this.uniforms = { worldEnvironment: { value: environment.texture }, worldLightingCamera: { value: camera.matrixWorld },
             worldSunColor: { value: new Color(SUN_COLOR).multiplyScalar(SUN_INTENSITY) }, worldSunDirection: { value: createSunDirection() } };
         this.defines = { CUBEUV_TEXEL_WIDTH: String(1 / environment.width), CUBEUV_TEXEL_HEIGHT: String(1 / environment.height),
@@ -27,7 +28,8 @@ export class WorldLighting {
         if (this.materials.has(material)) return;
         const lit = material instanceof RawShaderMaterial && material.fragmentShader.includes("uniform sampler2D worldEnvironment;");
         const fog = this.fog?.accepts(material) ? this.fog : undefined;
-        if (!lit && !fog) return;
+        const shadows = lit || this.shadows?.accepts(material) ? this.shadows : undefined;
+        if (!lit && !fog && !shadows) return;
         const compile = material.onBeforeCompile, key = material.customProgramCacheKey, originalKey = key.call(material);
         const originalDefines = material instanceof RawShaderMaterial ? material.defines : undefined;
         if (lit) material.defines = { ...originalDefines, ...this.defines };
@@ -35,8 +37,9 @@ export class WorldLighting {
             compile.call(material, shader, renderer);
             if (lit) Object.assign(shader.uniforms, this.uniforms);
             fog?.apply(shader, material);
+            shadows?.apply(shader, material);
         };
-        material.customProgramCacheKey = () => `${originalKey}:world-lighting-v1:${lit}:${!!fog}`;
+        material.customProgramCacheKey = () => `${originalKey}:world-lighting-v2:${lit}:${!!fog}:${!!shadows}`;
         material.needsUpdate = true;
         const release = () => {
             material.removeEventListener("dispose", release); this.materials.delete(material);

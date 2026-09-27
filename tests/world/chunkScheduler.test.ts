@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { BufferAttribute, BufferGeometry, Object3D, PerspectiveCamera, Vector3 } from "three";
+import { BufferAttribute, BufferGeometry, Frustum, Matrix4, Object3D, OrthographicCamera, PerspectiveCamera, Vector3 } from "three";
 
 import { tagWorldChunk } from "../../src/helpers/chunks";
 import {
@@ -10,6 +10,27 @@ import { FrameTaskScheduler } from "../../src/rendering/FrameTaskScheduler";
 import { WorkQueueBackpressureError } from "../../src/runtime/PriorityTaskQueue";
 
 describe("WorldChunkScheduler", () => {
+    test("retains offscreen sun casters without activating offscreen water or grass", () => {
+        const root = new Object3D(), camera = new PerspectiveCamera(30, 1, 1, 1000);
+        camera.position.set(0, 30, 50); camera.lookAt(0, 0, 0);
+        const sun = new OrthographicCamera(-250, 250, 250, -250, 1, 1000);
+        sun.position.set(0, 300, 0); sun.lookAt(0, 0, 0); sun.updateMatrixWorld();
+        const frustum = new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(sun.projectionMatrix, sun.matrixWorldInverse));
+        for (const kind of ["land", "forest", "water", "grass"] as const) {
+            const chunk = new Object3D(); chunk.name = kind;
+            tagWorldChunk(chunk, "0,0", kind, { minX: 190, maxX: 210, minY: 0, maxY: 20, minZ: -10, maxZ: 10 }); root.add(chunk);
+        }
+        const scheduler = new WorldChunkScheduler({ renderDistance: 500, lodEnabled: false,
+            lodDistances: { near: 250, far: 400, vegetation: 500, hysteresis: 10 },
+            gpuCacheSize: 0, cpuCacheSize: 0, gpuGraceFrames: 0, cpuGraceFrames: 0 });
+        const hooks = { enabled: () => true, activate: vi.fn(), release: vi.fn() };
+        scheduler.update(root, camera, new Vector3(), hooks, frustum);
+        expect(root.children.filter(object => object.visible).map(object => object.name)).toEqual(["land", "forest"]);
+        expect(scheduler.stats.visibleChunks).toBe(2);
+        scheduler.invalidateScene(); scheduler.update(root, camera, new Vector3(), hooks);
+        expect(root.children.every(object => !object.visible)).toBe(true);
+        expect(hooks.release).toHaveBeenCalledTimes(2); scheduler.dispose();
+    });
     test("expires GPU and CPU retention while the camera stays still", () => {
         const root = new Object3D();
         const chunk = new Object3D();

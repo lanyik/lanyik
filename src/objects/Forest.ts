@@ -1,5 +1,7 @@
 import {
     Box3,
+    Sphere,
+    Vector3,
     InstancedMesh,
     InstancedBufferAttribute,
     Group,
@@ -221,6 +223,11 @@ function createForestMaterial(source: Material, albedoScale: number): MeshStanda
                 #include <lights_fragment_end>
                 #if NUM_DIR_LIGHTS > 0
                     float transmitted = pow(max(dot(-normal, directionalLights[0].direction), 0.0), 2.0);
+                    #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
+                        transmitted *= getShadow(directionalShadowMap[0], directionalLightShadows[0].shadowMapSize,
+                            directionalLightShadows[0].shadowIntensity, directionalLightShadows[0].shadowBias,
+                            directionalLightShadows[0].shadowRadius, vDirectionalShadowCoord[0]);
+                    #endif
                     reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[0].color * transmitted * 0.22;
                 #endif
             `);
@@ -729,7 +736,8 @@ export async function createForest(
                     const instancedMesh = new InstancedMesh(geometry, material, 0);
                     instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
                     instancedMesh.count = 0;
-                    instancedMesh.frustumCulled = false;
+                    instancedMesh.frustumCulled = true;
+                    instancedMesh.castShadow = instancedMesh.receiveShadow = true;
                     root.add(instancedMesh);
                     return instancedMesh;
                 });
@@ -741,6 +749,10 @@ export async function createForest(
                 bounds.maxX += canopyRadius;
                 bounds.minZ -= canopyRadius;
                 bounds.maxZ += canopyRadius;
+                const localBounds = localizeWorldChunkBounds(bounds, origin);
+                const sphere = new Box3(new Vector3(localBounds.minX, localBounds.minY, localBounds.minZ),
+                    new Vector3(localBounds.maxX, localBounds.maxY, localBounds.maxZ)).getBoundingSphere(new Sphere());
+                for (const mesh of instancedMeshes) mesh.boundingSphere = sphere;
                 tagWorldChunk(
                     root,
                     chunkKey,

@@ -4,6 +4,7 @@ uniform sampler2D worldEnvironment;
 uniform mat4 worldLightingCamera;
 uniform vec3 worldSunColor;
 uniform vec3 worldSunDirection;
+float worldDirectVisibility = 1.0;
 #if __VERSION__ >= 300
 #define texture2D texture
 #endif
@@ -16,6 +17,6 @@ vec3 worldSky(vec3 viewDirection, float roughness) {
 vec3 worldDiffuse(vec3 albedo, vec3 viewNormal, float occlusion) {
     vec3 worldNormal = normalize(mat3(worldLightingCamera) * viewNormal);
     float nl = max(dot(worldNormal, worldSunDirection), 0.0);
-    return albedo * (worldSky(viewNormal, 1.0) * occlusion + worldSunColor * (nl / 3.141592653589793));
+    return albedo * (worldSky(viewNormal, 1.0) * occlusion + worldSunColor * (worldDirectVisibility * nl / 3.141592653589793));
 }
 `;

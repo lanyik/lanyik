@@ -2,6 +2,8 @@ import { HORIZON_FOG_VERTEX_VARYING } from "./horizonFog";
 
 export const GRASS_VERTEX_SHADER = `
 precision highp float;
+#define attribute in
+#define varying out
 
 ${HORIZON_FOG_VERTEX_VARYING}
 
@@ -31,7 +33,7 @@ attribute float groundHeight; // authoritative CPU surface height at the blade r
 varying float vHeightFactor;
 varying float vShade;
 varying float vFogState;
-varying vec3 vBladeNormal;
+varying vec3 vNormal;
 
 
 void main() {
@@ -59,6 +61,6 @@ void main() {
     vHeightFactor = heightFactor;
     vShade = shade;
     vFogState = fogState;
-    vBladeNormal = normalize(normalMatrix * vec3(-s, .35, c));
+    vNormal = normalize(normalMatrix * vec3(-s, .35, c));
 }
 `;

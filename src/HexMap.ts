@@ -313,6 +313,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
                 canvas: this.canvas,
                 antialias: this.options.antialias,
                 skyVisible: this.options.skyVisible,
+                shadowRadius: this.options.shadowRadius,
                 horizonFogColor: this.options.horizonFogColor,
                 horizonFogStart: this.options.horizonFogStart,
                 horizonFogEnd: this.options.horizonFogEnd,
@@ -683,6 +684,8 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             const original = sourceObjects[index];
             if (!original) return;
             object.onBeforeRender = original.onBeforeRender;
+            object.onBeforeShadow = original.onBeforeShadow;
+            if (original.customDepthMaterial) object.customDepthMaterial = this.materialForWorldCopy(original.customDepthMaterial, offsetX, offsetY);
             object.onAfterRender = original.onAfterRender;
             if ((original as InstancedMesh).isInstancedMesh && (object as InstancedMesh).isInstancedMesh) {
                 const sourceInstance = original as InstancedMesh;
@@ -892,6 +895,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
         this.updateWorldDemand(Math.min(dtS, 0.1));
         this.frameTasks.runFrame();
         this.worldChunkMountQueue.retryOne();
+        this.rendererHost.prepareShadows(this.controls.target, this.renderOrigin);
         this.updateWorldChunkVisibility();
         this.terrain?.update(dtS);
         const primaryGrassResources = this.grass?.resources;
@@ -940,7 +944,7 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
 
     private updateWorldChunkVisibility(): void {
         if (!this.mapData) return;
-        this.chunkScheduler.update(this.scene, this.camera, this.controls.target, this.chunkSchedulerHooks);
+        this.chunkScheduler.update(this.scene, this.camera, this.controls.target, this.chunkSchedulerHooks, this.rendererHost.shadowFrustum);
     }
 
     private activateWorldChunk(metadata: WorldChunkMetadata, lod: 0 | 1 | 2, objects: Object3D[]) {

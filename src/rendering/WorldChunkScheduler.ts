@@ -246,7 +246,7 @@ export class WorldChunkScheduler {
         return this.resources.createAccount(label);
     }
 
-    public update(root: Object3D, camera: Camera, target: Vector3, hooks: WorldChunkSchedulerHooks): boolean {
+    public update(root: Object3D, camera: Camera, target: Vector3, hooks: WorldChunkSchedulerHooks, shadowFrustum?: Frustum): boolean {
         this.frame += 1;
         camera.updateMatrixWorld();
         camera.getWorldPosition(this.cameraPosition);
@@ -315,7 +315,9 @@ export class WorldChunkScheduler {
                     : Math.min(2, resolvedLod + bias) as WorldChunkLod;
                 const inRenderDistance = distance <= this.options.renderDistance && lod !== null;
                 if (inRenderDistance) this.bounds.expandByScalar(this.visibilityCullingPadding());
-                const visible = inRenderDistance && this.frustum.intersectsBox(this.bounds);
+                const caster = metadata.kind === "land" || metadata.kind === "forest";
+                const visible = inRenderDistance && (this.frustum.intersectsBox(this.bounds)
+                    || (caster && !!shadowFrustum?.intersectsBox(this.bounds)));
                 object.visible = visible;
                 if (!visible || lod === null) continue;
                 visibleObjects += 1;

@@ -6,7 +6,7 @@ test("recovers repeatedly from real WebGL context loss with bounded resources", 
     page.on("console", message => {
         if (message.type() === "error" || message.type() === "warning" && /INVALID_|OUT_OF_MEMORY|Shader Error/.test(message.text())) pageErrors.push(message.text());
     });
-    await page.goto("/?infinite&quality=fast", { waitUntil: "domcontentloaded" });
+    await page.goto("/?infinite&quality=fast&shadows", { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => {
         const api = window as unknown as {
             getWorldDiagnostics?: () => {

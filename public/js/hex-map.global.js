@@ -5855,6 +5855,7 @@ uniform sampler2D worldEnvironment;
 uniform mat4 worldLightingCamera;
 uniform vec3 worldSunColor;
 uniform vec3 worldSunDirection;
+float worldDirectVisibility = 1.0;
 #if __VERSION__ >= 300
 #define texture2D texture
 #endif
@@ -5867,7 +5868,7 @@ vec3 worldSky(vec3 viewDirection, float roughness) {
 vec3 worldDiffuse(vec3 albedo, vec3 viewNormal, float occlusion) {
     vec3 worldNormal = normalize(mat3(worldLightingCamera) * viewNormal);
     float nl = max(dot(worldNormal, worldSunDirection), 0.0);
-    return albedo * (worldSky(viewNormal, 1.0) * occlusion + worldSunColor * (nl / 3.141592653589793));
+    return albedo * (worldSky(viewNormal, 1.0) * occlusion + worldSunColor * (worldDirectVisibility * nl / 3.141592653589793));
 }
 `;
 
@@ -5912,7 +5913,7 @@ vec3 lightTerrainSurface(vec3 albedo, vec4 surface) {
     float specular = distribution * geometry * fresnel / max(.001, 4.0 * nl * nv);
     vec3 reflection = normalize(mix(reflect(-v, n), n, pow(roughness, 4.0)));
     float environmentFresnel = .04 + .96 * pow(1.0 - nv, 5.0);
-    return worldDiffuse(albedo * .96, n, surface.w) + worldSunColor * specular * nl
+    return worldDiffuse(albedo * .96, n, surface.w) + worldSunColor * specular * nl * worldDirectVisibility
         + worldSky(reflection, roughness) * environmentFresnel * surface.w;
 }
 #endif
@@ -7216,7 +7217,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     // sun glitter: sharp specular highlight off the wave-perturbed normal
     vec3 halfDir = normalize(light + viewDir);
     float spec = pow(max(dot(normal, halfDir), 0.0), 60.0);
-    color += spec * worldSunColor * sparkleIntensity;
+    color += spec * worldSunColor * sparkleIntensity * worldDirectVisibility;
 
     // The same prefiltered sky as model materials; no planar reflection pass.
     float fresnel = pow(1.0 - clamp(dot(normal, viewDir), 0.0, 1.0), 3.0);
@@ -7570,6 +7571,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         const bounds = this.chunkHeightBounds(record.layer);
         metadata.bounds.minY = bounds.minY;
         metadata.bounds.maxY = bounds.maxY;
+        const local = metadata.bounds;
+        for (const geometry of record.lodGeometries.values()) {
+          geometry.boundingBox = new three.Box3(new three.Vector3(local.minX, local.minY, local.minZ), new three.Vector3(local.maxX, local.maxY, local.maxZ));
+          geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new three.Sphere());
+        }
       }
     }
     //Subdivided (not a single flat triangle per wedge) so the beach slope and
@@ -7581,6 +7587,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     buildLandLayer(tiles) {
       this.landMaterial ?? (this.landMaterial = new three.RawShaderMaterial({
         glslVersion: three.GLSL3,
+        shadowSide: three.DoubleSide,
         fog: true,
         uniforms: {
           worldOffset: { value: new three.Vector2(0, 0) },
@@ -7614,16 +7621,24 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         defines: this.surfaceTexture ? { TERRAIN_SURFACE_MAP: 1 } : {},
         fragmentShader: this.options.shaderQuality === "fast" ? TERRAIN_FAST_FRAGMENT_SHADER : TERRAIN_FRAGMENT_SHADER
       }));
+      this.landDepthMaterial ?? (this.landDepthMaterial = new three.RawShaderMaterial({
+        glslVersion: three.GLSL3,
+        uniforms: this.landMaterial.uniforms,
+        vertexShader: TERRAIN_VERTEX_SHADER,
+        fragmentShader: "precision highp float; out vec4 depthColor; void main() { depthColor = vec4(1.0); }"
+      }));
       if (tiles.length === 0) return;
       for (const [chunkKey, chunkTiles] of groupTilesByWorldChunk(tiles)) {
         if (this.chunkRecords.has(`land:${chunkKey}`)) continue;
         const geometry = new three.InstancedBufferGeometry();
         const mesh = new three.Mesh(geometry, this.landMaterial);
+        mesh.castShadow = mesh.receiveShadow = true;
+        mesh.customDepthMaterial = this.landDepthMaterial;
         const origin = getWorldChunkOrigin(chunkKey, this.options.size);
         mesh.position.set(origin.x, 0, origin.y);
         const coordinates = this.prepareChunkCoordinates(mesh, origin);
         mesh.name = `terrain-chunk-land-${chunkKey}`;
-        mesh.frustumCulled = false;
+        mesh.frustumCulled = true;
         tagWorldChunk(
           mesh,
           chunkKey,
@@ -7653,7 +7668,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     prepareChunkCoordinates(mesh, origin) {
       const coordinates = new WorldMaterialCoordinates(this.options.size, this.options.resourceAccount);
       const owner = this;
-      mesh.onBeforeRender = function(_renderer, _scene, camera, _geometry2, material) {
+      const apply = function(camera, material) {
         const shader = material;
         const patternOffset = shader.uniforms.worldOffset.value;
         coordinates.apply(shader, origin.x + patternOffset.x, origin.y + patternOffset.y);
@@ -7669,6 +7684,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
           camera.position.z - renderZ
         );
         shader.uniformsNeedUpdate = true;
+      };
+      mesh.onBeforeRender = function(_renderer, _scene, camera, _geometry2, material) {
+        apply.call(this, camera, material);
+      };
+      mesh.onBeforeShadow = function(_renderer, _object, _camera2, shadowCamera, _geometry2, material) {
+        apply.call(this, shadowCamera, material);
       };
       return coordinates;
     }
@@ -8070,6 +8091,9 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
         this.lodBuilds += 1;
       }
       const previous = record.mesh.geometry;
+      const bounds = metadata.bounds;
+      geometry.boundingBox = new three.Box3(new three.Vector3(bounds.minX, bounds.minY, bounds.minZ), new three.Vector3(bounds.maxX, bounds.maxY, bounds.maxZ));
+      geometry.boundingSphere = geometry.boundingBox.getBoundingSphere(new three.Sphere());
       record.mesh.geometry = geometry;
       if (record.lod === void 0 && !previous.getAttribute("position")) previous.dispose();
       record.lod = lod;
@@ -8440,6 +8464,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
       for (const geometry of this.baseLodGeometries.values()) geometry.dispose();
       this.baseLodGeometries.clear();
       this.landMaterial?.dispose();
+      this.landDepthMaterial?.dispose();
       this.waterMaterial?.dispose();
       this.atlasTexture?.dispose();
       this.surfaceTexture?.dispose();
@@ -9130,6 +9155,11 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
                 #include <lights_fragment_end>
                 #if NUM_DIR_LIGHTS > 0
                     float transmitted = pow(max(dot(-normal, directionalLights[0].direction), 0.0), 2.0);
+                    #if defined(USE_SHADOWMAP) && NUM_DIR_LIGHT_SHADOWS > 0
+                        transmitted *= getShadow(directionalShadowMap[0], directionalLightShadows[0].shadowMapSize,
+                            directionalLightShadows[0].shadowIntensity, directionalLightShadows[0].shadowBias,
+                            directionalLightShadows[0].shadowRadius, vDirectionalShadowCoord[0]);
+                    #endif
                     reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[0].color * transmitted * 0.22;
                 #endif
             `);
@@ -9553,7 +9583,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
             const instancedMesh = new three.InstancedMesh(geometry, material, 0);
             instancedMesh.name = `forest-${chunkKey}-${partIndex}`;
             instancedMesh.count = 0;
-            instancedMesh.frustumCulled = false;
+            instancedMesh.frustumCulled = true;
+            instancedMesh.castShadow = instancedMesh.receiveShadow = true;
             root.add(instancedMesh);
             return instancedMesh;
           });
@@ -9568,6 +9599,12 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
           bounds.maxX += canopyRadius;
           bounds.minZ -= canopyRadius;
           bounds.maxZ += canopyRadius;
+          const localBounds = localizeWorldChunkBounds(bounds, origin);
+          const sphere = new three.Box3(
+            new three.Vector3(localBounds.minX, localBounds.minY, localBounds.minZ),
+            new three.Vector3(localBounds.maxX, localBounds.maxY, localBounds.maxZ)
+          ).getBoundingSphere(new three.Sphere());
+          for (const mesh of instancedMeshes) mesh.boundingSphere = sphere;
           tagWorldChunk(
             root,
             chunkKey,
@@ -9612,6 +9649,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
   // src/shaders/grass.vertex.ts
   var GRASS_VERTEX_SHADER = `
 precision highp float;
+#define attribute in
+#define varying out
 
 ${HORIZON_FOG_VERTEX_VARYING}
 
@@ -9641,7 +9680,7 @@ attribute float groundHeight; // authoritative CPU surface height at the blade r
 varying float vHeightFactor;
 varying float vShade;
 varying float vFogState;
-varying vec3 vBladeNormal;
+varying vec3 vNormal;
 
 
 void main() {
@@ -9669,13 +9708,16 @@ void main() {
     vHeightFactor = heightFactor;
     vShade = shade;
     vFogState = fogState;
-    vBladeNormal = normalize(normalMatrix * vec3(-s, .35, c));
+    vNormal = normalize(normalMatrix * vec3(-s, .35, c));
 }
 `;
 
   // src/shaders/grass.fragment.ts
   var GRASS_FRAGMENT_SHADER = `
 precision highp float;
+#define varying in
+out vec4 grassColor;
+#define gl_FragColor grassColor
 ${WORLD_LIGHTING_HEADER}
 
 ${HORIZON_FOG_FRAGMENT_HEADER}
@@ -9687,13 +9729,13 @@ uniform float fogDarkenFactor;
 varying float vHeightFactor;
 varying float vShade;
 varying float vFogState;
-varying vec3 vBladeNormal;
+varying vec3 vNormal;
 
 void main() {
     // Unseen: no feature should show at all under the war-fog tile.
     if (vFogState < 0.5) discard;
 
-    vec3 normal = normalize(vBladeNormal) * (gl_FrontFacing ? 1.0 : -1.0);
+    vec3 normal = normalize(vNormal) * (gl_FrontFacing ? 1.0 : -1.0);
     vec3 color = worldDiffuse(mix(colorBase, colorTip, vHeightFactor) * vShade, normal, 1.0);
 
     // Explored: keep the blade visible, just darker (mirrors terrain.fragment.ts).
@@ -9714,6 +9756,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       this.retained.retain("blade", collectGeometryAllocations([this.blade]));
       const bladeHeight = options.bladeHeight ?? options.size * 0.18;
       this.material = new three.RawShaderMaterial({
+        glslVersion: three.GLSL3,
         fog: true,
         uniforms: {
           worldOffset: { value: new three.Vector2(0, 0) },
@@ -10329,7 +10372,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
     createResourceAccount(label) {
       return this.resources.createAccount(label);
     }
-    update(root, camera, target, hooks) {
+    update(root, camera, target, hooks, shadowFrustum) {
       this.frame += 1;
       camera.updateMatrixWorld();
       camera.getWorldPosition(this.cameraPosition);
@@ -10382,7 +10425,8 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
           const lod = resolvedLod === null ? null : Math.min(2, resolvedLod + bias);
           const inRenderDistance = distance <= this.options.renderDistance && lod !== null;
           if (inRenderDistance) this.bounds.expandByScalar(this.visibilityCullingPadding());
-          const visible = inRenderDistance && this.frustum.intersectsBox(this.bounds);
+          const caster = metadata.kind === "land" || metadata.kind === "forest";
+          const visible = inRenderDistance && (this.frustum.intersectsBox(this.bounds) || caster && !!shadowFrustum?.intersectsBox(this.bounds));
           object.visible = visible;
           if (!visible || lod === null) continue;
           visibleObjects += 1;
@@ -16734,8 +16778,9 @@ ${HEADER}
     }
   };
   var WorldLighting = class {
-    constructor(environment, camera, fog) {
+    constructor(environment, camera, fog, shadows) {
       this.fog = fog;
+      this.shadows = shadows;
       this.materials = /* @__PURE__ */ new Map();
       this.visit = (object) => {
         const material = object.material;
@@ -16766,7 +16811,8 @@ ${HEADER}
       if (this.materials.has(material)) return;
       const lit = material instanceof three.RawShaderMaterial && material.fragmentShader.includes("uniform sampler2D worldEnvironment;");
       const fog = this.fog?.accepts(material) ? this.fog : void 0;
-      if (!lit && !fog) return;
+      const shadows = lit || this.shadows?.accepts(material) ? this.shadows : void 0;
+      if (!lit && !fog && !shadows) return;
       const compile = material.onBeforeCompile, key = material.customProgramCacheKey, originalKey = key.call(material);
       const originalDefines = material instanceof three.RawShaderMaterial ? material.defines : void 0;
       if (lit) material.defines = { ...originalDefines, ...this.defines };
@@ -16774,8 +16820,9 @@ ${HEADER}
         compile.call(material, shader, renderer);
         if (lit) Object.assign(shader.uniforms, this.uniforms);
         fog?.apply(shader, material);
+        shadows?.apply(shader, material);
       };
-      material.customProgramCacheKey = () => `${originalKey}:world-lighting-v1:${lit}:${!!fog}`;
+      material.customProgramCacheKey = () => `${originalKey}:world-lighting-v2:${lit}:${!!fog}:${!!shadows}`;
       material.needsUpdate = true;
       const release = () => {
         material.removeEventListener("dispose", release);
@@ -16790,6 +16837,112 @@ ${HEADER}
     }
     dispose() {
       for (const release of this.materials.values()) release();
+    }
+  };
+  var FILTER = `
+float getShadow(sampler2DShadow shadowMap, vec2 shadowMapSize, float shadowIntensity,
+    float shadowBias, float shadowRadius, vec4 shadowCoord) {
+    vec3 p = shadowCoord.xyz / shadowCoord.w;
+    float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
+    if (edge <= 0.0 || p.z <= 0.0 || p.z >= 1.0) return 1.0;
+    p.z += shadowBias;
+    vec2 d = vec2(shadowRadius * .5) / shadowMapSize;
+    float shade = (texture(shadowMap, p + vec3(-d.x, -d.y, 0.0))
+        + texture(shadowMap, p + vec3(d.x, -d.y, 0.0))
+        + texture(shadowMap, p + vec3(-d.x, d.y, 0.0))
+        + texture(shadowMap, p + vec3(d.x, d.y, 0.0))) * .25;
+    return mix(1.0, shade, shadowIntensity * smoothstep(0.0, .08, edge));
+}
+`;
+  var STANDARD_SHADOWS = three.ShaderChunk.shadowmap_pars_fragment.replace(
+    /float getShadow\( sampler2DShadow[\s\S]*?(?=\n\s*#elif defined\( SHADOWMAP_TYPE_VSM \))/,
+    FILTER
+  );
+  var NearShadows = class {
+    constructor(light, radius, camera, renderer, resources) {
+      this.light = light;
+      this.resources = resources;
+      this.direction = createSunDirection();
+      this.right = new three.Vector3().crossVectors(new three.Vector3(0, 1, 0), this.direction).normalize();
+      this.up = new three.Vector3().crossVectors(this.direction, this.right);
+      this.center = new three.Vector3();
+      if (!Number.isFinite(radius) || radius <= 0) throw new RangeError("Shadow radius must be positive and finite");
+      const size = 2048;
+      if (renderer.capabilities.maxTextureSize < size) throw new Error("Near shadows require 2048 texture support");
+      this.texel = radius * 2 / size;
+      this.target = new three.WebGLRenderTarget(size, size, { depthTexture: new three.DepthTexture(size, size, three.UnsignedIntType) });
+      this.target.texture.name = "near-sun-shadow-color";
+      const depth = this.target.depthTexture;
+      depth.name = "near-sun-shadow-depth";
+      depth.compareFunction = three.LessEqualCompare;
+      depth.minFilter = depth.magFilter = three.LinearFilter;
+      resources.acquireRequired("near-shadows", { gpuBytes: size * size * 8, textureBytes: size * size * 8 }, true);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = three.PCFShadowMap;
+      light.castShadow = true;
+      const shadow = light.shadow;
+      shadow.map = this.target;
+      shadow.mapSize.set(size, size);
+      shadow.bias = -5e-5;
+      shadow.normalBias = 0.55;
+      shadow.radius = 1.5;
+      Object.assign(shadow.camera, { left: -radius, right: radius, top: radius, bottom: -radius, near: Math.min(1, radius), far: radius * 8 });
+      shadow.camera.updateProjectionMatrix();
+      this.uniforms = {
+        worldShadowMap: { value: depth },
+        worldShadowMatrix: { value: shadow.matrix },
+        worldShadowCamera: { value: camera.matrixWorld },
+        worldShadowSize: { value: shadow.mapSize },
+        worldShadowBias: { value: shadow.bias },
+        worldShadowNormalBias: { value: shadow.normalBias },
+        worldShadowRadius: { value: shadow.radius }
+      };
+    }
+    prepare(focus, origin) {
+      this.center.set(focus.x + origin.x, focus.y, focus.z + origin.y);
+      const x = this.center.dot(this.right), y = this.center.dot(this.up);
+      this.center.copy(focus).addScaledVector(this.right, Math.round(x / this.texel) * this.texel - x).addScaledVector(this.up, Math.round(y / this.texel) * this.texel - y);
+      this.light.target.position.copy(this.center);
+      this.light.position.copy(this.center).addScaledVector(this.direction, this.light.shadow.camera.far / 2);
+      this.light.updateMatrixWorld();
+      this.light.target.updateMatrixWorld();
+      this.light.shadow.updateMatrices(this.light);
+    }
+    accepts(material) {
+      return material instanceof three.MeshStandardMaterial;
+    }
+    apply(shader, material) {
+      if (!(material instanceof three.RawShaderMaterial)) {
+        shader.fragmentShader = shader.fragmentShader.replace("#include <shadowmap_pars_fragment>", STANDARD_SHADOWS);
+        return;
+      }
+      Object.assign(shader.uniforms, this.uniforms);
+      shader.vertexShader = "out highp vec3 vWorldShadowPoint;\n" + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace("vHorizonFogDepth = -mvPosition.z;", "vHorizonFogDepth = -mvPosition.z; vWorldShadowPoint = mvPosition.xyz;");
+      shader.fragmentShader = `precision highp float; precision highp sampler2DShadow;
+            in highp vec3 vWorldShadowPoint;
+            uniform sampler2DShadow worldShadowMap;
+            uniform mat4 worldShadowMatrix, worldShadowCamera;
+            uniform vec2 worldShadowSize;
+            uniform float worldShadowBias, worldShadowNormalBias, worldShadowRadius;
+            ${FILTER}
+            float worldShadow(vec3 viewNormal) {
+                vec3 point = (worldShadowCamera * vec4(vWorldShadowPoint, 1.0)).xyz;
+                point += normalize(mat3(worldShadowCamera) * viewNormal) * worldShadowNormalBias;
+                return getShadow(worldShadowMap, worldShadowSize, 1.0, worldShadowBias, worldShadowRadius,
+                    worldShadowMatrix * vec4(point, 1.0));
+            }
+            ${shader.fragmentShader}`;
+      shader.fragmentShader = shader.fragmentShader.replace("void main() {", "void main() {\nworldDirectVisibility = worldShadow(normalize(vNormal));");
+    }
+    handleContextLost() {
+      this.target.dispose();
+    }
+    dispose() {
+      this.target.dispose();
+      this.light.shadow.map = null;
+      this.light.castShadow = false;
+      this.resources.release("near-shadows");
     }
   };
 
@@ -16810,6 +16963,7 @@ ${HEADER}
         this.contextLosses += 1;
         this.gpuTimer.handleContextLost();
         this.output.handleContextLost();
+        this.shadows?.handleContextLost();
         this.sky.handleContextLost();
         this.options.contextLost?.();
       };
@@ -16845,7 +16999,11 @@ ${HEADER}
       let sky;
       let gpuTimer;
       let output;
+      let shadows;
       try {
+        if (options.shadowRadius !== void 0 && (!Number.isFinite(options.shadowRadius) || options.shadowRadius < 0)) {
+          throw new RangeError("shadowRadius must be non-negative and finite");
+        }
         this.renderer = renderer = new three.WebGLRenderer({ canvas: options.canvas, antialias: false });
         if (!this.renderer.extensions.has("EXT_color_buffer_float")) throw new Error("Linear HDR rendering requires EXT_color_buffer_float");
         this.renderer.toneMapping = three.ACESFilmicToneMapping;
@@ -16858,12 +17016,14 @@ ${HEADER}
         const primary = new three.DirectionalLight(SUN_COLOR, SUN_INTENSITY);
         primary.position.copy(createSunDirection());
         this.scene.add(primary);
+        this.scene.add(primary.target);
+        if (options.shadowRadius) this.shadows = shadows = new NearShadows(primary, options.shadowRadius, this.camera, this.renderer, options.resources);
         this.sky = sky = new Skybox(options.resources);
         sky.bake(this.renderer);
         this.scene.environment = sky.environment.texture;
         if (options.skyVisible) this.scene.background = sky.target.texture;
         const skyFog = options.skyVisible ? new SkyFog(sky.target.texture, this.camera) : void 0;
-        this.lighting = new WorldLighting(sky.environment, this.camera, skyFog);
+        this.lighting = new WorldLighting(sky.environment, this.camera, skyFog, shadows);
         this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext());
         options.canvas.addEventListener("webglcontextlost", this.onContextLost);
         options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -16872,6 +17032,7 @@ ${HEADER}
         options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
         gpuTimer?.dispose();
         output?.dispose();
+        shadows?.dispose();
         sky?.dispose();
         options.resources.dispose();
         renderer?.dispose();
@@ -16889,6 +17050,12 @@ ${HEADER}
     }
     pollGpuFrameMs() {
       return this.contextState === "ready" ? this.gpuTimer.poll() : void 0;
+    }
+    prepareShadows(focus, origin) {
+      this.shadows?.prepare(focus, origin);
+    }
+    get shadowFrustum() {
+      return this.shadows?.light.shadow.getFrustum();
     }
     get gpuTimingStats() {
       return this.gpuTimer.stats;
@@ -16925,6 +17092,7 @@ ${HEADER}
       this.gpuTimer.dispose();
       this.lighting.dispose();
       this.output.dispose();
+      this.shadows?.dispose();
       this.sky.dispose();
       this.scene.environment = null;
       this.options.resources.dispose();
@@ -16936,7 +17104,8 @@ ${HEADER}
         const renderable = object;
         for (const attribute of Object.values(renderable.geometry?.attributes ?? {})) attribute.needsUpdate = true;
         if (renderable.geometry?.index) renderable.geometry.index.needsUpdate = true;
-        const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
+        const materials = Array.isArray(renderable.material) ? [...renderable.material] : [renderable.material];
+        materials.push(object.customDepthMaterial);
         for (const material of materials) {
           if (!material || typeof material !== "object") continue;
           material.needsUpdate = true;
@@ -17450,6 +17619,7 @@ ${HEADER}
     antialias: true,
     terrainShaderQuality: "full",
     skyVisible: true,
+    shadowRadius: 0,
     texturesBaseUrl: "textures/",
     gridVisible: false,
     gridColor: 4338219,
@@ -17569,6 +17739,9 @@ ${HEADER}
       throw new RangeError("terrainTextureAnisotropy must be a positive safe integer");
     }
     positive2("renderDistance", options.renderDistance);
+    if (!Number.isFinite(options.shadowRadius) || options.shadowRadius < 0 || options.shadowRadius > options.renderDistance) {
+      throw new RangeError("shadowRadius must be finite, non-negative, and <= renderDistance");
+    }
     if (!Number.isFinite(options.horizonFogStart) || options.horizonFogStart < 0) {
       throw new RangeError("horizonFogStart must be a non-negative finite number");
     }
@@ -18334,6 +18507,7 @@ ${HEADER}
         this.updateWorldDemand(Math.min(dtS, 0.1));
         this.frameTasks.runFrame();
         this.worldChunkMountQueue.retryOne();
+        this.rendererHost.prepareShadows(this.controls.target, this.renderOrigin);
         this.updateWorldChunkVisibility();
         this.terrain?.update(dtS);
         const primaryGrassResources = this.grass?.resources;
@@ -18413,6 +18587,7 @@ ${HEADER}
           canvas: this.canvas,
           antialias: this.options.antialias,
           skyVisible: this.options.skyVisible,
+          shadowRadius: this.options.shadowRadius,
           horizonFogColor: this.options.horizonFogColor,
           horizonFogStart: this.options.horizonFogStart,
           horizonFogEnd: this.options.horizonFogEnd,
@@ -18748,6 +18923,8 @@ ${HEADER}
         const original = sourceObjects[index];
         if (!original) return;
         object.onBeforeRender = original.onBeforeRender;
+        object.onBeforeShadow = original.onBeforeShadow;
+        if (original.customDepthMaterial) object.customDepthMaterial = this.materialForWorldCopy(original.customDepthMaterial, offsetX, offsetY);
         object.onAfterRender = original.onAfterRender;
         if (original.isInstancedMesh && object.isInstancedMesh) {
           const sourceInstance = original;
@@ -18909,7 +19086,7 @@ ${HEADER}
     }
     updateWorldChunkVisibility() {
       if (!this.mapData) return;
-      this.chunkScheduler.update(this.scene, this.camera, this.controls.target, this.chunkSchedulerHooks);
+      this.chunkScheduler.update(this.scene, this.camera, this.controls.target, this.chunkSchedulerHooks, this.rendererHost.shadowFrustum);
     }
     activateWorldChunk(metadata, lod, objects) {
       const registered = this.worldRenderLayers?.forKind(metadata.kind);

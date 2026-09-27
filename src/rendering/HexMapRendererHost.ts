@@ -20,12 +20,14 @@ import type { GroundProjection } from "./GroundProjection";
 import { createSunDirection, SUN_COLOR, SUN_INTENSITY } from "./SunLight";
 import { SceneOutput } from "./SceneOutput";
 import { WorldLighting } from "./WorldLighting";
+import { NearShadows } from "./NearShadows";
 import type { ResourceBudgetAccount } from "../runtime/ResourceBudget";
 
 export interface HexMapRendererHostOptions {
     canvas: HTMLCanvasElement;
     antialias: boolean;
     skyVisible: boolean;
+    shadowRadius?: number;
     horizonFogColor: ColorRepresentation;
     horizonFogStart: number;
     horizonFogEnd: number;
@@ -55,6 +57,7 @@ export class HexMapRendererHost {
     private readonly sky: Skybox;
     private readonly lighting: WorldLighting;
     private readonly output: SceneOutput;
+    private readonly shadows?: NearShadows;
     private readonly drawingSize = new Vector2();
     private readonly gpuTimer: WebGlGpuTimer;
     private contextState: WebGlContextState = "ready";
@@ -76,7 +79,11 @@ export class HexMapRendererHost {
         let sky: Skybox | undefined;
         let gpuTimer: WebGlGpuTimer | undefined;
         let output: SceneOutput | undefined;
+        let shadows: NearShadows | undefined;
         try {
+            if (options.shadowRadius !== undefined && (!Number.isFinite(options.shadowRadius) || options.shadowRadius < 0)) {
+                throw new RangeError("shadowRadius must be non-negative and finite");
+            }
             this.renderer = renderer = new WebGLRenderer({ canvas: options.canvas, antialias: false });
             if (!this.renderer.extensions.has("EXT_color_buffer_float")) throw new Error("Linear HDR rendering requires EXT_color_buffer_float");
             this.renderer.toneMapping = ACESFilmicToneMapping;
@@ -91,13 +98,15 @@ export class HexMapRendererHost {
             const primary = new DirectionalLight(SUN_COLOR, SUN_INTENSITY);
             primary.position.copy(createSunDirection());
             this.scene.add(primary);
+            this.scene.add(primary.target);
+            if (options.shadowRadius) this.shadows = shadows = new NearShadows(primary, options.shadowRadius, this.camera, this.renderer, options.resources);
             // skyVisible controls the background; surface illumination always uses this sky.
             this.sky = sky = new Skybox(options.resources);
             sky.bake(this.renderer);
             this.scene.environment = sky.environment.texture;
             if (options.skyVisible) this.scene.background = sky.target.texture;
             const skyFog = options.skyVisible ? new SkyFog(sky.target.texture, this.camera) : undefined;
-            this.lighting = new WorldLighting(sky.environment, this.camera, skyFog);
+            this.lighting = new WorldLighting(sky.environment, this.camera, skyFog, shadows);
             this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext() as WebGL2RenderingContext);
             options.canvas.addEventListener("webglcontextlost", this.onContextLost);
             options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -106,6 +115,7 @@ export class HexMapRendererHost {
             options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
             gpuTimer?.dispose();
             output?.dispose();
+            shadows?.dispose();
             sky?.dispose();
             options.resources.dispose();
             renderer?.dispose();
@@ -126,6 +136,8 @@ export class HexMapRendererHost {
     public pollGpuFrameMs(): number | undefined {
         return this.contextState === "ready" ? this.gpuTimer.poll() : undefined;
     }
+    public prepareShadows(focus: import("three").Vector3, origin: Vector2): void { this.shadows?.prepare(focus, origin); }
+    public get shadowFrustum(): import("three").Frustum | undefined { return this.shadows?.light.shadow.getFrustum(); }
     public get gpuTimingStats(): Readonly<WebGlGpuTimerStats> { return this.gpuTimer.stats; }
     public get contextStats(): Readonly<WebGlContextStats> {
         return {
@@ -161,6 +173,7 @@ export class HexMapRendererHost {
         this.gpuTimer.dispose();
         this.lighting.dispose();
         this.output.dispose();
+        this.shadows?.dispose();
         this.sky.dispose();
         this.scene.environment = null;
         this.options.resources.dispose();
@@ -175,6 +188,7 @@ export class HexMapRendererHost {
         this.contextLosses += 1;
         this.gpuTimer.handleContextLost();
         this.output.handleContextLost();
+        this.shadows?.handleContextLost();
         this.sky.handleContextLost();
         this.options.contextLost?.();
     };
@@ -209,7 +223,8 @@ export class HexMapRendererHost {
             };
             for (const attribute of Object.values(renderable.geometry?.attributes ?? {})) attribute.needsUpdate = true;
             if (renderable.geometry?.index) renderable.geometry.index.needsUpdate = true;
-            const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
+            const materials = Array.isArray(renderable.material) ? [...renderable.material] : [renderable.material];
+            materials.push(object.customDepthMaterial);
             for (const material of materials) {
                 if (!material || typeof material !== "object") continue;
                 (material as { needsUpdate: boolean }).needsUpdate = true;

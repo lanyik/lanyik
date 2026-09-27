@@ -2,6 +2,7 @@ import { BufferGeometryLoader, Color, DynamicDrawUsage, Group, IcosahedronGeomet
 import { MAX_GROUND_EQUIPMENT } from "../core/GameConfig";
 import { MAX_COMBAT_CHUNKS } from "../core/RegionalWorld";
 import { installActorFade } from "./ActorVisibility";
+import { MeshDepthMaterial } from "three";
 import { AssetLoader } from "./AssetLoader";
 
 export class LootModels {
@@ -10,16 +11,19 @@ export class LootModels {
     public readonly chest: InstancedMesh;
     private readonly materials: MeshStandardMaterial[];
     private readonly geometries: BufferGeometry[];
+    private readonly depth = new MeshDepthMaterial();
 
     private constructor(models: Record<string, BufferGeometry>, center: Vector2) {
         const material = new MeshStandardMaterial({ vertexColors: true, roughness: .65, metalness: .25 });
         const gemMaterial = new MeshStandardMaterial({ roughness: .2, metalness: .65, emissive: 0x18212b });
         this.materials = [material, gemMaterial];
         for (const entry of this.materials) installActorFade(entry, center);
+        installActorFade(this.depth, center);
         const orb = new IcosahedronGeometry(.22, 0), jewel = new TorusGeometry(.15, .055, 6, 12);
         this.geometries = [...Object.values(models), orb, jewel];
         const make = (geometry: BufferGeometry, mat: MeshStandardMaterial, count: number) => {
             const mesh = new InstancedMesh(geometry, mat, count); mesh.count = 0; mesh.frustumCulled = false;
+            mesh.castShadow = mesh.receiveShadow = true; mesh.customDepthMaterial = this.depth;
             mesh.instanceMatrix.setUsage(DynamicDrawUsage); mesh.setColorAt(0, new Color()); mesh.instanceColor!.setUsage(DynamicDrawUsage);
             this.root.add(mesh); return mesh;
         };
@@ -41,6 +45,7 @@ export class LootModels {
 
     public reset(): void { for (const mesh of this.loot) mesh.count = 0; this.chest.count = 0; }
     public dispose(): void {
+        this.depth.dispose();
         this.root.removeFromParent();
         for (const mesh of [...this.loot, this.chest]) mesh.dispose();
         for (const geometry of this.geometries) geometry.dispose();
