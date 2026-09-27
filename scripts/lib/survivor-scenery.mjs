@@ -9,6 +9,17 @@ import { MeshoptSimplifier } from "meshoptimizer";
 export async function prepareSurvivorScenery(read, output) {
     const directory = resolve(output, "environment/scenery");
     await mkdir(directory, { recursive: true });
+    // The authored surface reuses the verified ground scans at a bounded 512².
+    for (const [name, files] of [["soil", ["diff", "nor_gl", "rough", "ao"].map(channel => `forest_ground_04_${channel}_1k.jpg`)],
+        ["grass", ["Color", "NormalGL", "Roughness", "AmbientOcclusion"].map(channel => `Grass005_1K-JPG_${channel}.jpg`)]]) {
+        await sharp(await read(files[0])).resize(512, 512).modulate({ saturation: .7, brightness: .95 }).png().toFile(resolve(directory, `${name}-color.png`));
+        await sharp(await read(files[1])).resize(512, 512).png().toFile(resolve(directory, `${name}-normal.png`));
+        const rough = await sharp(await read(files[2])).resize(512, 512).greyscale().raw().toBuffer();
+        const ao = await sharp(await read(files[3])).resize(512, 512).greyscale().raw().toBuffer();
+        const orm = Buffer.alloc(512 * 512 * 3);
+        for (let pixel = 0; pixel < rough.length; pixel++) { orm[pixel * 3] = ao[pixel]; orm[pixel * 3 + 1] = rough[pixel]; }
+        await sharp(orm, { raw: { width: 512, height: 512, channels: 3 } }).png().toFile(resolve(directory, `${name}-orm.png`));
+    }
     const geometries = {};
     await MeshoptSimplifier.ready;
     for (const [id, prefix] of [["rock_moss_set_01", "rock"], ["stone_fire_pit", "firepit"]]) {

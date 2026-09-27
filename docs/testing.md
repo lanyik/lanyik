@@ -238,6 +238,8 @@ Windows 独显回归可显式设置 `$env:PLAYWRIGHT_ANGLE_BACKEND='d3d11'` 后�
 
 `forest-wind.spec.ts` 通过实际颜色/深度材质像素检查树根固定、树冠位移、不同细分档共享相位、周期边界连续及 4096/8192 单位原点平移；单测检查共享深度材质跨 LOD/副本保留并只释放一次，以及裁剪边界覆盖风动。路线和荒野样板使用生产树木，不冻结环境时钟；前后照片和短测不属于同风相位重放，动作以短视频和受控像素测试复核。
 
+副本连续岸坡由 `ChallengeSurface.test.ts` 验证水线接缝、可达地面高度、贴图记账及投影目标的借用所有权；`ChallengeTerrain.test.ts` 保留路线、出生与碰撞边界。`boss-challenge.spec.ts` 在真实副本检查作者地面、营火、阴影、内置六边形表面退出以及切图复用；资产测试验证六张 512² 贴图重复构建字节一致。`fog-and-damage.spec.ts` 的远景雾对照明确选择已驻留的可见陆地网格，避免把同样含有 terrain 注释的草/水 shader 当作陆地探针。
+
 ## Meaning of the 500-iteration soak
 
 One iteration is one `HexMap.loadWorld()` replacement, not a tick or terrain tile.

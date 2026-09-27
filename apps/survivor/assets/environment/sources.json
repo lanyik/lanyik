@@ -15,7 +15,8 @@
     "source": "https://polyhaven.com/a/forest_ground_04",
     "author": "Rob Tuytel / Rico Cilliers / Poly Haven",
     "license": "CC0-1.0",
-    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_diff_1k.jpg"
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_diff_1k.jpg",
+    "usage": "Terrain soil array and 512px authored challenge surface (survivor-scenery.mjs)"
   },
   {
     "file": "ez-tree-LICENSE.txt",
@@ -63,7 +64,8 @@
     "sha256": "2a7e8c742aa0110057d7a3ff0e8ec193c26ef23b77bc778fb9258c0e41b29474",
     "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/bark/Bark001_1K-JPG/Bark001_1K-JPG_Color.jpg",
     "author": "ambientCG",
-    "license": "CC0-1.0"
+    "license": "CC0-1.0",
+    "usage": "Oak/ash bark and charred camp timber; source bytes unchanged"
   },
   {
     "file": "bark001-NormalGL.jpg",
@@ -71,7 +73,8 @@
     "sha256": "d7a275aa573a701d8814d7378abd8ea227f651ae6da33f8c57a6b862419e621e",
     "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/bark/Bark001_1K-JPG/Bark001_1K-JPG_NormalGL.jpg",
     "author": "ambientCG",
-    "license": "CC0-1.0"
+    "license": "CC0-1.0",
+    "usage": "Oak/ash bark and charred camp timber; source bytes unchanged"
   },
   {
     "file": "bark001-Roughness.jpg",
@@ -79,7 +82,8 @@
     "sha256": "2c0829e7a04b78234357ac6eb93173667fab9191c4340343ce88dddfcca1e6fd",
     "source": "https://github.com/dgreenheck/ez-tree/blob/dcf309bd86bd521083d9c70f01f2de45fdc7c457/src/app/public/textures/bark/Bark001_1K-JPG/Bark001_1K-JPG_Roughness.jpg",
     "author": "ambientCG",
-    "license": "CC0-1.0"
+    "license": "CC0-1.0",
+    "usage": "Oak/ash bark and charred camp timber; source bytes unchanged"
   },
   {
     "file": "bark014-Color.jpg",
@@ -136,7 +140,8 @@
     "source": "https://polyhaven.com/a/forest_ground_04",
     "author": "Poly Haven",
     "license": "CC0-1.0",
-    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_nor_gl_1k.jpg"
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_nor_gl_1k.jpg",
+    "usage": "Terrain soil array and 512px authored challenge surface (survivor-scenery.mjs)"
   },
   {
     "file": "forest_ground_04_rough_1k.jpg",
@@ -145,7 +150,8 @@
     "source": "https://polyhaven.com/a/forest_ground_04",
     "author": "Poly Haven",
     "license": "CC0-1.0",
-    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_rough_1k.jpg"
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_rough_1k.jpg",
+    "usage": "Terrain soil array and 512px authored challenge surface (survivor-scenery.mjs)"
   },
   {
     "file": "forest_ground_04_ao_1k.jpg",
@@ -154,7 +160,8 @@
     "source": "https://polyhaven.com/a/forest_ground_04",
     "author": "Poly Haven",
     "license": "CC0-1.0",
-    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_ao_1k.jpg"
+    "download": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forest_ground_04/forest_ground_04_ao_1k.jpg",
+    "usage": "Terrain soil array and 512px authored challenge surface (survivor-scenery.mjs)"
   },
   {
     "file": "rocky_terrain_nor_gl_1k.jpg",
@@ -192,7 +199,8 @@
     "license": "CC0-1.0",
     "download": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
     "archiveSha256": "58a7fb7f32c44a86879483325b62781d04e0ab8f70b0f70ede36c8f1726f8a22",
-    "archivePath": "Grass005_1K-JPG_Color.jpg"
+    "archivePath": "Grass005_1K-JPG_Color.jpg",
+    "usage": "Terrain grass array and 512px authored challenge surface (survivor-scenery.mjs)"
   },
   {
     "file": "Grass005_1K-JPG_NormalGL.jpg",
@@ -203,7 +211,8 @@
     "license": "CC0-1.0",
     "download": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
     "archiveSha256": "58a7fb7f32c44a86879483325b62781d04e0ab8f70b0f70ede36c8f1726f8a22",
-    "archivePath": "Grass005_1K-JPG_NormalGL.jpg"
+    "archivePath": "Grass005_1K-JPG_NormalGL.jpg",
+    "usage": "Terrain grass array and 512px authored challenge surface (survivor-scenery.mjs)"
   },
   {
     "file": "Grass005_1K-JPG_Roughness.jpg",
@@ -214,7 +223,8 @@
     "license": "CC0-1.0",
     "download": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
     "archiveSha256": "58a7fb7f32c44a86879483325b62781d04e0ab8f70b0f70ede36c8f1726f8a22",
-    "archivePath": "Grass005_1K-JPG_Roughness.jpg"
+    "archivePath": "Grass005_1K-JPG_Roughness.jpg",
+    "usage": "Terrain grass array and 512px authored challenge surface (survivor-scenery.mjs)"
   },
   {
     "file": "Grass005_1K-JPG_AmbientOcclusion.jpg",
@@ -225,7 +235,8 @@
     "license": "CC0-1.0",
     "download": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
     "archiveSha256": "58a7fb7f32c44a86879483325b62781d04e0ab8f70b0f70ede36c8f1726f8a22",
-    "archivePath": "Grass005_1K-JPG_AmbientOcclusion.jpg"
+    "archivePath": "Grass005_1K-JPG_AmbientOcclusion.jpg",
+    "usage": "Terrain grass array and 512px authored challenge surface (survivor-scenery.mjs)"
   },
   {
     "file": "rock_moss_set_01/rock_moss_set_01_1k.gltf",

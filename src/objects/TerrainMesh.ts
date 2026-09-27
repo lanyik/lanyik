@@ -364,11 +364,11 @@ export class TerrainMesh extends Group {
             if (initialTiles) {
                 for (const point of initialTiles) {
                     const tile = getMapTile(this.map, point.x, point.y);
-                    if (tile) (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
+                    if (tile && !tile.modifiers?.includes("external-surface")) (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
                 }
             } else {
                 forEachMapTile(this.map, (tile, x, y) => {
-                    (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
+                    if (!tile.modifiers?.includes("external-surface")) (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push({ x, y });
                 });
             }
             this.buildLandLayer(landTiles);
@@ -1014,7 +1014,7 @@ export class TerrainMesh extends Group {
         const waterTiles: Point[] = [];
         for (const point of tiles) {
             const tile = getMapTile(this.map, point.x, point.y);
-            if (!tile) continue;
+            if (!tile || tile.modifiers?.includes("external-surface")) continue;
             (WATER_TYPES.includes(tile.type) ? waterTiles : landTiles).push(point);
         }
         this.buildLandLayer(landTiles);
@@ -1032,9 +1032,10 @@ export class TerrainMesh extends Group {
             const tile = getMapTile(this.map, point.x, point.y);
             const landEntry = this.tileIndex.get(key);
             const waterEntry = this.waterTileIndex.get(key);
-            const expectedWater = Boolean(tile && WATER_TYPES.includes(tile.type));
-            if ((!tile && (landEntry || waterEntry))
-                || (expectedWater && landEntry) || (!expectedWater && waterEntry)) {
+            const visible = Boolean(tile && !tile.modifiers?.includes("external-surface"));
+            const expectedWater = visible && WATER_TYPES.includes(tile!.type);
+            if ((!visible && (landEntry || waterEntry)) || (visible && !landEntry && !waterEntry)
+                || (expectedWater && landEntry) || (visible && !expectedWater && waterEntry)) {
                 structuralChunkKeys.add(getWorldChunkKey(point.x, point.y));
             }
         }
@@ -1042,6 +1043,7 @@ export class TerrainMesh extends Group {
         const rebuiltIds: string[] = [];
         for (const chunkKey of structuralChunkKeys) {
             const allTiles = new Map<string, Point>();
+            for (const point of tiles) if (getWorldChunkKey(point.x, point.y) === chunkKey) allTiles.set(`${point.x},${point.y}`, point);
             for (const layer of ["land", "water"] as const) {
                 for (const point of this.chunkRecords.get(`${layer}:${chunkKey}`)?.tiles ?? []) {
                     allTiles.set(`${point.x},${point.y}`, point);

@@ -4,7 +4,7 @@ import { WORLD_VIEW } from "../core/WorldView";
 export const COMBAT_WATER_STYLE: Readonly<WorldWaterGenerationStyle> = Object.freeze({
     ...DEFAULT_WORLD_WATER_STYLE, oceanLevel: 0.32, riverSourcesPerCell: 2, riverLength: 70
 });
-/** Appearance only; applied to every game world without changing water clearance. */
+/** Built-in wilderness/homestead water appearance; does not change water clearance. */
 export const COMBAT_WATER_APPEARANCE = Object.freeze({
     waterColorDeep: 0x183638, waterColorShallow: 0x45554a, riverBankColor: 0x50473a,
     waterWaveAmplitude: .28, waterWaveFrequency: .65, waterWaveSpeed: .45,

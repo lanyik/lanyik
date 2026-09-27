@@ -66,8 +66,15 @@ test("draggable world nodes preview real maps; challenge progress survives leave
     const sceneryId = await page.evaluate(() => {
         const view = (window.survivorApplication!.session as unknown as { view: { map: HexMap } }).view;
         const root = view.map.getScene().getObjectByName("challenge-scenery")!;
-        if (!root.visible || root.children.length !== 9) throw new Error("Production challenge scenery was not mounted");
-        if (!root.children.every(mesh => mesh.castShadow && mesh.receiveShadow)) throw new Error("Scenery lost its shared shadows");
+        if (!root.visible || !root.getObjectByName("challenge-ground") || !root.getObjectByName("challenge-water")
+            || !root.getObjectByName("campfire-flames") || !root.getObjectByName("challenge-timber")) throw new Error("Production challenge scenery was not mounted");
+        if (!root.children.filter(mesh => mesh.type === "Mesh").every(mesh => mesh.castShadow && mesh.receiveShadow)
+            || !root.getObjectByName("challenge-ground")!.receiveShadow || !root.getObjectByName("challenge-water")!.receiveShadow)
+            throw new Error("Scenery lost its shared shadows");
+        view.map.getScene().traverseVisible(mesh => {
+            if (mesh.name.startsWith("terrain-chunk-land-") || mesh.name.startsWith("terrain-chunk-water-"))
+                throw new Error("Built-in hex surfaces overlap the authored challenge ground");
+        });
         return root.uuid;
     });
     const defeat = async (all = false) => {

@@ -168,7 +168,7 @@ export class CombatLayer implements WorldRenderLayer {
                 SkillEffects.load(controller.signal).catch(reject),
                 LootModels.load(this.viewCenter, controller.signal).catch(reject),
                 HomesteadModels.load(controller.signal).catch(reject),
-                ChallengeScenery.load(controller.signal, this.player).catch(reject)
+                ChallengeScenery.load(controller.signal, this.player, this.groundProjection).catch(reject)
             ]).then(results => {
                 const [actorResult, effectResult, lootResult, homeResult, sceneryResult] = results;
                 if (actorResult.status === "rejected" || effectResult.status === "rejected" || lootResult.status === "rejected" || homeResult.status === "rejected" || sceneryResult.status === "rejected" || this.disposed || controller.signal.aborted) {
@@ -447,6 +447,7 @@ export class CombatLayer implements WorldRenderLayer {
     }
 
     private height(x: number, z: number): number {
+        if (isChallenge(this.location)) return 0;
         const host = this.host!;
         const tile = groundTile({ x, z });
         const key = `${tile.x},${tile.y}`;

@@ -13,7 +13,7 @@ export const CHALLENGE_PATH = Object.freeze([
     CHALLENGE_ROUTE[2], { x: 18, z: 34 }, { x: 24, z: 29 }, CHALLENGE_ROUTE[3]
 ].map(point => Object.freeze(point)));
 
-/** The river enters from the west. A land margin contains the hex shoreline blend. */
+/** Shared continuous river edge. The unwalkable 1.2-unit margin contains its sloped bank. */
 export function challengeBank(z: number): number { return 8.5 + 4 * Math.exp(-(((z - 41) / 6) ** 2)); }
 export function challengePathDistance(x: number, z: number): number {
     let distance = Infinity;
@@ -26,7 +26,7 @@ export function challengePathDistance(x: number, z: number): number {
 }
 
 interface ChallengeProp {
-    readonly model: `rock${number}` | "firepit";
+    readonly model: `rock${number}` | "firepit" | "timber";
     readonly x: number; readonly z: number; readonly radius: number; readonly height: number;
     readonly rotation: number; readonly solid: boolean;
 }
@@ -64,6 +64,12 @@ function createScenery() {
     for (const [x, z] of [[14.6, 36.5], [14.9, 43], [16.5, 45], [27, 22], [32, 21], [36, 25], [34, 32]]) {
         if (!reserved(x, z, .9) && challengePathDistance(x, z) > 1.8) rock(x, z, .8, .75 + random.next() * .5);
     }
+    // Fallen timbers remain inside the same conservative collision cylinders as their meshes.
+    for (const [x, z, radius, height, rotation] of [[35, 51.7, 1.1, .3, .8], [28, 54, 1, .26, 1.9], [26, 53.5, .7, .35, -.3]]) {
+        if (!reserved(x, z, radius)) props.push({ model: "timber", x, z, radius, height, rotation, solid: true });
+    }
+    for (const rotation of [0, 2.1, 4.2]) props.push({ model: "timber", x: 32.4 + .12 * Math.cos(rotation), z: 50 + .12 * Math.sin(rotation),
+        radius: .5, height: .25, rotation, solid: false });
     return { props: Object.freeze(props.map(prop => Object.freeze(prop))), trees: Object.freeze(trees.map(tree => Object.freeze(tree))) };
 }
 export const CHALLENGE_SCENERY = Object.freeze(createScenery());

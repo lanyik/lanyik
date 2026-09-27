@@ -7,7 +7,7 @@
 
 ## 副本固定布景
 
-[ChallengeTerrain](../../apps/survivor/src/core/ChallengeTerrain.ts) 与 [ChallengeLayout](../../apps/survivor/src/core/ChallengeLayout.ts) 共用有限布景：圆形外边界内再排除西侧河道、石材实体和树干。河道使用解析岸线并留 1.2 游戏单位的陆地余量覆盖六边形边缘混合；碰撞再加实际身体半径。平地权威高度仍为 0，嵌地路石只是 .025 单位的表面细节。
+[ChallengeTerrain](../../apps/survivor/src/core/ChallengeTerrain.ts) 与 [ChallengeLayout](../../apps/survivor/src/core/ChallengeLayout.ts) 共用有限布景：圆形外边界内再排除西侧河道、石材、倒木实体和树干。河道使用解析岸线并留 1.2 游戏单位的不可通行岸坡，碰撞再加实际身体半径。渲染沿同一曲线生成连续岸坡，细部侵蚀最多向河内偏移 .16 单位；可达地面始终为 0，`CombatLayer` 在副本直接使用此高度，不再从六边形海岸插值。嵌地路石只是 .025 单位的表面细节。
 
 石材按与离线模型归一化一致的保守圆柱阻挡；树干半径为 `.2×scale`，攻击遮挡高度为 `2.5×scale`，树冠不阻挡。移动沿用 `SurfaceMotion` 扫掠，低弹道按圆柱求首个交点，高于实体顶面的弹道可越过；水域不充当攻击掩体。传送和检查点校验使用同一个地形实例合同，没有看得见但能穿过的营火台。
 

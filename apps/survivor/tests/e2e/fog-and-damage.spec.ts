@@ -23,10 +23,11 @@ test("distant terrain merges into the sky and 256 damage labels add exactly one 
         const host = map.rendererHost, { renderer, scene } = host, camera = map.getCamera(), root = map.worldRoot;
         const fog = scene.fog as Fog, near = fog.near, far = fog.far, position = camera.position.clone(), rotation = camera.quaternion.clone();
         let terrain: Mesh | undefined;
-        root.traverse(object => {
+        root.traverseVisible(object => {
             const mesh = object as Mesh, material = mesh.material as RawShaderMaterial;
-            if (!terrain && mesh.isMesh && material?.isRawShaderMaterial && material.fragmentShader.includes("vec3 applyHorizonFog(")
-                && material.fragmentShader.includes("terrain")) terrain = mesh;
+            // Grass/water shaders also mention "terrain"; only sample a resident land draw.
+            if (!terrain && mesh.isMesh && mesh.name.startsWith("terrain-chunk-land-") && mesh.geometry.getAttribute("position")?.count
+                && material?.isRawShaderMaterial && material.fragmentShader.includes("vec3 applyHorizonFog(")) terrain = mesh;
         });
         if (!terrain) throw new Error("Actual terrain material unavailable");
         const MeshType = layer.damageNumbers.mesh.constructor as typeof Mesh;

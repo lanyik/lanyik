@@ -31,6 +31,8 @@ export interface CityInfo {
 //  "hill"  - raised-looking tile (style attribute, see TerrainMesh)
 //  "wood"  - scatters tree models on the tile (see Forest.ts)
 //  "soil"  - bare ground on Land.land; requires a soil atlas cell, suppresses grass
+//  "external-surface" - omit built-in ground/water geometry; a WorldRenderLayer
+//                       owns its visible surface. Logical tiles/vegetation remain.
 //  "river" - (on a Land.land tile) an animated water channel through the hex,
 //            auto-connected to neighboring river/lake/sea/coastal tiles
 //  "lake"  - (on a Land.land tile) water fills the hex except a grass shore rim;

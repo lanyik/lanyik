@@ -374,6 +374,20 @@ describe("streamed render resource sharing", () => {
         expect(terrain.refreshTileAttributes([{ x: 0, y: 0 }])).toContain("land:0,0");
         expect(terrain.children).not.toContain(firstMesh);
 
+        // An authored surface can take over either layer, then return it without losing neighbors.
+        map.data[0][0].modifiers = ["external-surface"];
+        expect(terrain.refreshTileAttributes([{ x: 0, y: 0 }])).toContain("water:0,0");
+        expect(terrain.children.some(child => getWorldChunkMetadata(child)?.kind === "water")).toBe(false);
+        map.data[0][0].modifiers = [];
+        terrain.refreshTileAttributes([{ x: 0, y: 0 }]);
+        expect(terrain.children.some(child => getWorldChunkMetadata(child)?.kind === "water")).toBe(true);
+        map.data[0][0].modifiers = ["external-surface"];
+        terrain.refreshTileAttributes([{ x: 0, y: 0 }]);
+        map.data[0][0].type = Land.land;
+        map.data[0][0].modifiers = [];
+        terrain.refreshTileAttributes([{ x: 0, y: 0 }]);
+        expect(terrain.children.filter(child => getWorldChunkMetadata(child)?.kind === "land")).toHaveLength(2);
+
         const readiness = expect(terrain.ready).rejects.toMatchObject({ name: "AbortError" });
         terrain.dispose();
         await readiness;

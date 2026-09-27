@@ -9,8 +9,9 @@ export function createChallengeMap(): MapInfo {
         for (let y = 0; y < map.h; y++) {
             const center = getHexCenter(x, y, 1), radius = Math.hypot(center.x - arena.x, center.y - arena.z);
             const bank = challengeBank(center.y), path = challengePathDistance(center.x, center.y);
-            map.data[x][y] = center.x < bank ? { type: Land.sea }
-                : { type: Land.land, modifiers: path < 1.3 || radius < 6 || center.x < bank + 2 ? ["soil"] : [] };
+            map.data[x][y] = center.x < bank ? { type: Land.sea, modifiers: ["external-surface"] }
+                : { type: Land.land, modifiers: path < 1.3 || radius < 6 || center.x < bank + 3
+                    ? ["external-surface", "soil"] : ["external-surface"] };
         }
     }
     return map;
