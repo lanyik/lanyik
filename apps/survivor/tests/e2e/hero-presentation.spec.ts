@@ -3,7 +3,7 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import type {} from "../helpers/HeroPresentationFixture";
 
-test("hero poses render the baked clips and browser audio unlocks, synthesizes and disposes", async ({ page }, testInfo) => {
+test("hero skeletal layers render independently and browser audio unlocks, synthesizes and disposes", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 640, height: 400 });
     const bundle = await build({ entryPoints: [fileURLToPath(new URL("../helpers/HeroPresentationFixture.tsx", import.meta.url))],
         bundle: true, write: false, format: "esm", platform: "browser", define: { "import.meta.env.BASE_URL": '"/"' } });
@@ -15,12 +15,16 @@ test("hero poses render the baked clips and browser audio unlocks, synthesizes a
     await page.goto("/__hero-fixture");
     await expect.poll(() => page.evaluate(() => !!window.heroFixture)).toBe(true);
     const idle = await page.evaluate(() => window.heroFixture.pose("idle"));
-    expect(idle.frames).toBe(42); expect(idle.maxY).toBeCloseTo(1.6, 1);
-    const attack = await page.evaluate(() => window.heroFixture.pose("attack"));
-    expect(attack.weights!.slice(8, 14).reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+    expect(idle.bones).toBe(130); expect(idle.maxY).toBeCloseTo(1.6, 1); expect(idle.drawCalls).toBe(1);
+    const moving = await page.evaluate(() => window.heroFixture.pose("move"));
+    await page.locator("canvas").screenshot({ path: testInfo.outputPath("hero-moving.png") });
+    const attack = await page.evaluate(() => window.heroFixture.pose("moving-attack"));
+    expect(attack.legs).toEqual(moving.legs); expect(attack.arm).not.toEqual(moving.arm); expect(attack.drawCalls).toBe(1);
     await page.locator("canvas").screenshot({ path: testInfo.outputPath("hero-attack.png") });
+    await page.evaluate(() => window.heroFixture.pose("rear-attack"));
+    await page.locator("canvas").screenshot({ path: testInfo.outputPath("hero-rear-attack.png") });
     const death = await page.evaluate(() => window.heroFixture.pose("death"));
-    expect(death.weights![37]).toBe(1); expect(death.maxY).toBeLessThan(idle.maxY * .6); expect(death.minY).toBeGreaterThan(-.2);
+    expect(death.maxY).toBeLessThan(idle.maxY * .6); expect(death.minY).toBeGreaterThan(-.2);
     await page.locator("canvas").screenshot({ path: testInfo.outputPath("hero-death.png") });
     await page.getByRole("button", { name: "启用声音" }).click();
     await expect.poll(() => page.evaluate(() => window.heroFixture.audioState().status)).toBe("ready");
@@ -33,5 +37,7 @@ test("hero poses render the baked clips and browser audio unlocks, synthesizes a
     }
     const resources = await page.evaluate(() => window.heroFixture.dispose());
     expect(resources.remaining).toEqual(resources.baseline); expect(resources.remaining.geometries).toBe(0);
+    expect(resources.allocated.cpuBytes).toBeGreaterThan(0); expect(resources.allocated.gpuBytes).toBeGreaterThan(0);
+    expect(resources.released.cpuBytes).toBe(0); expect(resources.released.gpuBytes).toBe(0);
     expect(errors).toEqual([]);
 });

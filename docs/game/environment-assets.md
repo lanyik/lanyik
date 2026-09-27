@@ -2,7 +2,7 @@
 
 导航：[总导航 · 游戏设计](../README.md#game) · [按任务阅读](../README.md#routes)
 
-美术方向是现代暗黑奇幻，以免费、可离线构建和随源码合法分发的资源为基础。新增资产先核对许可、原始归属与构建复现，再检查比例、材质响应和轮廓是否符合场景样板；不因资源分辨率更高就直接替换。动作、声音与美术统一的未完成事项只维护在[开发重点](development-priorities.md)。
+美术方向已确定为写实暗黑，完整世界、技能和界面的目标及里程碑归[视觉改造项目](visual-overhaul.md)。本页描述当前实现，现有资产以免费、可离线构建和随源码合法分发的资源为基础。新增资产先核对许可、原始归属与构建复现，再检查比例、材质响应和轮廓是否符合场景样板；不因资源分辨率更高就直接替换。
 
 对应 `scripts/lib/survivor-environment.mjs`、`src/objects/Forest.ts`、`TerrainMesh.ts`、`TerrainArrayTexture.ts`、`terrainMaterial.ts` 和 `SunLight.ts`。源文件及哈希固定于 `assets/environment/sources.json`。
 

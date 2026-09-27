@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { BufferGeometry, Group, Mesh, MeshStandardMaterial, Texture, Vector2 } from "three";
+import { Bone, BufferGeometry, Group, Mesh, MeshStandardMaterial, Skeleton, SkinnedMesh, Texture, Vector2 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { ActorModels } from "../src/presentation/ActorModels";
 import { AssetLoader } from "../src/presentation/AssetLoader";
@@ -51,6 +51,9 @@ test("a stalled GLTF decoder does not retain completed assets after cancellation
     for (const dispose of textures) expect(dispose).toHaveBeenCalledTimes(1);
     const geometry = new BufferGeometry(), material = new MeshStandardMaterial(), released = vi.fn();
     geometry.addEventListener("dispose", released); material.addEventListener("dispose", released);
-    finish({ scene: new Group().add(new Mesh(geometry, material)) } as never);
+    const skeleton = new Skeleton([new Bone()]), skin = new SkinnedMesh(geometry, material), disposeSkeleton = vi.spyOn(skeleton, "dispose");
+    skin.bind(skeleton);
+    finish({ scene: new Group().add(skin) } as never);
     await Promise.resolve(); expect(released).toHaveBeenCalledTimes(2);
+    expect(disposeSkeleton).toHaveBeenCalledTimes(1);
 });

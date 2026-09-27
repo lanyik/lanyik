@@ -1,8 +1,9 @@
 import { combatWorker, enterWilds, inspectCombatWorker } from "../helpers/browserCombat";
 import { isBrowserConsoleFailure } from "../helpers/browserConsole";
 import { expect, test } from "@playwright/test";
+import type { Group, SkinnedMesh } from "three";
 
-test("plays with baked actors, independent character/bag windows and complete keyboard HUD", async ({ page }) => {
+test("plays with skeletal hero and instanced enemies, independent character/bag windows and complete keyboard HUD", async ({ page }) => {
     // This assembled UI journey includes several full-resolution software-rendered captures.
     test.setTimeout(300_000);
     const errors: string[] = [];
@@ -47,12 +48,13 @@ test("plays with baked actors, independent character/bag windows and complete ke
     await expect.poll(async () => Number(await page.getByTestId("elapsed-time").getAttribute("data-tick"))).toBeGreaterThan(tickBefore + 10);
     const pose = await page.evaluate(() => {
         const session = window.survivorApplication!.session as unknown as {
-            view: { layer: { actors: { hero: { children: { morphTargetInfluences: number[] }[] }; enemies: unknown[][] } } }
+            view: { layer: { actors: { hero: Group; enemies: unknown[][] } } }
         };
         const actors = session.view.layer.actors;
-        return { weights: actors.hero.children[0].morphTargetInfluences, primitives: actors.enemies.map(pool => pool.length) };
+        const hero = actors.hero.getObjectByName("Ranger") as SkinnedMesh;
+        return { bones: hero.skeleton.bones.length, finite: hero.skeleton.boneMatrices?.every(Number.isFinite) === true, primitives: actors.enemies.map(pool => pool.length) };
     });
-    expect(pose.weights.reduce((sum, value) => sum + value, 0)).toBeCloseTo(1);
+    expect(pose.bones).toBe(130); expect(pose.finite).toBe(true);
     expect(pose.primitives).toEqual([1, 1, 1, 1, 1]);
     await page.keyboard.up("KeyW");
     await page.keyboard.press("KeyP");

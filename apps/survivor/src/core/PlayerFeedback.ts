@@ -10,4 +10,5 @@ export class PlayerFeedback {
     public castPhase = 0;
     public castProgress = 0;
     public castHeading = 0;
+    public castLocksMovement = false;
 }

@@ -208,6 +208,7 @@
     "license": "CC0-1.0",
     "sha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
     "bytes": 7618436,
+    "heroPlayback": "Retargeted 30 Hz skeletal clips; separate locomotion and upper-body layers; no horizontal root motion",
     "heroClips": [
       "Idle_Loop",
       "Jog_Fwd_Loop",

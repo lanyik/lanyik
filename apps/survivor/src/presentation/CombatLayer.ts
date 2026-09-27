@@ -107,7 +107,6 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly statusEffects = new ActorStatusEffects();
     private damageNumbers?: DamageNumbers;
     private readonly hand = new Vector3();
-    private presentationTime = -1;
     private readonly experience: InstancedMesh;
     private readonly telegraphs: InstancedMesh;
     private readonly chargeWarnings: InstancedMesh;
@@ -233,13 +232,9 @@ export class CombatLayer implements WorldRenderLayer {
         this.player.position.set(0, this.height(playerX, playerZ), 0);
         this.groundPlayer.position.set(0, 0, 0);
         this.groundProjection.setCenter(playerX, playerZ, this.host.tileSize);
-        const dt = this.presentationTime < 0 ? 1 : Math.max(0, state.player.animationTime - this.presentationTime);
-        this.presentationTime = state.player.animationTime;
         const statusTick = Math.round(state.player.animationTime * GAME_CONFIG.timing.simulationHz);
         const playerFrozen = status.frozenUntil[state.player.entitySlot] > statusTick;
-        const heading = this.actors.animateHero(state.player, timestampMs, this.presentationActive, playerFrozen);
-        const turn = heading - this.playerBody.rotation.y;
-        this.playerBody.rotation.y += Math.atan2(Math.sin(turn), Math.cos(turn)) * (1 - Math.exp(-24 * dt));
+        this.playerBody.rotation.y = this.actors.animateHero(state.player, timestampMs, this.presentationActive, playerFrozen);
         this.playerBody.visible = state.player.gameOver || state.player.dashing || !state.player.invulnerable || Math.floor(state.player.animationTime * 1000 / 70) % 2 === 0;
         this.shield.visible = !state.player.gameOver && (state.player.shieldReady || state.player.ward > 0);
         this.shield.scale.setScalar(state.player.ward > 0 ? 1.6 : 1);
@@ -376,7 +371,7 @@ export class CombatLayer implements WorldRenderLayer {
         if (!active) this.actors?.suspendHero();
     }
     public reset(): void {
-        this.actors?.reset(); this.presentationTime = -1; this.enemyEffects.reset(); this.statusEffects.reset();
+        this.actors?.reset(); this.enemyEffects.reset(); this.statusEffects.reset();
         this.damageNumbers?.reset();
         this.root.visible = this.groundProjection.root.visible = false;
         this.projectiles.count = this.experience.count = 0;

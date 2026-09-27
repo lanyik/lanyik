@@ -90,7 +90,8 @@ test("renders non-looping cast poses, telegraphs and hostile projectiles from fi
     expect(melee.radius).toBeCloseTo(melee.reach);
     await page.screenshot({ path: testInfo.outputPath("melee-windup.png") });
     const manifest = await (await page.request.get("/actors/manifest.json")).json();
-    expect(manifest.actors.filter((actor: { name: string }) => !["RiftSpider", "StoneSentinel"].includes(actor.name))
+    expect(manifest.actors.find((actor: { name: string }) => actor.name === "Ranger")).toMatchObject({ animation: "skeletal", bones: 130, heroClips: { idle: { duration: 2.5, loop: true } } });
+    expect(manifest.actors.filter((actor: { name: string }) => !["Ranger", "RiftSpider", "StoneSentinel"].includes(actor.name))
         .every((actor: { idle: string; idleCycle: number }) => actor.idle === "Idle_Loop" && actor.idleCycle === 2.5)).toBe(true);
     for (const name of ["RiftSpider", "StoneSentinel"]) {
         expect(manifest.actors.find((actor: { name: string }) => actor.name === name)).toMatchObject({ idle: "Breathing", idleCycle: 3, frames: 20 });

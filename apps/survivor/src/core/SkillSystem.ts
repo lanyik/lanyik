@@ -114,9 +114,10 @@ export class SkillSystem {
     public get mobile(): boolean { return !!this.pending && mobileCast(this.pending.id); }
     public writePresentation(output: PlayerFeedback, tick: number): void {
         const cast = this.pending;
-        output.castPhase = 0; output.castProgress = 0;
+        output.castPhase = 0; output.castProgress = 0; output.castLocksMovement = false;
         if (!cast || cast.id === "dash" || tick >= cast.endsAt) return;
         output.castHeading = cast.heading;
+        output.castLocksMovement = this.holding(tick) && !this.mobile;
         const winding = tick < cast.releaseAt, channeling = !winding && tick < cast.channelUntil;
         output.castPhase = winding ? 1 : channeling ? 2 : 3;
         const start = winding ? cast.started : channeling ? cast.releaseAt : cast.channelUntil;

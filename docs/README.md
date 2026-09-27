@@ -22,6 +22,7 @@ flowchart TB
     app --> saves[角色与永久进度]
     app --> explore[探索与家园]
     app --> view[界面与资产]
+    view --> visual[写实暗黑视觉改造：项目设计]
     index --> pkg[地图库包边界]
     pkg --> infra[基础设施：生命周期 / 租约 / 预算]
     infra --> stream[渲染流送]
@@ -54,6 +55,7 @@ flowchart TB
 | 移动、遮挡、出生与可达性 | [地形通行](game/terrain-navigation.md) | [CombatTerrain](../apps/survivor/src/core/CombatTerrain.ts)、[SurfaceMotion](../apps/survivor/src/core/SurfaceMotion.ts) |
 | 窗口、交互、HUD 与可访问性 | [界面设计](game/interface-design.md)、[UI 性能](game/ui-performance.md) | [presentation](../apps/survivor/src/presentation/) |
 | 模型、动作、声音与资源处理 | [角色资产](game/actor-assets.md)、[环境资产](game/environment-assets.md) | [assets](../apps/survivor/assets/)、[构建脚本](../scripts/) |
+| 写实暗黑美术方向、世界与游戏 UI 改造 | [视觉改造项目](game/visual-overhaul.md) | [presentation](../apps/survivor/src/presentation/)、[rendering](../src/rendering/)；阶段状态见方案 |
 | 项目进度与尚未完成的能力 | [开发重点](game/development-priorities.md) | 对照以上领域；计划不代表实现 |
 
 <a id="foundation"></a>

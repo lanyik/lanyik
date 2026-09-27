@@ -1,61 +1,81 @@
 import type { PlayerRenderState } from "../core/CombatState";
 import { GAME_CONFIG } from "../core/GameConfig";
-import { HERO_CLIPS, HERO_POSES } from "./HeroClips.generated";
+import { HERO_CLIPS } from "./HeroClips.generated";
 
-type Clip = keyof typeof HERO_CLIPS;
+export type HeroClip = keyof typeof HERO_CLIPS;
+const angle = (value: number) => Math.atan2(Math.sin(value), Math.cos(value));
 
-/** One hero, independent of the fixed enemy pose stride. Only death uses presentation time. */
+/** Authoritative action phases, independent locomotion and aim. Only death uses wall time. */
 export class HeroPose {
-    private readonly previous = new Float32Array(HERO_POSES);
-    private readonly from = new Float32Array(HERO_POSES);
-    private clip: Clip | undefined;
-    private changedAt = 0;
-    private deathTime = 0;
-    private previousFrame = -1;
-    private frozenAt: number | undefined;
+    public lower: HeroClip = "idle";
+    public upper: HeroClip = "idle";
+    public lowerPhase = 0;
+    public upperPhase = 0;
+    public upperSequence = -1;
     public heading = 0;
-    public get buffers(): readonly ArrayBufferView[] { return [this.previous, this.from]; }
-    public reset(): void { this.clip = undefined; this.deathTime = 0; this.previousFrame = -1; this.frozenAt = undefined; }
+    public twist = 0;
+    public reverse = false;
+    public clock = 0;
+    private previousSimulation = -1;
+    private previousFrame = -1;
+    private deathTime = 0;
+    private movingPhase = 0;
+    private dying = false;
+
+    public reset(): void {
+        this.previousSimulation = this.previousFrame = -1;
+        this.deathTime = this.movingPhase = this.twist = 0;
+        this.reverse = this.dying = false;
+    }
     public suspend(): void { this.previousFrame = -1; }
 
-    public write(weights: number[], player: PlayerRenderState, timestampMs: number, active: boolean, frozen: boolean): void {
-        const dt = this.previousFrame < 0 || !active ? 0 : Math.max(0, (timestampMs - this.previousFrame) / 1000);
-        this.previousFrame = active ? timestampMs : -1;
-        const now = player.animationTime, feedback = player.feedback;
-        if (frozen) this.frozenAt ??= now; else this.frozenAt = undefined;
-        let clip: Clip, phase: number, seconds = this.frozenAt ?? now;
-        this.heading = player.heading;
+    public write(player: PlayerRenderState, timestampMs: number, active: boolean, frozen: boolean): boolean {
+        const fresh = this.previousSimulation < 0, now = player.animationTime;
+        const dt = fresh ? 0 : Math.max(0, now - this.previousSimulation);
+        const presentationDelta = this.previousFrame < 0 || !active ? 0 : Math.max(0, (timestampMs - this.previousFrame) / 1000);
+        this.previousFrame = active ? timestampMs : -1; this.previousSimulation = now;
+        if (frozen && !fresh && !player.gameOver) return false;
+        this.clock = now;
+        const feedback = player.feedback, dx = player.x - player.previousX, dz = player.z - player.previousZ;
+        const speed = Math.hypot(dx, dz) * GAME_CONFIG.timing.simulationHz;
+        const moving = !frozen && speed > .006;
+        const movementHeading = moving ? Math.atan2(dx, dz) : player.heading;
+        let aim = movementHeading, aiming = false, fullBody = false;
+        this.lower = moving ? "move" : "idle";
+        if (moving) this.movingPhase += dt * speed / (2.8 * HERO_CLIPS.move.duration);
+        this.lowerPhase = moving ? this.movingPhase : now / HERO_CLIPS.idle.duration;
+        this.upper = this.lower; this.upperPhase = this.lowerPhase; this.upperSequence = -1;
         if (player.gameOver) {
-            if (this.clip === "death") this.deathTime = Math.min(HERO_CLIPS.death.duration, this.deathTime + dt);
-            clip = "death"; phase = this.deathTime / HERO_CLIPS.death.duration; seconds = now + this.deathTime;
+            if (this.dying) this.deathTime = Math.min(HERO_CLIPS.death.duration, this.deathTime + presentationDelta);
+            this.dying = true; this.clock += this.deathTime;
+            this.upper = "death"; this.upperPhase = this.deathTime / HERO_CLIPS.death.duration;
+            fullBody = true; aim = fresh ? player.heading : this.heading;
         } else {
-            const hurtAge = seconds - feedback.hurtTick / GAME_CONFIG.timing.simulationHz;
-            const attackAge = seconds - feedback.attackTick / GAME_CONFIG.timing.simulationHz;
-            if (feedback.hurtTick >= 0 && hurtAge >= 0 && hurtAge < HERO_CLIPS.hurt.duration) {
-                clip = "hurt"; phase = hurtAge / HERO_CLIPS.hurt.duration;
-            } else if (feedback.castPhase) {
-                this.heading = feedback.castHeading;
-                clip = feedback.castPhase === 1 ? "windup" : feedback.castPhase === 2 ? "channel" : feedback.castProgress < .4 ? "attack" : "recovery";
-                phase = clip === "channel" ? seconds / HERO_CLIPS.channel.duration : clip === "attack" ? feedback.castProgress / .4
-                    : clip === "recovery" ? (feedback.castProgress - .4) / .6 : feedback.castProgress;
+            const hurtAge = now - feedback.hurtTick / GAME_CONFIG.timing.simulationHz;
+            const attackAge = now - feedback.attackTick / GAME_CONFIG.timing.simulationHz;
+            if (feedback.castPhase) {
+                aim = feedback.castHeading; aiming = true; fullBody = feedback.castLocksMovement;
+                this.upper = feedback.castPhase === 1 ? "windup" : feedback.castPhase === 2 ? "channel" : feedback.castProgress < .4 ? "attack" : "recovery";
+                this.upperPhase = this.upper === "channel" ? now / HERO_CLIPS.channel.duration : this.upper === "attack" ? feedback.castProgress / .4
+                    : this.upper === "recovery" ? (feedback.castProgress - .4) / .6 : feedback.castProgress;
             } else if (feedback.attackTick >= 0 && attackAge >= 0 && attackAge < feedback.attackDuration) {
-                clip = "attack"; phase = attackAge / feedback.attackDuration; this.heading = feedback.attackHeading;
-            } else {
-                clip = !frozen && Math.hypot(player.x - player.previousX, player.z - player.previousZ) > .0001 ? "move" : "idle";
-                phase = seconds / HERO_CLIPS[clip].duration;
+                this.upper = "attack"; this.upperPhase = attackAge / feedback.attackDuration;
+                this.upperSequence = feedback.attackTick; aim = feedback.attackHeading; aiming = true;
+            }
+            if (feedback.hurtTick >= 0 && hurtAge >= 0 && hurtAge < HERO_CLIPS.hurt.duration) {
+                this.upper = "hurt"; this.upperPhase = hurtAge / HERO_CLIPS.hurt.duration; this.upperSequence = feedback.hurtTick;
             }
         }
-        const fresh = this.clip === undefined;
-        if (this.clip !== clip) { this.from.set(this.previous); this.clip = clip; this.changedAt = seconds; }
-        const spec = HERO_CLIPS[clip], progress = spec.loop ? ((phase % 1) + 1) % 1 : Math.max(0, Math.min(1, phase));
-        const frame = progress * (spec.loop ? spec.count : spec.count - 1), index = Math.floor(frame), fraction = frame - index;
-        weights.fill(0);
-        weights[spec.offset + index] = 1 - fraction;
-        weights[spec.offset + (spec.loop ? (index + 1) % spec.count : Math.min(spec.count - 1, index + 1))] += fraction;
-        const t = fresh ? 1 : Math.max(0, Math.min(1, (seconds - this.changedAt) / .1)), mix = t * t * (3 - 2 * t);
-        for (let i = 0; i < HERO_POSES; i++) {
-            weights[i] = this.from[i] * (1 - mix) + weights[i] * mix;
-            this.previous[i] = weights[i];
-        }
+        if (fullBody) { this.lower = this.upper; this.lowerPhase = this.upperPhase; }
+        // Back-facing shots use a backwards stride, never an anatomically impossible 180° waist twist.
+        const difference = Math.abs(angle(aim - movementHeading));
+        this.reverse = moving && aiming && !fullBody && difference > (this.reverse ? Math.PI * .45 : Math.PI * .55);
+        const heading = fullBody || !moving && aiming ? aim : movementHeading + (this.reverse ? Math.PI : 0);
+        const turnDelta = player.gameOver ? presentationDelta : dt;
+        this.heading = fresh ? heading : this.heading + angle(heading - this.heading) * (1 - Math.exp(-24 * turnDelta));
+        if (this.reverse) this.lowerPhase = -this.lowerPhase;
+        const twist = aiming && moving && !fullBody ? Math.max(-Math.PI / 2, Math.min(Math.PI / 2, angle(aim - this.heading))) : 0;
+        this.twist = fresh ? twist : this.twist + (twist - this.twist) * (1 - Math.exp(-30 * turnDelta));
+        return true;
     }
 }
