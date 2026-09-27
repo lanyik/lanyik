@@ -99,6 +99,7 @@ flowchart TB
 - [CPU 尾延迟记录](game/measurements/performance-tail-latency.json)、[首轮优化对照](game/measurements/performance-tail-optimization.json)：逐轮分位、峰值序号、超预算统计、独立阶段/GC 诊断及旧版回放对照；复现命令见测试策略，不作为浏览器帧率证明。
 - [玩法区块分批记录](game/measurements/regional-streaming.json)：提前准备前后 CPU 对照、异步切片/等待与确定性回放，保留 P99 和均值代价及冷启动限制。
 - [怪物绕障与占位对照](game/measurements/enemy-navigation.json)：凹墙到达、围攻重叠与同场景 CPU 成本；行为改善与计算开销分别报告，不代表浏览器帧率。
+- [B1 光照前后对照](game/measurements/visual-lighting.json)：原生 1440p 固定检查点、真实移动窗口、逐帧 CPU/GPU 与资源账本；单机短样本，不代表完整游戏帧率验收。
 
 <a id="assets"></a>
 

@@ -5339,6 +5339,7 @@ void main() {
     const pixels = new Uint8Array(size * size * layers * 4);
     const texture = new three.DataArrayTexture(pixels, size, size, layers);
     texture.name = `terrain-${channel}-layers`;
+    texture.colorSpace = channel === "color" ? three.SRGBColorSpace : three.NoColorSpace;
     texture.generateMipmaps = true;
     texture.minFilter = three.LinearMipmapLinearFilter;
     texture.magFilter = three.LinearFilter;
@@ -5392,6 +5393,8 @@ void main() {
     });
     return { texture, ready };
   }
+  var SUN_COLOR = 16774108;
+  var SUN_INTENSITY = 1.65;
   function createSunDirection() {
     return new three.Vector3().setFromSphericalCoords(1, Math.PI / 2 - 24 * Math.PI / 180, 205 * Math.PI / 180);
   }
@@ -5846,8 +5849,31 @@ vec3 applyGroundProjection(vec3 color, vec2 worldXZ) {
 }
 `;
 
+  // src/shaders/worldLighting.ts
+  var WORLD_LIGHTING_HEADER = `
+uniform sampler2D worldEnvironment;
+uniform mat4 worldLightingCamera;
+uniform vec3 worldSunColor;
+uniform vec3 worldSunDirection;
+#if __VERSION__ >= 300
+#define texture2D texture
+#endif
+#define ENVMAP_TYPE_CUBE_UV
+#include <cube_uv_reflection_fragment>
+
+vec3 worldSky(vec3 viewDirection, float roughness) {
+    return textureCubeUV(worldEnvironment, mat3(worldLightingCamera) * viewDirection, roughness).rgb;
+}
+vec3 worldDiffuse(vec3 albedo, vec3 viewNormal, float occlusion) {
+    vec3 worldNormal = normalize(mat3(worldLightingCamera) * viewNormal);
+    float nl = max(dot(worldNormal, worldSunDirection), 0.0);
+    return albedo * (worldSky(viewNormal, 1.0) * occlusion + worldSunColor * (nl / 3.141592653589793));
+}
+`;
+
   // src/shaders/terrainMaterial.ts
   var TERRAIN_MATERIAL_SAMPLING = `
+${WORLD_LIGHTING_HEADER}
 uniform float rockAtlasIndex;
 uniform float grassAtlasIndex;
 uniform float soilAtlasIndex;
@@ -5884,12 +5910,10 @@ vec3 lightTerrainSurface(vec3 albedo, vec4 surface) {
     float geometry = nl * nv / max(.001, (nl * (1.0 - k) + k) * (nv * (1.0 - k) + k));
     float fresnel = .04 + .96 * pow(1.0 - vh, 5.0);
     float specular = distribution * geometry * fresnel / max(.001, 4.0 * nl * nv);
-    vec3 linear = pow(max(albedo, vec3(0.0)), vec3(2.2));
-    vec3 ambient = vec3(.28, .34, .40) * mix(.45, 1.0, surface.w);
-    vec3 lit = linear * ambient + (linear * .96 + vec3(specular)) * vec3(1.0, .91, .77) * nl * 1.1;
-    // The custom terrain pass writes display-referred colors, as do its water,
-    // fog and projection passes. Standard-material trees use renderer ACES.
-    return pow(clamp(lit, 0.0, 1.0), vec3(1.0 / 2.2));
+    vec3 reflection = normalize(mix(reflect(-v, n), n, pow(roughness, 4.0)));
+    float environmentFresnel = .04 + .96 * pow(1.0 - nv, 5.0);
+    return worldDiffuse(albedo * .96, n, surface.w) + worldSunColor * specular * nl
+        + worldSky(reflection, roughness) * environmentFresnel * surface.w;
 }
 #endif
 
@@ -6044,8 +6068,6 @@ in vec3 vNeighborsKindB; // (NW,N,NE)
 in vec4 vLandform;       // final elevation, generated ridge, valley, roughness
 in vec4 vBiomeWeights;   // temperate, dry, cold, alpine
 
-const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
-const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -6520,7 +6542,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 #ifdef TERRAIN_SURFACE_MAP
         : texColor.rgb;
 #else
-        : lightAmbient * texColor.rgb + lambertian * lightDiffuse * texColor.rgb;
+        : worldDiffuse(texColor.rgb, normal, 1.0);
 #endif
 
     // Explored (previously seen, currently outside every unit's view range):
@@ -6726,7 +6748,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 #ifdef TERRAIN_SURFACE_MAP
         : texColor.rgb;
 #else
-        : texColor.rgb * (0.55 + 0.55 * lambertian);
+        : worldDiffuse(texColor.rgb, normal, 1.0);
 #endif
     if (vFogState < 1.5) color *= fogDarkenFactor;
     terrainColor = vec4(color, 1.0);
@@ -6965,6 +6987,7 @@ void main() {
   var WATER_FRAGMENT_SHADER = `
 precision highp float;
 out vec4 waterColor;
+${WORLD_LIGHTING_HEADER}
 
 ${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
@@ -7033,10 +7056,6 @@ in float vShoreT;
 in float vFogState;
 in vec2 vFogUV;
 
-const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
-const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
-const vec3 sparkleColor = vec3(1.0, 0.97, 0.85);
-const vec3 skyTint = vec3(0.85, 0.95, 1.0);
 
 // Picks the single strongest edge among the 6 whose neighbor both passes the
 // one-directional priority gate and is itself water (a sea tile bordering a
@@ -7192,18 +7211,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     vec3 light = normalize(normalMatrix * lightDir);
     vec3 viewDir = normalize(normalMatrix * (chunkCameraPosition - vWorldPos));
 
-    float ndotl = max(dot(normal, light), 0.0);
-    vec3 color = lightAmbient * texColor.rgb + ndotl * lightDiffuse * texColor.rgb;
+    vec3 color = worldDiffuse(texColor.rgb, normal, 1.0);
 
     // sun glitter: sharp specular highlight off the wave-perturbed normal
     vec3 halfDir = normalize(light + viewDir);
     float spec = pow(max(dot(normal, halfDir), 0.0), 60.0);
-    color += spec * sparkleColor * sparkleIntensity;
+    color += spec * worldSunColor * sparkleIntensity;
 
-    // cheap fresnel: brighten towards a fixed sky tint at grazing angles,
-    // instead of a real planar reflection render target.
+    // The same prefiltered sky as model materials; no planar reflection pass.
     float fresnel = pow(1.0 - clamp(dot(normal, viewDir), 0.0, 1.0), 3.0);
-    color = mix(color, skyTint, fresnel * 0.5 * fresnelIntensity);
+    color = mix(color, worldSky(reflect(-viewDir, normal), .2), fresnel * 0.5 * fresnelIntensity);
 
     // coastal foam waves - only fragments on a land-adjacent tile have a
     // shore field > 0, so open sea skips the noise work entirely. Keyed to
@@ -7233,6 +7250,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
   var WATER_FAST_FRAGMENT_SHADER = `
 precision highp float;
 out vec4 waterColor;
+${WORLD_LIGHTING_HEADER}
 
 ${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
@@ -7244,8 +7262,6 @@ uniform float showGrid;
 uniform vec3 gridColor;
 uniform float gridWidth;
 uniform float gridOpacity;
-uniform vec3 lightDir;
-uniform mat3 normalMatrix;
 uniform vec3 waterColorDeep;
 uniform vec3 waterColorShallow;
 
@@ -7267,8 +7283,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     vec3 fastDeepColor = mix(waterColorDeep, waterColorShallow, 0.45);
     vec3 color = vPriority < 0.5 ? fastDeepColor : waterColorShallow;
     color = mix(color, mix(waterColorShallow, vec3(1.0), 0.42), smoothstep(0.72, 1.0, vShoreT));
-    float lambertian = max(dot(normalize(normalMatrix * lightDir), normalize(vNormal)), 0.0);
-    color *= 0.55 + 0.55 * lambertian;
+    color = worldDiffuse(color, normalize(vNormal), 1.0);
     if (vFogState < 1.5) color *= fogDarkenFactor;
     waterColor = vec4(color, 1.0);
 
@@ -7529,6 +7544,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     loadFogTexture() {
       const loader = new three.TextureLoader().setPath(this.options.texturesBaseUrl);
       const texture = loader.load(this.options.fogTexture ?? "war-fog.jpg");
+      texture.colorSpace = three.SRGBColorSpace;
       texture.wrapS = texture.wrapT = three.RepeatWrapping;
       return texture;
     }
@@ -7637,7 +7653,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     prepareChunkCoordinates(mesh, origin) {
       const coordinates = new WorldMaterialCoordinates(this.options.size, this.options.resourceAccount);
       const owner = this;
-      mesh.onBeforeRender = function(_renderer, _scene, camera, _geometry, material) {
+      mesh.onBeforeRender = function(_renderer, _scene, camera, _geometry2, material) {
         const shader = material;
         const patternOffset = shader.uniforms.worldOffset.value;
         coordinates.apply(shader, origin.x + patternOffset.x, origin.y + patternOffset.y);
@@ -9601,6 +9617,7 @@ ${HORIZON_FOG_VERTEX_VARYING}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
+uniform mat3 normalMatrix;
 
 uniform float uTime;
 uniform float windStrength;
@@ -9624,6 +9641,7 @@ attribute float groundHeight; // authoritative CPU surface height at the blade r
 varying float vHeightFactor;
 varying float vShade;
 varying float vFogState;
+varying vec3 vBladeNormal;
 
 
 void main() {
@@ -9651,12 +9669,14 @@ void main() {
     vHeightFactor = heightFactor;
     vShade = shade;
     vFogState = fogState;
+    vBladeNormal = normalize(normalMatrix * vec3(-s, .35, c));
 }
 `;
 
   // src/shaders/grass.fragment.ts
   var GRASS_FRAGMENT_SHADER = `
 precision highp float;
+${WORLD_LIGHTING_HEADER}
 
 ${HORIZON_FOG_FRAGMENT_HEADER}
 
@@ -9667,12 +9687,14 @@ uniform float fogDarkenFactor;
 varying float vHeightFactor;
 varying float vShade;
 varying float vFogState;
+varying vec3 vBladeNormal;
 
 void main() {
     // Unseen: no feature should show at all under the war-fog tile.
     if (vFogState < 0.5) discard;
 
-    vec3 color = mix(colorBase, colorTip, vHeightFactor) * vShade;
+    vec3 normal = normalize(vBladeNormal) * (gl_FrontFacing ? 1.0 : -1.0);
+    vec3 color = worldDiffuse(mix(colorBase, colorTip, vHeightFactor) * vShade, normal, 1.0);
 
     // Explored: keep the blade visible, just darker (mirrors terrain.fragment.ts).
     if (vFogState < 1.5) color *= fogDarkenFactor;
@@ -9982,7 +10004,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       const chunk = new three.Mesh(geometry, resources.material);
       const origin = getWorldChunkOrigin(chunkKey, size);
       chunk.position.set(origin.x, 0, origin.y);
-      chunk.onBeforeRender = (_renderer, _scene, _camera, _geometry, currentMaterial) => {
+      chunk.onBeforeRender = (_renderer, _scene, _camera2, _geometry2, currentMaterial) => {
         const shader = currentMaterial;
         const patternOffset = shader.uniforms.worldOffset.value;
         shader.uniforms.windOriginPhase.value = phaseModulo((origin.x + patternOffset.x + origin.y + patternOffset.y) * 0.015);
@@ -16130,16 +16152,23 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
   };
 
   // src/rendering/Skybox.ts
+  var SKY_BYTES = 6 * (256 * 256 * 4 - 1) / 3 * 8;
+  var ENVIRONMENT_BYTES = 768 * 1024 * 8;
   var Skybox = class {
-    constructor() {
+    constructor(resources) {
+      this.resources = resources;
       this.target = new three.WebGLCubeRenderTarget(256, { type: three.HalfFloatType, depthBuffer: false, generateMipmaps: true, minFilter: three.LinearMipmapLinearFilter });
       this.scene = new three.Scene();
       this.sky = new Sky();
       this.camera = new three.CubeCamera(1, 2e3, this.target);
+      resources.acquireRequired("sky-geometry", {}, true, collectGeometryAllocations([this.sky.geometry]));
+      resources.acquireRequired("sky", { gpuBytes: SKY_BYTES + ENVIRONMENT_BYTES, textureBytes: SKY_BYTES + ENVIRONMENT_BYTES }, true);
       this.target.texture.name = "procedural-daylight-skybox";
       this.sky.scale.setScalar(1e3);
       this.sky.frustumCulled = false;
       const uniforms = this.sky.material.uniforms;
+      uniforms.radianceScale = { value: 0.25 };
+      this.sky.material.fragmentShader = "uniform float radianceScale;\n" + this.sky.material.fragmentShader.replace("gl_FragColor = vec4( texColor, 1.0 );", "gl_FragColor = vec4( texColor * radianceScale, 1.0 );");
       uniforms.turbidity.value = 2.2;
       uniforms.rayleigh.value = 1.7;
       uniforms.mieCoefficient.value = 2e-3;
@@ -16150,22 +16179,46 @@ ${HORIZON_FOG_FRAGMENT_APPLY}
       uniforms.cloudElevation.value = 0.35;
       this.scene.add(this.sky);
     }
+    get environment() {
+      if (!this.filtered) throw new Error("Sky environment has not been baked");
+      return this.filtered;
+    }
     bake(renderer) {
       const target = renderer.getRenderTarget(), face = renderer.getActiveCubeFace(), mip = renderer.getActiveMipmapLevel();
       const toneMapping = renderer.toneMapping, xr = renderer.xr.enabled;
+      let pmrem;
+      const temporaryBytes = ENVIRONMENT_BYTES * (this.filtered ? 2 : 1);
+      this.resources.acquireRequired("sky-bake", { gpuBytes: temporaryBytes, textureBytes: temporaryBytes }, true);
       try {
         renderer.toneMapping = three.NoToneMapping;
         this.camera.update(renderer, this.scene);
+        pmrem = new three.PMREMGenerator(renderer);
+        const filtered = pmrem.fromCubemap(this.target.texture);
+        this.filtered?.dispose();
+        this.filtered = filtered;
+        this.filtered.texture.name = "sky-prefiltered-environment";
       } finally {
+        pmrem?.dispose();
+        this.resources.release("sky-bake");
         renderer.toneMapping = toneMapping;
         renderer.xr.enabled = xr;
         renderer.setRenderTarget(target, face, mip);
       }
     }
-    dispose() {
+    handleContextLost() {
       this.target.dispose();
+      this.filtered?.dispose();
+      this.filtered = void 0;
       this.sky.geometry.dispose();
       this.sky.material.dispose();
+    }
+    dispose() {
+      this.target.dispose();
+      this.filtered?.dispose();
+      this.sky.geometry.dispose();
+      this.sky.material.dispose();
+      this.resources.release("sky");
+      this.resources.release("sky-geometry");
     }
   };
   var HEADER = `
@@ -16173,17 +16226,12 @@ precision highp float;
 uniform highp samplerCube skyFogMap;
 uniform mat4 skyFogCamera;
 uniform vec2 skyFogCenter;
-uniform float skyFogExposure;
 vec3 skyFogColor(vec3 direction) {
     #if __VERSION__ >= 300
-        vec3 c = texture(skyFogMap, normalize(direction)).rgb;
+        return texture(skyFogMap, normalize(direction)).rgb;
     #else
-        vec3 c = textureCube(skyFogMap, normalize(direction)).rgb;
+        return textureCube(skyFogMap, normalize(direction)).rgb;
     #endif
-    c = mat3(.59719,.07600,.02840, .35458,.90834,.13383, .04823,.01566,.83777) * (c * skyFogExposure / .6);
-    c = (c * (c + .0245786) - .000090537) / (c * (.983729 * c + .4329510) + .238081);
-    c = clamp(mat3(1.60475,-.10208,-.00327, -.53108,1.10813,-.07276, -.07367,-.00605,1.07602) * c, 0., 1.);
-    return mix(c * 12.92, 1.055 * pow(c, vec3(.41666)) - .055, step(vec3(.0031308), c));
 }
 vec3 skyFogBlend(vec3 color, vec3 viewPoint, float nearDistance, float farDistance) {
     vec3 worldPoint = (skyFogCamera * vec4(viewPoint, 1.)).xyz;
@@ -16194,61 +16242,34 @@ vec3 skyFogBlend(vec3 color, vec3 viewPoint, float nearDistance, float farDistan
 `;
   var SkyFog = class {
     constructor(sky, camera) {
-      this.materials = /* @__PURE__ */ new Map();
-      this.visit = (object) => {
-        const material = object.material;
-        if (Array.isArray(material)) {
-          for (const item of material) this.install(item);
-        } else if (material) this.install(material);
-      };
       this.uniforms = {
         skyFogMap: { value: sky },
         skyFogCamera: { value: camera.matrixWorld },
-        skyFogCenter: { value: new three.Vector2() },
-        skyFogExposure: { value: 0.65 }
+        skyFogCenter: { value: new three.Vector2() }
       };
     }
-    prepare(root, focus, exposure) {
+    prepare(focus) {
       this.uniforms.skyFogCenter.value.set(focus.x, focus.z);
-      this.uniforms.skyFogExposure.value = exposure;
-      root.traverseVisible(this.visit);
     }
-    install(material) {
-      if (this.materials.has(material)) return;
+    accepts(material) {
+      return material instanceof three.RawShaderMaterial ? material.fragmentShader.includes("vec3 applyHorizonFog(") : !!material.fog;
+    }
+    apply(shader, material) {
       const raw = material instanceof three.RawShaderMaterial;
-      if (raw ? !material.fragmentShader.includes("vec3 applyHorizonFog(") : !material.fog) return;
-      const compile = material.onBeforeCompile, key = material.customProgramCacheKey, originalKey = key.call(material);
-      material.onBeforeCompile = (shader, renderer) => {
-        compile.call(material, shader, renderer);
-        Object.assign(shader.uniforms, this.uniforms);
-        const glsl3 = raw && material.glslVersion === "300 es";
-        shader.vertexShader = `${glsl3 ? "out" : "varying"} highp vec3 vSkyFogPoint;
+      Object.assign(shader.uniforms, this.uniforms);
+      const glsl3 = raw && material.glslVersion === "300 es";
+      shader.vertexShader = `${glsl3 ? "out" : "varying"} highp vec3 vSkyFogPoint;
 ` + shader.vertexShader;
-        shader.fragmentShader = `${glsl3 ? "in" : "varying"} highp vec3 vSkyFogPoint;
+      shader.fragmentShader = `${glsl3 ? "in" : "varying"} highp vec3 vSkyFogPoint;
 ${HEADER}
 ` + shader.fragmentShader;
-        if (raw) {
-          shader.vertexShader = shader.vertexShader.replace("vHorizonFogDepth = -mvPosition.z;", "vHorizonFogDepth = -mvPosition.z; vSkyFogPoint = mvPosition.xyz;");
-          shader.fragmentShader = shader.fragmentShader.replace("return mix(color, fogColor, fogFactor);", "return skyFogBlend(color, vSkyFogPoint, fogNear, fogFar);");
-        } else {
-          shader.vertexShader = shader.vertexShader.replace("#include <fog_vertex>", "#include <fog_vertex>\nvSkyFogPoint = mvPosition.xyz;");
-          shader.fragmentShader = shader.fragmentShader.replace("#include <fog_fragment>", "#ifdef USE_FOG\ngl_FragColor.rgb = skyFogBlend(gl_FragColor.rgb, vSkyFogPoint, fogNear, fogFar);\n#endif");
-        }
-      };
-      material.customProgramCacheKey = () => `${originalKey}:radial-sky-fog-v1`;
-      material.needsUpdate = true;
-      const release = () => {
-        material.removeEventListener("dispose", release);
-        this.materials.delete(material);
-        material.onBeforeCompile = compile;
-        material.customProgramCacheKey = key;
-        material.needsUpdate = true;
-      };
-      material.addEventListener("dispose", release);
-      this.materials.set(material, release);
-    }
-    dispose() {
-      for (const release of this.materials.values()) release();
+      if (raw) {
+        shader.vertexShader = shader.vertexShader.replace("vHorizonFogDepth = -mvPosition.z;", "vHorizonFogDepth = -mvPosition.z; vSkyFogPoint = mvPosition.xyz;");
+        shader.fragmentShader = shader.fragmentShader.replace("return mix(color, fogColor, fogFactor);", "return skyFogBlend(color, vSkyFogPoint, fogNear, fogFar);");
+      } else {
+        shader.vertexShader = shader.vertexShader.replace("#include <fog_vertex>", "#include <fog_vertex>\nvSkyFogPoint = mvPosition.xyz;");
+        shader.fragmentShader = shader.fragmentShader.replace("#include <fog_fragment>", "#ifdef USE_FOG\ngl_FragColor.rgb = skyFogBlend(gl_FragColor.rgb, vSkyFogPoint, fogNear, fogFar);\n#endif");
+      }
     }
   };
 
@@ -16419,11 +16440,364 @@ ${HEADER}
       this.lastSampleAt = void 0;
     }
   };
+  var Pass = class {
+    /**
+     * Constructs a new pass.
+     */
+    constructor() {
+      this.isPass = true;
+      this.enabled = true;
+      this.needsSwap = true;
+      this.clear = false;
+      this.renderToScreen = false;
+    }
+    /**
+     * Sets the size of the pass.
+     *
+     * @abstract
+     * @param {number} width - The width to set.
+     * @param {number} height - The height to set.
+     */
+    setSize() {
+    }
+    /**
+     * This method holds the render logic of a pass. It must be implemented in all derived classes.
+     *
+     * @abstract
+     * @param {WebGLRenderer} renderer - The renderer.
+     * @param {WebGLRenderTarget} writeBuffer - The write buffer. This buffer is intended as the rendering
+     * destination for the pass.
+     * @param {WebGLRenderTarget} readBuffer - The read buffer. The pass can access the result from the
+     * previous pass from this buffer.
+     * @param {number} deltaTime - The delta time in seconds.
+     * @param {boolean} maskActive - Whether masking is active or not.
+     */
+    render() {
+      console.error("THREE.Pass: .render() must be implemented in derived pass.");
+    }
+    /**
+     * Frees the GPU-related resources allocated by this instance. Call this
+     * method whenever the pass is no longer used in your app.
+     *
+     * @abstract
+     */
+    dispose() {
+    }
+  };
+  var _camera = new three.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  var FullscreenTriangleGeometry = class extends three.BufferGeometry {
+    constructor() {
+      super();
+      this.setAttribute("position", new three.Float32BufferAttribute([-1, 3, 0, -1, -1, 0, 3, -1, 0], 3));
+      this.setAttribute("uv", new three.Float32BufferAttribute([0, 2, 0, 0, 2, 0], 2));
+    }
+  };
+  var _geometry = new FullscreenTriangleGeometry();
+  var FullScreenQuad = class {
+    /**
+     * Constructs a new full screen quad.
+     *
+     * @param {?Material} material - The material to render te full screen quad with.
+     */
+    constructor(material) {
+      this._mesh = new three.Mesh(_geometry, material);
+    }
+    /**
+     * Frees the GPU-related resources allocated by this instance. Call this
+     * method whenever the instance is no longer used in your app.
+     */
+    dispose() {
+      this._mesh.geometry.dispose();
+    }
+    /**
+     * Renders the full screen quad.
+     *
+     * @param {WebGLRenderer} renderer - The renderer.
+     */
+    render(renderer) {
+      renderer.render(this._mesh, _camera);
+    }
+    /**
+     * The quad's material.
+     *
+     * @type {?Material}
+     */
+    get material() {
+      return this._mesh.material;
+    }
+    set material(value) {
+      this._mesh.material = value;
+    }
+  };
+
+  // node_modules/three/examples/jsm/shaders/OutputShader.js
+  var OutputShader = {
+    name: "OutputShader",
+    uniforms: {
+      "tDiffuse": { value: null },
+      "toneMappingExposure": { value: 1 }
+    },
+    vertexShader: (
+      /* glsl */
+      `
+		precision highp float;
+
+		uniform mat4 modelViewMatrix;
+		uniform mat4 projectionMatrix;
+
+		attribute vec3 position;
+		attribute vec2 uv;
+
+		varying vec2 vUv;
+
+		void main() {
+
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+		}`
+    ),
+    fragmentShader: (
+      /* glsl */
+      `
+
+		precision highp float;
+
+		uniform sampler2D tDiffuse;
+
+		#include <tonemapping_pars_fragment>
+		#include <colorspace_pars_fragment>
+
+		varying vec2 vUv;
+
+		void main() {
+
+			gl_FragColor = texture2D( tDiffuse, vUv );
+
+			// tone mapping
+
+			#ifdef LINEAR_TONE_MAPPING
+
+				gl_FragColor.rgb = LinearToneMapping( gl_FragColor.rgb );
+
+			#elif defined( REINHARD_TONE_MAPPING )
+
+				gl_FragColor.rgb = ReinhardToneMapping( gl_FragColor.rgb );
+
+			#elif defined( CINEON_TONE_MAPPING )
+
+				gl_FragColor.rgb = CineonToneMapping( gl_FragColor.rgb );
+
+			#elif defined( ACES_FILMIC_TONE_MAPPING )
+
+				gl_FragColor.rgb = ACESFilmicToneMapping( gl_FragColor.rgb );
+
+			#elif defined( AGX_TONE_MAPPING )
+
+				gl_FragColor.rgb = AgXToneMapping( gl_FragColor.rgb );
+
+			#elif defined( NEUTRAL_TONE_MAPPING )
+
+				gl_FragColor.rgb = NeutralToneMapping( gl_FragColor.rgb );
+
+			#elif defined( CUSTOM_TONE_MAPPING )
+
+				gl_FragColor.rgb = CustomToneMapping( gl_FragColor.rgb );
+
+			#endif
+
+			// color space
+
+			#ifdef SRGB_TRANSFER
+
+				gl_FragColor = sRGBTransferOETF( gl_FragColor );
+
+			#endif
+
+		}`
+    )
+  };
+
+  // node_modules/three/examples/jsm/postprocessing/OutputPass.js
+  var OutputPass = class extends Pass {
+    /**
+     * Constructs a new output pass.
+     */
+    constructor() {
+      super();
+      this.isOutputPass = true;
+      this.uniforms = three.UniformsUtils.clone(OutputShader.uniforms);
+      this.material = new three.RawShaderMaterial({
+        name: OutputShader.name,
+        uniforms: this.uniforms,
+        vertexShader: OutputShader.vertexShader,
+        fragmentShader: OutputShader.fragmentShader
+      });
+      this._fsQuad = new FullScreenQuad(this.material);
+      this._outputColorSpace = null;
+      this._toneMapping = null;
+    }
+    /**
+     * Performs the output pass.
+     *
+     * @param {WebGLRenderer} renderer - The renderer.
+     * @param {WebGLRenderTarget} writeBuffer - The write buffer. This buffer is intended as the rendering
+     * destination for the pass.
+     * @param {WebGLRenderTarget} readBuffer - The read buffer. The pass can access the result from the
+     * previous pass from this buffer.
+     * @param {number} deltaTime - The delta time in seconds.
+     * @param {boolean} maskActive - Whether masking is active or not.
+     */
+    render(renderer, writeBuffer, readBuffer) {
+      this.uniforms["tDiffuse"].value = readBuffer.texture;
+      this.uniforms["toneMappingExposure"].value = renderer.toneMappingExposure;
+      if (this._outputColorSpace !== renderer.outputColorSpace || this._toneMapping !== renderer.toneMapping) {
+        this._outputColorSpace = renderer.outputColorSpace;
+        this._toneMapping = renderer.toneMapping;
+        this.material.defines = {};
+        if (three.ColorManagement.getTransfer(this._outputColorSpace) === three.SRGBTransfer) this.material.defines.SRGB_TRANSFER = "";
+        if (this._toneMapping === three.LinearToneMapping) this.material.defines.LINEAR_TONE_MAPPING = "";
+        else if (this._toneMapping === three.ReinhardToneMapping) this.material.defines.REINHARD_TONE_MAPPING = "";
+        else if (this._toneMapping === three.CineonToneMapping) this.material.defines.CINEON_TONE_MAPPING = "";
+        else if (this._toneMapping === three.ACESFilmicToneMapping) this.material.defines.ACES_FILMIC_TONE_MAPPING = "";
+        else if (this._toneMapping === three.AgXToneMapping) this.material.defines.AGX_TONE_MAPPING = "";
+        else if (this._toneMapping === three.NeutralToneMapping) this.material.defines.NEUTRAL_TONE_MAPPING = "";
+        else if (this._toneMapping === three.CustomToneMapping) this.material.defines.CUSTOM_TONE_MAPPING = "";
+        this.material.needsUpdate = true;
+      }
+      if (this.renderToScreen === true) {
+        renderer.setRenderTarget(null);
+        this._fsQuad.render(renderer);
+      } else {
+        renderer.setRenderTarget(writeBuffer);
+        if (this.clear) renderer.clear(renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil);
+        this._fsQuad.render(renderer);
+      }
+    }
+    /**
+     * Frees the GPU-related resources allocated by this instance. Call this
+     * method whenever the pass is no longer used in your app.
+     */
+    dispose() {
+      this.material.dispose();
+      this._fsQuad.dispose();
+    }
+  };
+
+  // src/rendering/SceneOutput.ts
+  var SceneOutput = class {
+    constructor(antialias, resources) {
+      this.resources = resources;
+      this.output = new OutputPass();
+      this.width = 0;
+      this.height = 0;
+      this.target = new three.WebGLRenderTarget(1, 1, {
+        type: three.HalfFloatType,
+        colorSpace: three.LinearSRGBColorSpace,
+        depthBuffer: true,
+        stencilBuffer: false,
+        samples: antialias ? 4 : 0
+      });
+      this.target.texture.name = "linear-scene-color";
+      this.output.renderToScreen = true;
+      this.resize(1, 1);
+    }
+    resize(width, height) {
+      if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1) throw new RangeError("Scene output requires positive integer dimensions");
+      if (width === this.width && height === this.height) return;
+      const pixels = width * height, bytes = pixels * (12 + this.target.samples * 12);
+      this.resources.release("scene-output");
+      this.resources.acquireRequired("scene-output", { gpuBytes: bytes, textureBytes: pixels * 8 }, true);
+      this.target.setSize(width, height);
+      this.width = width;
+      this.height = height;
+    }
+    render(renderer, scene, camera) {
+      const previous = renderer.getRenderTarget(), face = renderer.getActiveCubeFace(), mip = renderer.getActiveMipmapLevel();
+      try {
+        renderer.setRenderTarget(this.target);
+        renderer.render(scene, camera);
+        this.output.render(renderer, this.target, this.target, 0, false);
+      } finally {
+        renderer.setRenderTarget(previous, face, mip);
+      }
+    }
+    handleContextLost() {
+      this.target.dispose();
+      this.output.dispose();
+      this.output.material.needsUpdate = true;
+    }
+    dispose() {
+      this.target.dispose();
+      this.output.dispose();
+      this.resources.release("scene-output");
+    }
+  };
+  var WorldLighting = class {
+    constructor(environment, camera, fog) {
+      this.fog = fog;
+      this.materials = /* @__PURE__ */ new Map();
+      this.visit = (object) => {
+        const material = object.material;
+        if (Array.isArray(material)) {
+          for (const item of material) this.install(item);
+        } else if (material) this.install(material);
+      };
+      this.uniforms = {
+        worldEnvironment: { value: environment.texture },
+        worldLightingCamera: { value: camera.matrixWorld },
+        worldSunColor: { value: new three.Color(SUN_COLOR).multiplyScalar(SUN_INTENSITY) },
+        worldSunDirection: { value: createSunDirection() }
+      };
+      this.defines = {
+        CUBEUV_TEXEL_WIDTH: String(1 / environment.width),
+        CUBEUV_TEXEL_HEIGHT: String(1 / environment.height),
+        CUBEUV_MAX_MIP: `${Math.log2(environment.height) - 2}.0`
+      };
+    }
+    setEnvironment(texture) {
+      this.uniforms.worldEnvironment.value = texture;
+    }
+    prepare(root, focus = root.position) {
+      this.fog?.prepare(focus);
+      root.traverseVisible(this.visit);
+    }
+    install(material) {
+      if (this.materials.has(material)) return;
+      const lit = material instanceof three.RawShaderMaterial && material.fragmentShader.includes("uniform sampler2D worldEnvironment;");
+      const fog = this.fog?.accepts(material) ? this.fog : void 0;
+      if (!lit && !fog) return;
+      const compile = material.onBeforeCompile, key = material.customProgramCacheKey, originalKey = key.call(material);
+      const originalDefines = material instanceof three.RawShaderMaterial ? material.defines : void 0;
+      if (lit) material.defines = { ...originalDefines, ...this.defines };
+      material.onBeforeCompile = (shader, renderer) => {
+        compile.call(material, shader, renderer);
+        if (lit) Object.assign(shader.uniforms, this.uniforms);
+        fog?.apply(shader, material);
+      };
+      material.customProgramCacheKey = () => `${originalKey}:world-lighting-v1:${lit}:${!!fog}`;
+      material.needsUpdate = true;
+      const release = () => {
+        material.removeEventListener("dispose", release);
+        this.materials.delete(material);
+        material.onBeforeCompile = compile;
+        material.customProgramCacheKey = key;
+        if (lit) material.defines = originalDefines;
+        material.needsUpdate = true;
+      };
+      material.addEventListener("dispose", release);
+      this.materials.set(material, release);
+    }
+    dispose() {
+      for (const release of this.materials.values()) release();
+    }
+  };
 
   // src/rendering/HexMapRendererHost.ts
   var HexMapRendererHost = class {
     constructor(options) {
       this.options = options;
+      this.drawingSize = new three.Vector2();
       this.contextState = "ready";
       this.contextGeneration = 1;
       this.contextLosses = 0;
@@ -16435,19 +16809,30 @@ ${HEADER}
         this.contextState = "lost";
         this.contextLosses += 1;
         this.gpuTimer.handleContextLost();
+        this.output.handleContextLost();
+        this.sky.handleContextLost();
         this.options.contextLost?.();
       };
       this.onContextRestored = () => {
         if (this.disposed) return;
         this.contextState = "restoring";
-        this.gpuTimer.handleContextRestored();
-        this.renderer.resetState();
-        this.invalidateManagedResources();
-        this.sky?.bake(this.renderer);
-        this.contextGeneration += 1;
-        this.contextRestores += 1;
-        this.contextState = "ready";
-        this.options.contextRestored?.();
+        try {
+          this.gpuTimer.handleContextRestored();
+          this.renderer.resetState();
+          this.invalidateManagedResources();
+          this.sky.bake(this.renderer);
+          this.scene.environment = this.sky.environment.texture;
+          this.lighting.setEnvironment(this.sky.environment.texture);
+          this.contextGeneration += 1;
+          this.contextRestores += 1;
+          this.contextState = "ready";
+          this.options.contextRestored?.();
+        } catch (reason) {
+          this.contextState = "failed";
+          const error = reason instanceof Error ? reason : new Error(String(reason));
+          if (this.options.contextError) this.options.contextError(error);
+          else throw error;
+        }
       };
       this.scene = new three.Scene();
       const horizonColor = new three.Color(options.horizonFogColor);
@@ -16456,26 +16841,29 @@ ${HEADER}
       this.worldRoot = new three.Group();
       this.worldRoot.name = "hex-map-world-root";
       this.scene.add(this.worldRoot);
-      this.renderer = new three.WebGLRenderer({ canvas: options.canvas, antialias: options.antialias });
+      let renderer;
       let sky;
       let gpuTimer;
+      let output;
       try {
+        this.renderer = renderer = new three.WebGLRenderer({ canvas: options.canvas, antialias: false });
+        if (!this.renderer.extensions.has("EXT_color_buffer_float")) throw new Error("Linear HDR rendering requires EXT_color_buffer_float");
         this.renderer.toneMapping = three.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 0.65;
+        this.renderer.outputColorSpace = three.SRGBColorSpace;
+        this.output = output = new SceneOutput(options.antialias, options.resources);
         this.camera = new three.PerspectiveCamera(60, 1, 10, 1e5);
         this.camera.position.set(900, 500, 1e3);
         this.scene.add(this.camera);
-        const primary = new three.DirectionalLight(16774108, 1.65);
+        const primary = new three.DirectionalLight(SUN_COLOR, SUN_INTENSITY);
         primary.position.copy(createSunDirection());
         this.scene.add(primary);
-        this.scene.add(new three.HemisphereLight(13101055, 4412467, 1));
-        this.scene.add(new three.AmbientLight(16777215, 0.18));
-        this.sky = sky = options.skyVisible ? new Skybox() : void 0;
-        if (sky) {
-          sky.bake(this.renderer);
-          this.scene.background = sky.target.texture;
-        }
-        this.skyFog = sky ? new SkyFog(sky.target.texture, this.camera) : void 0;
+        this.sky = sky = new Skybox(options.resources);
+        sky.bake(this.renderer);
+        this.scene.environment = sky.environment.texture;
+        if (options.skyVisible) this.scene.background = sky.target.texture;
+        const skyFog = options.skyVisible ? new SkyFog(sky.target.texture, this.camera) : void 0;
+        this.lighting = new WorldLighting(sky.environment, this.camera, skyFog);
         this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext());
         options.canvas.addEventListener("webglcontextlost", this.onContextLost);
         options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -16483,8 +16871,10 @@ ${HEADER}
         options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
         options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
         gpuTimer?.dispose();
+        output?.dispose();
         sky?.dispose();
-        this.renderer.dispose();
+        options.resources.dispose();
+        renderer?.dispose();
         throw reason;
       }
     }
@@ -16494,6 +16884,8 @@ ${HEADER}
       this.camera.updateProjectionMatrix();
       this.renderer.setPixelRatio(pixelRatio);
       this.renderer.setSize(width, height, false);
+      this.renderer.getDrawingBufferSize(this.drawingSize);
+      this.output.resize(this.drawingSize.x, this.drawingSize.y);
     }
     pollGpuFrameMs() {
       return this.contextState === "ready" ? this.gpuTimer.poll() : void 0;
@@ -16517,8 +16909,8 @@ ${HEADER}
         this.renderer.info.autoReset = false;
         this.renderer.info.reset();
         projection?.render(this.renderer);
-        this.skyFog?.prepare(this.worldRoot, focus, this.renderer.toneMappingExposure);
-        this.renderer.render(this.scene, this.camera);
+        this.lighting.prepare(this.worldRoot, focus);
+        this.output.render(this.renderer, this.scene, this.camera);
       } finally {
         this.renderer.info.autoReset = autoReset;
         if (measured) this.gpuTimer.end();
@@ -16531,8 +16923,11 @@ ${HEADER}
       this.options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
       this.options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
       this.gpuTimer.dispose();
-      this.skyFog?.dispose();
-      this.sky?.dispose();
+      this.lighting.dispose();
+      this.output.dispose();
+      this.sky.dispose();
+      this.scene.environment = null;
+      this.options.resources.dispose();
       this.renderer.renderLists.dispose();
       this.renderer.dispose();
     }
@@ -18013,6 +18408,8 @@ ${HEADER}
         }
         this.canvas = el;
         this.rendererHost = new HexMapRendererHost({
+          resources: this.chunkScheduler.createResourceAccount("renderer-host"),
+          contextError: (error) => this.emit("error", error),
           canvas: this.canvas,
           antialias: this.options.antialias,
           skyVisible: this.options.skyVisible,

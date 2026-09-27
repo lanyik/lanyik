@@ -1,5 +1,8 @@
+import { WORLD_LIGHTING_HEADER } from "./worldLighting";
+
 /** Continuous patch offsets break atlas repetition while preserving explicit mip gradients. */
 export const TERRAIN_MATERIAL_SAMPLING = `
+${WORLD_LIGHTING_HEADER}
 uniform float rockAtlasIndex;
 uniform float grassAtlasIndex;
 uniform float soilAtlasIndex;
@@ -36,12 +39,10 @@ vec3 lightTerrainSurface(vec3 albedo, vec4 surface) {
     float geometry = nl * nv / max(.001, (nl * (1.0 - k) + k) * (nv * (1.0 - k) + k));
     float fresnel = .04 + .96 * pow(1.0 - vh, 5.0);
     float specular = distribution * geometry * fresnel / max(.001, 4.0 * nl * nv);
-    vec3 linear = pow(max(albedo, vec3(0.0)), vec3(2.2));
-    vec3 ambient = vec3(.28, .34, .40) * mix(.45, 1.0, surface.w);
-    vec3 lit = linear * ambient + (linear * .96 + vec3(specular)) * vec3(1.0, .91, .77) * nl * 1.1;
-    // The custom terrain pass writes display-referred colors, as do its water,
-    // fog and projection passes. Standard-material trees use renderer ACES.
-    return pow(clamp(lit, 0.0, 1.0), vec3(1.0 / 2.2));
+    vec3 reflection = normalize(mix(reflect(-v, n), n, pow(roughness, 4.0)));
+    float environmentFresnel = .04 + .96 * pow(1.0 - nv, 5.0);
+    return worldDiffuse(albedo * .96, n, surface.w) + worldSunColor * specular * nl
+        + worldSky(reflection, roughness) * environmentFresnel * surface.w;
 }
 #endif
 

@@ -1,4 +1,4 @@
-import { DataArrayTexture, LinearFilter, LinearMipmapLinearFilter, MirroredRepeatWrapping } from "three";
+import { DataArrayTexture, LinearFilter, LinearMipmapLinearFilter, MirroredRepeatWrapping, SRGBColorSpace, NoColorSpace } from "three";
 import { Land } from "../enums";
 import type { TerrainAtlas } from "../objects/TerrainMesh";
 
@@ -50,6 +50,7 @@ export function loadTerrainArrayTexture(atlas: TerrainAtlas, baseUrl: string, an
     const pixels = new Uint8Array(size * size * layers * 4);
     const texture = new DataArrayTexture(pixels, size, size, layers);
     texture.name = `terrain-${channel}-layers`;
+    texture.colorSpace = channel === "color" ? SRGBColorSpace : NoColorSpace;
     texture.generateMipmaps = true;
     texture.minFilter = LinearMipmapLinearFilter;
     texture.magFilter = LinearFilter;

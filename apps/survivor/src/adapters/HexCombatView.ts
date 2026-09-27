@@ -89,6 +89,8 @@ export class HexCombatView implements CombatView {
             texturesBaseUrl: `${import.meta.env.BASE_URL}textures/`,
             treeModel: `${import.meta.env.BASE_URL}Assets/models/oak`,
             maxPixelRatio: 1.5,
+            // Native 1440p HDR + 4x MSAA and the measured visible asset set use ~390 MiB.
+            gpuChunkCacheBytes: 512 * 1024 * 1024,
             terrainTextureRegionSize: 4,
             grassDensity: 10,
             grassBladeHeight: 3,

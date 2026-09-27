@@ -308,6 +308,8 @@ export class HexMap extends EventEmitter<HexMapEventMap> {
             this.canvas = el;
 
             this.rendererHost = new HexMapRendererHost({
+                resources: this.chunkScheduler.createResourceAccount("renderer-host"),
+                contextError: error => this.emit("error", error),
                 canvas: this.canvas,
                 antialias: this.options.antialias,
                 skyVisible: this.options.skyVisible,

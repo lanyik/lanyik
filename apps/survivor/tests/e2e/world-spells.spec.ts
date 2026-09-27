@@ -21,14 +21,14 @@ test("the HDR skybox rotates beyond terrain fog; enemy weapons close, travel and
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 }); await pauseCombat(page);
     const readSky = () => page.evaluate(() => {
         const { map } = (window.survivorApplication!.session as unknown as { view: { map: { getCamera(): PerspectiveCamera;
-            worldRoot: Group; rendererHost: { renderer: WebGLRenderer; scene: Scene } } } }).view;
+            worldRoot: Group; rendererHost: { renderer: WebGLRenderer; scene: Scene; render(): void } } } }).view;
         const { renderer, scene } = map.rendererHost, camera = map.getCamera(), fog = scene.fog as Fog;
         const background = scene.background as CubeTexture, position = camera.position.clone(), rotation = camera.quaternion.clone();
         const children = scene.children.filter(child => child.type === "Group");
         const visible = children.map(child => child.visible); children.forEach(child => { child.visible = false; });
         const near = fog.near, far = fog.far;
         const read = () => {
-            renderer.render(scene, camera); const gl = renderer.getContext(), data = new Uint8Array(32 * 32 * 4);
+            map.rendererHost.render(); const gl = renderer.getContext(), data = new Uint8Array(32 * 32 * 4);
             gl.readPixels(gl.drawingBufferWidth / 2 - 16, gl.drawingBufferHeight / 2 - 16, 32, 32, gl.RGBA, gl.UNSIGNED_BYTE, data); return data;
         };
         try {

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
-import { createStarterEquipment, EMPTY_BONUSES, equipmentScore, type Equipment } from "../../src/core/Equipment";
+import { createStarterEquipment, EMPTY_BONUSES, withEquipmentAffixes } from "../../src/core/Equipment";
 import type { CombatSimulation } from "../../src/core/CombatSimulation";
 import { enterWilds, inspectCombatWorker, combatWorker, pauseCombat } from "../helpers/browserCombat";
 
@@ -14,8 +14,9 @@ test("Shift locking stays safe with W, repeats and auto-sale; diagnostics surviv
     await expect(page.locator(".survivor")).toHaveAttribute("data-state", "ready", { timeout: 45_000 });
     await pauseCombat(page);
     await expect.poll(() => page.evaluate(() => window.survivorApplication!.session.getSnapshot().saveStatus.busy)).toBe(false);
-    const base = createStarterEquipment("ranger"), bonuses = { ...EMPTY_BONUSES, damage: 1 };
-    const weak: Equipment = { ...base, id: 901, name: "解锁回收测试弩", locked: true, bonuses, baseBonuses: bonuses, affixes: [], score: equipmentScore(bonuses) };
+    const base = createStarterEquipment("ranger");
+    const weak = withEquipmentAffixes({ ...base, id: 901, name: "解锁回收测试弩", baseBonuses: EMPTY_BONUSES },
+        [{ stat: "damage", value: 1, rarity: "common" }]);
     await combatWorker(page).evaluate(items => {
         const simulation = (self as unknown as { fixtureSimulation: CombatSimulation }).fixtureSimulation;
         const saved = simulation.checkpoint();

@@ -1,15 +1,15 @@
 import {
     ACESFilmicToneMapping,
-    AmbientLight,
     Color,
     ColorRepresentation,
     DirectionalLight,
     Fog,
     Group,
-    HemisphereLight,
     PerspectiveCamera,
     Scene,
     Texture,
+    SRGBColorSpace,
+    Vector2,
     WebGLRenderer
 } from "three";
 import { Skybox } from "./Skybox";
@@ -17,7 +17,10 @@ import { SkyFog } from "./SkyFog";
 
 import { WebGlGpuTimer, WebGlGpuTimerStats } from "./WebGlGpuTimer";
 import type { GroundProjection } from "./GroundProjection";
-import { createSunDirection } from "./SunLight";
+import { createSunDirection, SUN_COLOR, SUN_INTENSITY } from "./SunLight";
+import { SceneOutput } from "./SceneOutput";
+import { WorldLighting } from "./WorldLighting";
+import type { ResourceBudgetAccount } from "../runtime/ResourceBudget";
 
 export interface HexMapRendererHostOptions {
     canvas: HTMLCanvasElement;
@@ -26,11 +29,14 @@ export interface HexMapRendererHostOptions {
     horizonFogColor: ColorRepresentation;
     horizonFogStart: number;
     horizonFogEnd: number;
+    /** The host owns and disposes this account; mandatory targets are pinned working set. */
+    resources: ResourceBudgetAccount;
     contextLost?(): void;
     contextRestored?(): void;
+    contextError?(error: Error): void;
 }
 
-export type WebGlContextState = "ready" | "lost" | "restoring" | "disposed";
+export type WebGlContextState = "ready" | "lost" | "restoring" | "failed" | "disposed";
 
 export interface WebGlContextStats {
     readonly state: WebGlContextState;
@@ -46,8 +52,10 @@ export class HexMapRendererHost {
     public readonly scene: Scene;
     public readonly worldRoot: Group;
     public readonly camera: PerspectiveCamera;
-    private readonly sky: Skybox | undefined;
-    private readonly skyFog: SkyFog | undefined;
+    private readonly sky: Skybox;
+    private readonly lighting: WorldLighting;
+    private readonly output: SceneOutput;
+    private readonly drawingSize = new Vector2();
     private readonly gpuTimer: WebGlGpuTimer;
     private contextState: WebGlContextState = "ready";
     private contextGeneration = 1;
@@ -64,30 +72,32 @@ export class HexMapRendererHost {
         this.worldRoot.name = "hex-map-world-root";
         this.scene.add(this.worldRoot);
 
-        this.renderer = new WebGLRenderer({ canvas: options.canvas, antialias: options.antialias });
+        let renderer: WebGLRenderer | undefined;
         let sky: Skybox | undefined;
         let gpuTimer: WebGlGpuTimer | undefined;
+        let output: SceneOutput | undefined;
         try {
+            this.renderer = renderer = new WebGLRenderer({ canvas: options.canvas, antialias: false });
+            if (!this.renderer.extensions.has("EXT_color_buffer_float")) throw new Error("Linear HDR rendering requires EXT_color_buffer_float");
             this.renderer.toneMapping = ACESFilmicToneMapping;
             this.renderer.toneMappingExposure = 0.65;
+            this.renderer.outputColorSpace = SRGBColorSpace;
+            this.output = output = new SceneOutput(options.antialias, options.resources);
 
             this.camera = new PerspectiveCamera(60, 1, 10, 100000);
             this.camera.position.set(900, 500, 1000);
             this.scene.add(this.camera);
 
-            // Keep direct lighting aligned with the visible sky sun. A natural
-            // hemisphere fill preserves normal-dependent shading on untextured
-            // vegetation without the below-ground blue directional light that
-            // previously left most tree faces nearly black.
-            const primary = new DirectionalLight(0xfff3dc, 1.65);
+            const primary = new DirectionalLight(SUN_COLOR, SUN_INTENSITY);
             primary.position.copy(createSunDirection());
             this.scene.add(primary);
-            this.scene.add(new HemisphereLight(0xc7e7ff, 0x435433, 1));
-            this.scene.add(new AmbientLight(0xffffff, 0.18));
-
-            this.sky = sky = options.skyVisible ? new Skybox() : undefined;
-            if (sky) { sky.bake(this.renderer); this.scene.background = sky.target.texture; }
-            this.skyFog = sky ? new SkyFog(sky.target.texture, this.camera) : undefined;
+            // skyVisible controls the background; surface illumination always uses this sky.
+            this.sky = sky = new Skybox(options.resources);
+            sky.bake(this.renderer);
+            this.scene.environment = sky.environment.texture;
+            if (options.skyVisible) this.scene.background = sky.target.texture;
+            const skyFog = options.skyVisible ? new SkyFog(sky.target.texture, this.camera) : undefined;
+            this.lighting = new WorldLighting(sky.environment, this.camera, skyFog);
             this.gpuTimer = gpuTimer = new WebGlGpuTimer(this.renderer.getContext() as WebGL2RenderingContext);
             options.canvas.addEventListener("webglcontextlost", this.onContextLost);
             options.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -95,8 +105,10 @@ export class HexMapRendererHost {
             options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
             options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
             gpuTimer?.dispose();
+            output?.dispose();
             sky?.dispose();
-            this.renderer.dispose();
+            options.resources.dispose();
+            renderer?.dispose();
             throw reason;
         }
     }
@@ -107,6 +119,8 @@ export class HexMapRendererHost {
         this.camera.updateProjectionMatrix();
         this.renderer.setPixelRatio(pixelRatio);
         this.renderer.setSize(width, height, false);
+        this.renderer.getDrawingBufferSize(this.drawingSize);
+        this.output.resize(this.drawingSize.x, this.drawingSize.y);
     }
 
     public pollGpuFrameMs(): number | undefined {
@@ -130,8 +144,8 @@ export class HexMapRendererHost {
             this.renderer.info.autoReset = false;
             this.renderer.info.reset();
             projection?.render(this.renderer);
-            this.skyFog?.prepare(this.worldRoot, focus, this.renderer.toneMappingExposure);
-            this.renderer.render(this.scene, this.camera);
+            this.lighting.prepare(this.worldRoot, focus);
+            this.output.render(this.renderer, this.scene, this.camera);
         } finally {
             this.renderer.info.autoReset = autoReset;
             if (measured) this.gpuTimer.end();
@@ -145,8 +159,11 @@ export class HexMapRendererHost {
         this.options.canvas.removeEventListener("webglcontextlost", this.onContextLost);
         this.options.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
         this.gpuTimer.dispose();
-        this.skyFog?.dispose();
-        this.sky?.dispose();
+        this.lighting.dispose();
+        this.output.dispose();
+        this.sky.dispose();
+        this.scene.environment = null;
+        this.options.resources.dispose();
         this.renderer.renderLists.dispose();
         this.renderer.dispose();
     }
@@ -157,20 +174,31 @@ export class HexMapRendererHost {
         this.contextState = "lost";
         this.contextLosses += 1;
         this.gpuTimer.handleContextLost();
+        this.output.handleContextLost();
+        this.sky.handleContextLost();
         this.options.contextLost?.();
     };
 
     private onContextRestored = (): void => {
         if (this.disposed) return;
         this.contextState = "restoring";
-        this.gpuTimer.handleContextRestored();
-        this.renderer.resetState();
-        this.invalidateManagedResources();
-        this.sky?.bake(this.renderer);
-        this.contextGeneration += 1;
-        this.contextRestores += 1;
-        this.contextState = "ready";
-        this.options.contextRestored?.();
+        try {
+            this.gpuTimer.handleContextRestored();
+            this.renderer.resetState();
+            this.invalidateManagedResources();
+            this.sky.bake(this.renderer);
+            this.scene.environment = this.sky.environment.texture;
+            this.lighting.setEnvironment(this.sky.environment.texture);
+            this.contextGeneration += 1;
+            this.contextRestores += 1;
+            this.contextState = "ready";
+            this.options.contextRestored?.();
+        } catch (reason) {
+            this.contextState = "failed";
+            const error = reason instanceof Error ? reason : new Error(String(reason));
+            if (this.options.contextError) this.options.contextError(error);
+            else throw error;
+        }
     };
 
     private invalidateManagedResources(): void {

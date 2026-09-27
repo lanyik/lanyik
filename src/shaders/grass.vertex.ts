@@ -7,6 +7,7 @@ ${HORIZON_FOG_VERTEX_VARYING}
 
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
+uniform mat3 normalMatrix;
 
 uniform float uTime;
 uniform float windStrength;
@@ -30,6 +31,7 @@ attribute float groundHeight; // authoritative CPU surface height at the blade r
 varying float vHeightFactor;
 varying float vShade;
 varying float vFogState;
+varying vec3 vBladeNormal;
 
 
 void main() {
@@ -57,5 +59,6 @@ void main() {
     vHeightFactor = heightFactor;
     vShade = shade;
     vFogState = fogState;
+    vBladeNormal = normalize(normalMatrix * vec3(-s, .35, c));
 }
 `;

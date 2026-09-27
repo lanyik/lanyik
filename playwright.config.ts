@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const angleBackend = process.env.PLAYWRIGHT_ANGLE_BACKEND;
+if (angleBackend !== undefined && angleBackend !== "d3d11") throw new Error("PLAYWRIGHT_ANGLE_BACKEND supports only d3d11; omit it for the default browser backend");
+
 export default defineConfig({
     testDir: "./tests/e2e",
     fullyParallel: false,
@@ -20,7 +23,7 @@ export default defineConfig({
         use: {
             ...devices["Desktop Chrome"],
             launchOptions: {
-                args: ["--enable-unsafe-swiftshader", "--js-flags=--expose-gc"]
+                args: [angleBackend ? `--use-angle=${angleBackend}` : "--enable-unsafe-swiftshader", "--js-flags=--expose-gc"]
             }
         }
     }],

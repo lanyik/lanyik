@@ -118,7 +118,7 @@ world delta 存储在 `dispose()` 时同步清空其 Map。`dispose()` 因而既
 
 ## 5. 模块边界
 
-- `HexMapRendererHost`：WebGLRenderer、Scene、Camera、lights、Sky、GPU timer 和 context-bound dispose。
+- `HexMapRendererHost`：WebGLRenderer、Scene、Camera、lights、Sky、GPU timer 和 context-bound dispose；线性 HDR 输出、环境图及恢复/预算合同见[渲染流送](render-streaming.md#场景照明与颜色输出)。
 - `HexMapInteractionController`：DOM 输入监听、焦点所有权、WASD 移动和解析式 tile picking。
 - `WorldChunkMountQueue`：连接流式驻留与帧挂载，并对因背压拒绝的可见挂载做有界重试。
 - `RenderWorldController`：一次世界渲染会话的 source/residency/streamer/lifecycle。

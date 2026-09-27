@@ -18,6 +18,12 @@ and their execution policy are defined in [testing.md](./testing.md).
 returned reservation handles; `map.resourceBudget` is intentionally a frozen
 diagnostics-only view so an extension cannot clear or force the shared ledger.
 
+Direct users of the exported `HexMapRendererHost` must pass an exclusively owned
+`resources: ResourceBudgetAccount`; the host disposes it, including on construction
+failure. `HexMap` supplies this account itself. HDR output and sky resources share
+the normal ledger, with ownership and failure semantics in
+[render streaming](render-streaming.md#场景照明与颜色输出).
+
 The renderer remains the default package entry. Optional game-runtime APIs use
 explicit subpaths:
 

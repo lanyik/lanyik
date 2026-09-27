@@ -105,8 +105,6 @@ in vec3 vNeighborsKindB; // (NW,N,NE)
 in vec4 vLandform;       // final elevation, generated ridge, valley, roughness
 in vec4 vBiomeWeights;   // temperate, dry, cold, alpine
 
-const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
-const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
 
 const vec2 DIR_SE = vec2(0.8660254, 0.5);
 const vec2 DIR_S  = vec2(0.0, 1.0);
@@ -581,7 +579,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 #ifdef TERRAIN_SURFACE_MAP
         : texColor.rgb;
 #else
-        : lightAmbient * texColor.rgb + lambertian * lightDiffuse * texColor.rgb;
+        : worldDiffuse(texColor.rgb, normal, 1.0);
 #endif
 
     // Explored (previously seen, currently outside every unit's view range):

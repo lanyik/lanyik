@@ -190,7 +190,7 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "terrainColor")}
 #ifdef TERRAIN_SURFACE_MAP
         : texColor.rgb;
 #else
-        : texColor.rgb * (0.55 + 0.55 * lambertian);
+        : worldDiffuse(texColor.rgb, normal, 1.0);
 #endif
     if (vFogState < 1.5) color *= fogDarkenFactor;
     terrainColor = vec4(color, 1.0);

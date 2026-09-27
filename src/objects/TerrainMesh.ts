@@ -16,6 +16,7 @@ import {
     Sprite,
     ColorRepresentation,
     RepeatWrapping,
+    SRGBColorSpace,
     GLSL3,
     Texture,
     Material
@@ -591,6 +592,7 @@ export class TerrainMesh extends Group {
     private loadFogTexture(): Texture {
         const loader = new TextureLoader().setPath(this.options.texturesBaseUrl);
         const texture = loader.load(this.options.fogTexture ?? "war-fog.jpg");
+        texture.colorSpace = SRGBColorSpace;
         texture.wrapS = texture.wrapT = RepeatWrapping;
         return texture;
     }

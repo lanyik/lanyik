@@ -1,10 +1,12 @@
 import { WORLD_NOISE_HEADER } from "./worldNoise";
+import { WORLD_LIGHTING_HEADER } from "./worldLighting";
 import { GROUND_PROJECTION_HEADER } from "./groundProjection";
 import { HORIZON_FOG_FRAGMENT_APPLY, HORIZON_FOG_FRAGMENT_HEADER } from "./horizonFog";
 
 export const WATER_FRAGMENT_SHADER = `
 precision highp float;
 out vec4 waterColor;
+${WORLD_LIGHTING_HEADER}
 
 ${HORIZON_FOG_FRAGMENT_HEADER.replace(/varying /g, "in ")}
 
@@ -73,10 +75,6 @@ in float vShoreT;
 in float vFogState;
 in vec2 vFogUV;
 
-const vec3 lightAmbient = vec3(0.55, 0.55, 0.55);
-const vec3 lightDiffuse = vec3(0.55, 0.55, 0.55);
-const vec3 sparkleColor = vec3(1.0, 0.97, 0.85);
-const vec3 skyTint = vec3(0.85, 0.95, 1.0);
 
 // Picks the single strongest edge among the 6 whose neighbor both passes the
 // one-directional priority gate and is itself water (a sea tile bordering a
@@ -232,18 +230,16 @@ ${HORIZON_FOG_FRAGMENT_APPLY.replace(/gl_FragColor/g, "waterColor")}
     vec3 light = normalize(normalMatrix * lightDir);
     vec3 viewDir = normalize(normalMatrix * (chunkCameraPosition - vWorldPos));
 
-    float ndotl = max(dot(normal, light), 0.0);
-    vec3 color = lightAmbient * texColor.rgb + ndotl * lightDiffuse * texColor.rgb;
+    vec3 color = worldDiffuse(texColor.rgb, normal, 1.0);
 
     // sun glitter: sharp specular highlight off the wave-perturbed normal
     vec3 halfDir = normalize(light + viewDir);
     float spec = pow(max(dot(normal, halfDir), 0.0), 60.0);
-    color += spec * sparkleColor * sparkleIntensity;
+    color += spec * worldSunColor * sparkleIntensity;
 
-    // cheap fresnel: brighten towards a fixed sky tint at grazing angles,
-    // instead of a real planar reflection render target.
+    // The same prefiltered sky as model materials; no planar reflection pass.
     float fresnel = pow(1.0 - clamp(dot(normal, viewDir), 0.0, 1.0), 3.0);
-    color = mix(color, skyTint, fresnel * 0.5 * fresnelIntensity);
+    color = mix(color, worldSky(reflect(-viewDir, normal), .2), fresnel * 0.5 * fresnelIntensity);
 
     // coastal foam waves - only fragments on a land-adjacent tile have a
     // shore field > 0, so open sea skips the noise work entirely. Keyed to

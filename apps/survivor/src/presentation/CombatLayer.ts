@@ -2,7 +2,6 @@ import {
     CircleGeometry,
     Color,
     DoubleSide,
-    DirectionalLight,
     DynamicDrawUsage,
     Group,
     InstancedMesh,
@@ -130,16 +129,12 @@ export class CombatLayer implements WorldRenderLayer {
     private readonly color = new Color();
     private readonly viewCenter = new Vector2();
     private readonly renderOrigin = new Vector2();
-    private readonly actorFill = new DirectionalLight(0xe2ebdf, 1.6);
     private readonly heightCache = new Map<string, Float64Array>();
     private host: WorldRenderLayerHost | undefined;
     private readonly effectHeight = (x: number, z: number) => this.height(x, z);
 
     constructor(private readonly resources: ResourceBudgetAccount) {
         this.root.name = "survivor-combat";
-        // Soft light from the fixed camera direction keeps dark leather and faces readable.
-        this.actorFill.position.set(-6, 9, 7);
-        this.root.add(this.actorFill, this.actorFill.target);
         this.projectiles = this.instance(this.geometries.projectile, this.projectileMaterial, MAX_PROJECTILES);
         this.telegraphs = this.instance(this.geometries.telegraph, this.warningMaterial, MAX_ENEMIES);
         this.chargeWarnings = this.instance(this.geometries.charge, this.warningMaterial, MAX_ENEMIES);
@@ -409,7 +404,6 @@ export class CombatLayer implements WorldRenderLayer {
         this.mist.dispose();
         this.challengeMist.dispose();
         this.homestead?.dispose();
-        this.actorFill.dispose();
         for (const mesh of [this.projectiles, this.telegraphs, this.chargeWarnings, this.experience]) mesh.dispose();
         for (const geometry of Object.values(this.geometries)) geometry.dispose();
         for (const material of [

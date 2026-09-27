@@ -31,6 +31,8 @@ expectations. Keep compile-time negative assertions: `tsc` checks their
 Root tests are grouped by domain: option merging belongs in `tests/helpers`, event
 dispatch in `tests/runtime`, and generation/Worker requests in `tests/world`.
 Worker mocks are scoped to their own suite and restored after each test.
+Inventory shortcut fixtures derive affixes and bonuses through the equipment helper
+before real checkpoint restoration; invalid empty-affix gear cannot exercise UI locking.
 Browser combat fixtures advance through the session's normal in-flight barrier;
 they do not bypass it with direct transport calls, which could race an automatic
 save during slow screenshots. Production Worker entry points expose no fixture state.
@@ -211,6 +213,26 @@ durable enemies and replenished player vitals. It retains real casting, AI, hit
 settlement, Worker pacing and rendering; an 8-second warmup precedes a 15-second
 sample. It asserts that all three status families actually occur, reports raw
 diagnostic windows and never infers GPU timing from frame rate.
+
+## 视觉改造样板
+
+在已构建的游戏生产预览上运行：
+
+```powershell
+node scripts/review-survivor-visual.mjs http://127.0.0.1:4174 .browser-artifacts/visual-current
+```
+
+固定输入归 [B1 fixture](../scripts/lib/survivor-visual-fixture.ts)，美术范围归[视觉改造](game/visual-overhaul.md#b1-固定光照样本)。采样在独立浏览器上下文运行，不读取或覆盖用户存档。三个静止检查点分别预热 2 秒、采样 3 秒，再加载林地检查点进行真实键盘移动与战斗；帧样本上限为 4096，越界失败。可在命令末尾添加 `--play=forest`、`--play=clearing` 或 `--play=shore` 打开可操作窗口，关闭窗口结束脚本。
+
+检查绘制缓冲确为 2560×1440，保存原尺寸截图、720p 视频、检查点和 JSON。CPU 统计来自地图 afterframe，GPU 来自已有异步 timer 的新样本；分别记录样本量、P50/P95/P99/max、查询支持/丢弃情况、浏览器、设备标识及账本估算，不从帧率推导 GPU 耗时。显存账本不是驱动实测 VRAM；硬件/驱动及目标配置需随验收证据登记。静止样本不代表完整游戏性能，移动样本的真实战斗结果也不应伪装为固定 tick 重放。编译警告单独保留，运行时和 shader 错误使采样失败。
+
+报告记录 fixture 哈希和浏览器实际加载脚本的路径/内容哈希；工作区 HEAD 仅是来源背景，不代表尚未提交的构建内容。输入延迟保留会话诊断窗口的读数，不把重复读取当作独立输入事件。
+
+Windows 独显回归可显式设置 `$env:PLAYWRIGHT_ANGLE_BACKEND='d3d11'` 后运行 `npm run test:app:e2e`，完成后 `Remove-Item Env:PLAYWRIGHT_ANGLE_BACKEND`。省略变量沿用默认浏览器后端；不自动切换，也不放宽交互超时。B1 本机默认后端实际为 SwiftShader，HDR 场景约两秒一帧并导致传送点击超时，因此完整游戏回归使用独显，软件路径不宣称通过。
+
+游戏浏览器检查保留全部运行时错误和未知图形警告，仅将截图回读通知及 ANGLE X4122 中小于双精度相对舍入精度的常量加法诊断视为非故障；每行诊断均须匹配，混合警告和 shader 编译错误仍失败。视觉原始报告保留这些编译警告，不修改生产日志。
+
+浏览器 `linear-lighting.spec.ts` 验证 HDR 高亮、透明线性混合、Raw/标准材质同输出、真实环境反射及缩放记账；原有 full/fast 地面投影、远行坐标、恢复及切图 soak 继续保护对应边界。
 
 ## Meaning of the 500-iteration soak
 
