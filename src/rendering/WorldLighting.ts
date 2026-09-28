@@ -35,7 +35,11 @@ export class WorldLighting {
         if (lit) material.defines = { ...originalDefines, ...this.defines };
         material.onBeforeCompile = (shader, renderer) => {
             compile.call(material, shader, renderer);
-            if (lit) Object.assign(shader.uniforms, this.uniforms);
+            if (lit) {
+                Object.assign(shader.uniforms, this.uniforms);
+                // WebGLRenderer supplies its shared DFG texture for this uniform, just as for Standard materials.
+                if (shader.fragmentShader.includes("uniform sampler2D dfgLUT;")) shader.uniforms.dfgLUT = { value: null };
+            }
             fog?.apply(shader, material);
             shadows?.apply(shader, material);
         };

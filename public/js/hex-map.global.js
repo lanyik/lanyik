@@ -5883,6 +5883,7 @@ in vec3 vViewPosition;
 uniform mat3 normalMatrix;
 #ifdef TERRAIN_SURFACE_MAP
 uniform highp sampler2DArray surfaceMap;
+uniform sampler2D dfgLUT;
 
 vec4 sampleTerrainSurface(float idx, vec2 uv) {
     vec4 detail = textureGrad(surfaceMap, vec3(uv, idx), terrainGradientX, terrainGradientY);
@@ -5912,9 +5913,17 @@ vec3 lightTerrainSurface(vec3 albedo, vec4 surface) {
     float fresnel = .04 + .96 * pow(1.0 - vh, 5.0);
     float specular = distribution * geometry * fresnel / max(.001, 4.0 * nl * nv);
     vec3 reflection = normalize(mix(reflect(-v, n), n, pow(roughness, 4.0)));
-    float environmentFresnel = .04 + .96 * pow(1.0 - nv, 5.0);
-    return worldDiffuse(albedo * .96, n, surface.w) + worldSunColor * specular * nl * worldDirectVisibility
-        + worldSky(reflection, roughness) * environmentFresnel * surface.w;
+    // Match Standard's roughness/view-dependent dielectric IBL integration.
+    // A bare grazing-angle Fresnel term wrongly makes even rough soil reflect like a mirror.
+    vec2 fab = texture(dfgLUT, vec2(roughness, nv)).rg;
+    float singleScatter = .04 * fab.x + fab.y;
+    float missingEnergy = 1.0 - fab.x - fab.y;
+    float averageFresnel = .04 + .96 / 21.0;
+    float multiScatter = singleScatter * averageFresnel * missingEnergy / (1.0 - missingEnergy * averageFresnel);
+    vec3 diffuseSky = worldSky(n, 1.0) * surface.w;
+    return worldSunColor * nl * worldDirectVisibility * (albedo * .96 / 3.141593 + specular)
+        + diffuseSky * (albedo * (1.0 - singleScatter - multiScatter) + multiScatter)
+        + worldSky(reflection, roughness) * singleScatter * surface.w;
 }
 #endif
 
@@ -16894,7 +16903,10 @@ ${HEADER}
       if (lit) material.defines = { ...originalDefines, ...this.defines };
       material.onBeforeCompile = (shader, renderer) => {
         compile.call(material, shader, renderer);
-        if (lit) Object.assign(shader.uniforms, this.uniforms);
+        if (lit) {
+          Object.assign(shader.uniforms, this.uniforms);
+          if (shader.fragmentShader.includes("uniform sampler2D dfgLUT;")) shader.uniforms.dfgLUT = { value: null };
+        }
         fog?.apply(shader, material);
         shadows?.apply(shader, material);
       };
