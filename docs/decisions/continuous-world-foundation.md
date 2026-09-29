@@ -115,7 +115,7 @@ flowchart TD
 
 样板继续以原生 1440p 输出；体积雾内部低分辨率积分须单独注明。依据实际硬件能力校验纹理尺寸、格式和采样资源，不假设一张超大高度图能容纳世界，也不依赖显卡标称显存作为浏览器可用额度。
 
-现有 [岸坡样本](../game/measurements/visual-shoreline.json)的荒野 GPU 账本峰值约 493.5 MiB，项目上限 512 MiB；[SceneOutput](../../src/rendering/SceneOutput.ts) 的 RGBA16F、深度和 4× MSAA 在 1440p 下账本估算约 211 MiB。这些是资源估算和历史短样本，不等于驱动显存，也不是新系统的剩余容量承诺。
+现有 GPU 上限由 [GameConfig](../../apps/survivor/src/core/GameConfig.ts) 配置；[SceneOutput](../../src/rendering/SceneOutput.ts) 的 HDR 颜色、深度和 MSAA 目标与地形资源共用账本。新基座必须重新测量完整工作集，不能把旧画面的资源余量当作新增能力的预算承诺，账本估算也不等于驱动显存。
 
 第一阶段先登记 CPU 权威数组/传输副本、GPU 高程/法线/材质、阴影与大气目标的最坏驻留量，再决定采样密度与可见范围。新资源必须有账户、上限、峰值重建成本及销毁路径；不把新旧完整地形长期同时驻留，不仅靠抬高总预算掩盖成本。抗锯齿取舍需同时比较画质、深度链与显存。
 

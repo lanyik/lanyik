@@ -8,7 +8,7 @@
 
 <a id="entrypoints"></a>
 
-项目介绍、运行方法与公开 API 见 [README.zh-CN.md](../README.zh-CN.md) / [README.md](../README.md)；开发基准见 [AGENTS.md](../AGENTS.md)。[游戏想法](../游戏想法.md)描述玩家体验，[CHANGELOG](../CHANGELOG.md)保留发布历史，均不作为内部实现手册。
+项目介绍、运行方法与公开 API 见 [README.zh-CN.md](../README.zh-CN.md) / [README.md](../README.md)；开发基准见 [AGENTS.md](../AGENTS.md)。[游戏想法](../游戏想法.md)只维护产品定位、玩家体验和核心循环，[CHANGELOG](../CHANGELOG.md)保留发布历史，均不作为内部实现手册。
 
 <a id="branches"></a>
 
@@ -113,22 +113,11 @@ flowchart TB
 
 <a id="evidence"></a>
 
-## 证据
+## 验证输入与本地产物
 
-仅在复核设计取舍或测量时阅读：
+测试的固定样本、独立预期和预算阈值随代码维护；[优化门禁](optimization-gates.json)仍实际读取[河网触发记录](evidence/automatic-river-generation/2026-09-04.json)及其[需求观察](evidence/automatic-river-generation/user-observation.md)，对应算法取舍见[河网决策](decisions/coarse-drainage-water-network.md)。它们是当前校验输入，不能作为运行报告删除。
 
-- [世界风格证据](evidence/world-style-generation.md)：固定样本和阈值调整依据。
-- [河流问题观察](evidence/automatic-river-generation/user-observation.md)、[河道跟进](evidence/automatic-river-generation/natural-course-followup.md)、[门禁证据](evidence/automatic-river-generation/2026-09-04.json)：河网决策引用的历史资料。
-- [游戏原始测量目录](game/measurements/)：各阶段的环境、原始样本与回放；文件名定位主题，当前适用范围以所属设计为准。
-- [战斗校准报告](game/measurements/combat-balance.json)、[管线对照](game/measurements/combat-pipeline-optimization.json)、[被动接入测量](game/measurements/utility-passive-skills.json)：数值、CPU 和 UI 是不同口径，不能互相代替。
-- [CPU 尾延迟记录](game/measurements/performance-tail-latency.json)、[首轮优化对照](game/measurements/performance-tail-optimization.json)：逐轮分位、峰值序号、超预算统计、独立阶段/GC 诊断及旧版回放对照；复现命令见测试策略，不作为浏览器帧率证明。
-- [玩法区块分批记录](game/measurements/regional-streaming.json)：提前准备前后 CPU 对照、异步切片/等待与确定性回放，保留 P99 和均值代价及冷启动限制。
-- [怪物绕障与占位对照](game/measurements/enemy-navigation.json)：凹墙到达、围攻重叠与同场景 CPU 成本；行为改善与计算开销分别报告，不代表浏览器帧率。
-- [B1 光照前后对照](game/measurements/visual-lighting.json)：原生 1440p 固定检查点、真实移动窗口、逐帧 CPU/GPU 与资源账本；单机短样本，不代表完整游戏帧率验收。
-- [B2 近景阴影对照](game/measurements/visual-shadows.json)：同检查点开启阴影前后、脚本哈希、逐帧 CPU/GPU 和固定目标/区块工作集；该批不含后续副本布景。
-- [B2 副本路线对照](game/measurements/visual-route.json)：营地/石路/河岸同检查点前后、首领观察点、荒野复查及资源账本；首领点调整过观察位置，明确排除在配对比较之外。
-- [B2 树木风动对照](game/measurements/visual-wind.json)：四个相同副本检查点的前后帧时、绘制次数、荒野复查与资源账本；连续环境时钟未锁定同一风相位。
-- [B2 岸坡与营火对照](game/measurements/visual-shoreline.json)：副本连续地面、水岸和暖火的同检查点对照、最终构建哈希、荒野复查及资源峰值；只覆盖有限副本。
+历史性能报告、截图和视频不在当前文档树保留；已有提交可从 Git 查阅。需要验证时按[测试策略](testing.md)重新采样，结果写入被 Git 忽略的本地输出目录，完成审查后清理。设计只保留测量方法、适用边界和当前约束，不维护旧帧率表或已删除产物的路径。
 
 <a id="assets"></a>
 
@@ -147,7 +136,7 @@ flowchart TB
 | [家园来源](../apps/survivor/assets/homestead/sources.json)、[原始许可](../apps/survivor/assets/homestead/License.txt) | 模型输入与归属 |
 | [音效来源](../apps/survivor/assets/audio/sources.json) | 项目原创波形合成与许可 |
 
-dist/ 与 apps/survivor/.assets/ 是生成产物；根 public/ 混合演示输入与受跟踪产物，不能整目录当缓存删除。
+`dist/`、`apps/survivor/dist/`、`apps/survivor/.assets/` 和 `public/js/` 是可重建产物；`test-results/`、`playwright-report/` 是本地测试输出。`assets-source/` 是原始构建输入，根 `public/` 还包含演示源码、共享资产及受跟踪模型，不能整目录当缓存删除。研究脚本、素材来源和许可也不按报告清理。
 
 <a id="maintenance"></a>
 

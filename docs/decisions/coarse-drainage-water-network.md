@@ -150,10 +150,8 @@ window at (-224, 96), seed `new-world`, has 142 river tiles: at 256×256 pixels
 it must paint 9,088 river pixels, not the former 142 isolated dots. No river
 generation, tile classification or world/protocol/format version changes.
 
-The implementation observation on the development machine is about 0.32 s in a
-direct process and a 0.40 s browser-worker median for a 2048×2048 infinite
-extent rendered to one 256×256 raster. This is a one-shot worker task and an
-observation, not a portable wall-clock gate. Structural tests enforce
+Measure overview latency through the actual worker path when changing the
+algorithm; direct-process timings are not portable wall-clock gates. Structural tests enforce
 deterministic enumeration, overlap/page agreement, sea or extent drainage,
 broad-ocean component bounds and toroidal periodicity.
 
@@ -161,9 +159,7 @@ Each extent also memoizes sampled drainage nodes and their selected downstream
 edge. Flow and sea distance are aggregated by canonical node, and every directed
 reach is rasterized only once even when multiple source courses share it.
 Additional tributary candidates therefore reuse shared confluence work
-instead of repeatedly sampling the same suffix. The refinement observation on
-the same development machine is about 0.24 s for the 2048×2048 to 256×256
-direct overview, with 1,527 visible river pixels versus the previous 959.
+instead of repeatedly sampling the same suffix.
 
 ## Rejected alternatives
 

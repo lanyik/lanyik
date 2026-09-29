@@ -94,4 +94,4 @@ CombatEvents 留在权威 Worker 同步消费，主线程只读快照和表现�
 
 StatusSystem、BurnSystem 和 CombatEvents 测试保护来源、到期、槽复用、实际生命变化、死亡去重、防重入、取消与存档。结算重构用固定种子比较玩法快照及随机检查点；性能优化不得排除生命、奖励或随机数差异。
 
-[测试策略](../testing.md)维护执行命令；[管线测量](measurements/combat-pipeline-optimization.json)是历史对照证据，不能替代当前验证或完整遭遇平衡。
+[测试策略](../testing.md)维护执行命令；管线 CPU 对照不能替代完整遭遇平衡或浏览器帧率验证。

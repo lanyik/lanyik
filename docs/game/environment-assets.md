@@ -28,11 +28,9 @@
 
 本批补齐湿润岸坡、暖火与倒木，尚无完整建筑废墟、烟雾和余烬系统；远处边界雾及天空仍待大气联调。
 
-[本批原始测量](measurements/visual-shoreline.json)的路线/荒野资源账本峰值约为 441.6/493.5 MiB，均在 512 MiB 内；新增布景继续常驻并在非副本隐藏，不将账本估算等同驱动显存。
-
 ## 共享资产与家园
 
-演示与游戏共用的原始地形图集、图集描述和战争迷雾纹理由 [public/textures/sources.json](../../public/textures/sources.json) 登记字节数、SHA-256 与仓库来源提交。这三份是继承的演示输入，不套用后续扫描素材的 CC0 标记；原有第三方许可与归属文本保持原样。游戏构建复用现有 `sourceReader` 校验三份输入，只复制 `war-fog.jpg`，另生成 `terrain.png`、`land-atlas.json` 和 `terrain-surface.bin`。不再整目录复制演示纹理；已无消费者的旧草地、云、烟雾、纸张、山丘光照和盾牌图片已移除。根 `public/` 的演示脚本、模型、截图和受跟踪构建产物仍各有消费者。
+演示与游戏共用的原始地形图集、图集描述和战争迷雾纹理由 [public/textures/sources.json](../../public/textures/sources.json) 登记字节数、SHA-256 与仓库来源提交。这三份是继承的演示输入，不套用后续扫描素材的 CC0 标记；原有第三方许可与归属文本保持原样。游戏构建复用现有 `sourceReader` 校验三份输入，只复制 `war-fog.jpg`，另生成 `terrain.png`、`land-atlas.json` 和 `terrain-surface.bin`。根 `public/` 保留演示源码、共享纹理输入及模型；`public/js/` 是被 Git 忽略的可重建产物，构建边界见[包边界](../package-boundaries.md#demo-build-and-startup)，不能整目录当缓存删除。
 
 家园使用 [Quaternius Medieval Village](https://quaternius.com/packs/medievalvillage.html) 的 CC0 成品模型：Inn、Blacksmith、House_1、Well。原始 OBJ、MTL、作者许可原文和逐文件下载地址、字节数、SHA-256 保存在 [homestead 来源清单](../../apps/survivor/assets/homestead/sources.json)。不再用 Box/Cone 拼房屋。
 
@@ -96,4 +94,4 @@
 
 CPU 数组与 GPU mip 进入已有资源账本；世界加载等待两个请求，失败明确拒绝，取消或 dispose 终止在途请求，晚到数据不上传，所有材质共同引用的数组只释放一次。验证同时覆盖真实 full/fast 渲染、材质加载/取消及森林所有权，不能只用 shader 文本断言代替画面检查。
 
-游戏显式设置 GPU 账本上限为 512 MiB：B1 原生 1440p、4× MSAA 样本的必要工作集约 390 MiB，B2 阴影短样本峰值约 437.4 MiB，新增副本布景后的荒野复查约 483.6 MiB，原 256 MiB 已不足。测量条件与逐帧数据归[视觉样板记录](measurements/visual-route.json)。此上限约束所有账户，并非预先分配 512 MiB，也不代表驱动实际显存；更高像素比仍需独立测量。地图库的通用默认预算不由游戏样本改写。
+游戏 GPU 账本上限由 `GameConfig` 配置，约束所有账户，并非预先分配显存，也不代表驱动实际显存。新增布景在非副本中仍常驻，新增资产或调整分辨率时必须计入完整工作集并重新测量；地图库的通用默认预算不由游戏配置改写。

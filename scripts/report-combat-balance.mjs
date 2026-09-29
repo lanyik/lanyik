@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const result = await build({ stdin: { resolveDir: root, contents: `
@@ -22,6 +22,8 @@ for (const level of [1, 5, 10, 25, 50, 100]) for (const { kind, boss } of oppone
 const report = { reference: "64 deterministic same-level theoretical 11-slot blue equipment sets, including accessories without a live source; first matching item per slot; attributes 40% might / 40% vitality / 10% agility / 10% spirit; no souls or targeted affixes",
     metrics: "hitPercent excludes crit/block/shields; basicTtk is stationary autoattack expectation without skills, lethal procs, guard stance or healing; netBasicDps includes enemy crit, player evasion/block, passive shield and regeneration, excludes lifesteal and active skills; not a full encounter simulation",
     rows };
-await writeFile(new URL("../docs/game/measurements/combat-balance.json", import.meta.url), JSON.stringify(report, null, 2) + "\n");
+const outputDirectory = new URL("../test-results/", import.meta.url);
+await mkdir(outputDirectory, { recursive: true });
+await writeFile(new URL("combat-balance.json", outputDirectory), JSON.stringify(report, null, 2) + "\n");
 console.table(rows.filter(row => [1, 25, 100].includes(row.level)).map(row => ({ level: row.level, enemy: row.enemy,
     hp: row.health.median, damage: row.damage.median, hitPercent: row.hitPercent.median, basicTtk: row.basicTtk.median, netBasicDps: row.netBasicDps.median })));

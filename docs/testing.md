@@ -119,8 +119,8 @@ the [freeze contract](foundation-v1-freeze.md) defines the protected invariants.
 `check:optimization-gates` validates structured evidence and trigger states; CI
 software rendering does not substitute for physical GPU evidence. Gallery captures,
 pixel comparisons and WebGL counters prove different things from Node CPU timing.
-See the [evidence and measurement catalog](README.md#evidence) for historical
-results with their original conditions.
+See [validation inputs and local outputs](README.md#evidence) for retention
+boundaries. Historical reports are not maintained in the current documentation tree.
 
 ## Benchmark scope
 
@@ -166,8 +166,9 @@ record bounded GC events overlapping measured operations. Nested inclusive costs
 must not be added together; probe overhead and GC correlation are not causal or FPS
 claims. Workload counters must match the corresponding uninstrumented fixtures.
 Profiles are limited to those four scenarios; no timers or hooks enter the production
-simulation, Worker protocol or UI. The committed [tail-latency sample](game/measurements/performance-tail-latency.json)
-records one machine and artificial pressure workloads, not a full-capacity browser guarantee.
+simulation, Worker protocol or UI. These artificial pressure workloads do not
+establish a full-capacity browser guarantee. Keep generated reports in ignored
+local output directories rather than committing them as documentation.
 For a same-harness comparison, `--runtime-ref=<commit-hash>` bundles the committed
 TypeScript runtime through Git reads; installed dependencies and built library inputs
 stay the same. The report identifies that runtime separately from the benchmark source.
@@ -186,8 +187,8 @@ yield wait and uninterrupted slice timings, and compares checkpoints/RNG, snapsh
 entity arrays and regional layouts with the immediate runner outside timed operations.
 Slice timing is diagnostic instrumentation; startup includes construction and the
 teleport destination is validated before measurement. It does not establish browser
-input latency. The [regional streaming record](game/measurements/regional-streaming.json)
-also retains the same-harness pre-change comparison and historical runtime replay.
+input latency. Compare revisions with the same harness and validate historical
+runtime replay separately from timing observations.
 
 The query benchmark includes candidate preparation, copy, transfer and join costs,
 with the stationary index built before timing. It measures real Node threads, not

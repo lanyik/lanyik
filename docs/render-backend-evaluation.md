@@ -10,11 +10,9 @@ starts its technical sample on this backend, but must measure its own terrain,
 water and atmosphere workload before claiming suitability for the full game.
 
 Keep `WebGLRenderer` and the existing 12×12 render-chunk culling path as the
-production default. A WebGPU backend is technically viable, but it is not the
-next bottleneck to remove: at 100,000 candidate instances the current chunk
-frustum pass took a 0.019ms median on the evaluation machine, while exact
-per-instance CPU culling and visibility compaction took a 1.590ms median and
-removed only about 16% of the instances in the fixed camera view.
+production default. Evaluate a backend migration against a measured production
+bottleneck and the material/asset migration cost; candidate instance count alone
+does not establish that per-instance GPU culling is worth that change.
 
 GPU culling should therefore be an opt-in prototype triggered by measured draw
 submission or overdraw pressure. Instance count alone is not a sufficient
@@ -36,24 +34,10 @@ The command records five timed samples and uses their median for comparisons;
 raw samples, range and host details remain in the JSON so a noisy run is
 visible instead of being mistaken for a backend signal.
 
-Measurements on Node 22.16.0, V8 12.4, Windows x64, Intel Core i7-11700K:
-
-| Candidates | Render chunks | Visible instances | Chunk cull | Instance cull + compact | CPU ratio |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 10,000 | 81 | 10,000 | 0.010ms | 0.173ms | 17.3× |
-| 50,000 | 361 | 50,000 | 0.016ms | 0.886ms | 55.4× |
-| 100,000 | 729 | 83,783 | 0.019ms | 1.590ms | 83.7× |
-
-The 100,000-instance GPU candidate buffer would require about 1.526MiB for a
-position/radius record plus up to 0.381MiB for compacted indices. Those sizes are
-reasonable, but a compute dispatch, synchronization and indirect draw would be
-new work that does not eliminate a meaningful current CPU cost.
-
-These numbers are a CPU crossover test, not a fabricated GPU benchmark. Backend
-availability is environment-specific and a capability report alone proves no
-runtime contract. A future WebGPU prototype must therefore execute and verify
-its real rendering path on supported hardware instead of adding a non-failing
-availability probe to the foundation suite.
+This is a CPU crossover test, not a GPU benchmark. Measure candidate buffers,
+visibility compaction, submission and synchronization on the actual prototype;
+a capability report alone proves no runtime contract. Run the production
+rendering path on supported hardware before accepting a backend migration.
 
 ## Migration cost and compatibility
 

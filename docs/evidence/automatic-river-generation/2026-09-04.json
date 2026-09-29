@@ -2,13 +2,9 @@
   "schemaVersion": 1,
   "gateId": "automatic-river-generation",
   "capturedAt": "2026-09-04T14:03:03.493Z",
-  "measurementContext": "Direct user review of a 2048x2048 overview followed by deterministic hydrology and overview timing probes on the development machine",
+  "measurementContext": "Explicit user hydrology requirement from direct review of a 2048x2048 overview; retained as the active optimization-gate input, not a performance report",
   "measurements": {
-    "explicitUserHydrologyRequirement": true,
-    "measuredOverview2048To256Ms": 317.2,
-    "browserWorkerOverview2048To256MedianMs": 401.3,
-    "generatedRiverTilesIn2048Extent": 17121,
-    "riverPixelsIn256Overview": 959
+    "explicitUserHydrologyRequirement": true
   },
   "artifactReferences": [
     "docs/evidence/automatic-river-generation/user-observation.md",
