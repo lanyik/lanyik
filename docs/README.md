@@ -1,14 +1,12 @@
-# 项目文档结构与设计索引
+# 项目设计索引
 
-这是唯一设计入口。先按下表定位所属设计，再直达代码和测试；文档说明架构、所有权、跨模块约束、修改注意事项与验证方式，具体实现直接读源码。
-
-2026-09-29 六边形世界基线保留在 `release/2026-09-29-hex-world-baseline`，运行代码为 `8ce5429`。冻结范围与未完成事项见 [版本说明](../CHANGELOG.md#六边形世界基线冻结--2026-09-29)；它是开发对照基线，不代表写实世界或完整性能目标已验收。
-
-当前开发主线为 `main`，已收拢游戏开发、[连续世界基座设计](decisions/continuous-world-foundation.md)及仓库清理。新世界方案尚未实施，下表中的源码布局和运行合同仍描述现有六边形版本。
+这是唯一设计入口。文档按领域维护架构、依赖、状态/资源所有权、失败边界、编辑注意事项与验证方式；实现步骤、字段全集、参数和生成清单直接读源码及独立预期测试。
 
 <a id="entrypoints"></a>
 
-项目介绍、运行方法与公开 API 见 [README.zh-CN.md](../README.zh-CN.md) / [README.md](../README.md)；开发基准见 [AGENTS.md](../AGENTS.md)。[游戏想法](../游戏想法.md)只维护产品定位、玩家体验和核心循环，[CHANGELOG](../CHANGELOG.md)保留发布历史，均不作为内部实现手册。
+运行和公开 API 见 [README.zh-CN.md](../README.zh-CN.md) / [README.md](../README.md)，开发规则见 [AGENTS.md](../AGENTS.md)。[游戏想法](../游戏想法.md)只维护产品定位与核心体验，[CHANGELOG](../CHANGELOG.md)保留发布历史。
+
+当前 main 仍运行六边形版本。[连续世界基座](decisions/continuous-world-foundation.md)是待实施提案；冻结基线的运行代码为 8ce5429，范围及缺口见[版本说明](../CHANGELOG.md#六边形世界基线冻结--2026-09-29)，不代表写实世界或完整性能目标已验收。
 
 <a id="branches"></a>
 
@@ -34,90 +32,69 @@
 
 ```mermaid
 flowchart TB
-    index[按任务选择领域] --> app[应用会话]
-    app --> sim[模拟与线程]
-    sim --> combat[结算与状态]
-    combat --> skills[构筑与施法]
-    combat --> growth[地域与成长]
-    growth --> items[角色状态与库存事务]
-    app --> saves[角色与永久进度]
-    app --> explore[探索与家园]
-    app --> view[界面与资产]
-    view --> visual[写实暗黑视觉改造：项目设计]
-    visual --> nextworld[连续世界基座：仓库与技术设计提案]
-    index --> nextworld
+    index[按任务选领域] --> app[应用与包边界]
+    app --> combat[模拟与战斗]
+    combat --> items[角色成长与物品]
+    app --> saves[角色存档]
+    app --> exploration[探索与地形通行]
+    app --> ui[界面与交互]
+    app --> assets[资产与表现]
+    index --> foundation[基础设施与持久化]
+    foundation --> render[渲染流送与后端]
+    foundation --> world[生成与水文]
+    world --> path[通用分层寻路]
+    index --> testing[测试与优化门禁]
+    index --> roadmap[开发重点]
+    roadmap --> visual[视觉改造计划]
+    visual --> nextworld[连续世界提案]
     nextworld -.实施时更新.-> world
-    index --> pkg[地图库包边界]
-    pkg --> infra[基础设施：生命周期 / 租约 / 预算]
-    infra --> stream[渲染流送]
-    stream --> world[世界生成与地表]
-    world --> water[河网决策]
-    infra --> persistence[增量与世代持久化]
-    pkg --> path[通用寻路与事件]
-    index --> checks[验证策略与优化门禁]
 ```
-
-每个领域只留一份主要设计，相邻领域链接引用。当前规则、未来计划和历史证据分开维护；按任务阅读对应分支，不需要顺次通读全部文档。
 
 <a id="game"></a>
 <a id="game-structure"></a>
 
-## 游戏：设计与修改入口
+## 游戏设计与修改入口
 
-游戏位于 [apps/survivor/src](../apps/survivor/src/)：core 管纯数据规则，app 管会话与仓库，worker 管线程协议，adapters 接入地图库，presentation 管 React/Three.js 表现。游戏状态属于应用层，基础库不拥有背包、技能或任务。
+[apps/survivor/src](../apps/survivor/src/) 中 core 管纯数据规则，app 管会话与仓库，worker 管线程协议，adapters 接地图库，presentation 管 React/Three.js。核心不依赖表现层，游戏状态不进入基础库。
 
-| 要修改的领域 | 主要设计 | 代码入口 |
+| 领域 | 所属设计 | 主要代码入口 |
 |---|---|---|
-| 会话、输入、启动与恢复 | [应用集成](app-development.md) | [app](../apps/survivor/src/app/)、[adapters](../apps/survivor/src/adapters/) |
-| 配置、ECS、AI、自动战斗、Worker | [模拟与 AI](game/simulation-and-ai.md) | [GameConfig](../apps/survivor/src/core/GameConfig.ts)、[CombatSimulation](../apps/survivor/src/core/CombatSimulation.ts)、[worker](../apps/survivor/src/worker/) |
-| 伤害、生命、状态与结算事实 | [战斗架构](game/combat-architecture.md) | [CombatResolution](../apps/survivor/src/core/CombatResolution.ts)、[StatusSystem](../apps/survivor/src/core/StatusSystem.ts) |
-| 构筑事务、施法与特效 | [技能与效果](game/skills-and-effects.md) | [SkillBuild](../apps/survivor/src/core/SkillBuild.ts)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts) |
-| 地域、成长、奖励与数值校准 | [战斗与成长](game/combat-and-progression.md) | [RegionalWorld](../apps/survivor/src/core/RegionalWorld.ts)、[CombatRewards](../apps/survivor/src/core/CombatRewards.ts)、[CombatStats](../apps/survivor/src/core/CombatStats.ts) |
-| 职业、装备归属、库存事务、配装与打造 | [物品合同](game/items.md) | [CharacterClass](../apps/survivor/src/core/CharacterClass.ts)、[CharacterState](../apps/survivor/src/core/CharacterState.ts)、[AutomaticLoadout](../apps/survivor/src/core/AutomaticLoadout.ts)、[Crafting](../apps/survivor/src/core/Crafting.ts) |
-| 存档、副本提交与永久灵境 | [角色存档](game/character-saves.md) | [CharacterCheckpoint](../apps/survivor/src/core/CharacterCheckpoint.ts)、[CharacterRepository](../apps/survivor/src/app/CharacterRepository.ts)、[SpiritRepository](../apps/survivor/src/worker/SpiritRepository.ts) |
-| 探索迷雾、家园、旅行与副本 | [探索与家园](game/exploration-and-homestead.md) | [core](../apps/survivor/src/core/)、[app](../apps/survivor/src/app/)中的探索和旅行模块 |
-| 移动、遮挡、出生与可达性 | [地形通行](game/terrain-navigation.md) | [CombatTerrain](../apps/survivor/src/core/CombatTerrain.ts)、[SurfaceMotion](../apps/survivor/src/core/SurfaceMotion.ts) |
-| 窗口、交互、HUD 与可访问性 | [界面设计](game/interface-design.md)、[UI 性能](game/ui-performance.md) | [presentation](../apps/survivor/src/presentation/) |
-| 模型、动作、声音与资源处理 | [角色资产](game/actor-assets.md)、[环境资产](game/environment-assets.md) | [assets](../apps/survivor/assets/)、[构建脚本](../scripts/) |
-| 写实暗黑美术方向、世界与游戏 UI 改造 | [视觉改造项目](game/visual-overhaul.md) | [presentation](../apps/survivor/src/presentation/)、[rendering](../src/rendering/)；阶段状态见方案 |
-| 项目进度与尚未完成的能力 | [开发重点](game/development-priorities.md) | 对照以上领域；计划不代表实现 |
+| 包边界、启动、输入、发布、关闭 | [应用与会话](app-development.md) | [app](../apps/survivor/src/app/)、[adapters](../apps/survivor/src/adapters/) |
+| ECS、AI、线程、技能构筑/施法、结算/状态 | [战斗模拟与技能](game/combat-architecture.md) | [CombatSimulation](../apps/survivor/src/core/CombatSimulation.ts)、[worker](../apps/survivor/src/worker/)、[SkillSystem](../apps/survivor/src/core/SkillSystem.ts)、[CombatResolution](../apps/survivor/src/core/CombatResolution.ts) |
+| 地域、成长、职业、装备/库存、打造与校准 | [角色与物品](game/items.md) | [CharacterState](../apps/survivor/src/core/CharacterState.ts)、[CombatStats](../apps/survivor/src/core/CombatStats.ts)、[CombatRewards](../apps/survivor/src/core/CombatRewards.ts) |
+| 角色检查点、副本提交、永久灵境 | [角色存档](game/character-saves.md) | [CharacterCheckpoint](../apps/survivor/src/core/CharacterCheckpoint.ts)、[CharacterRepository](../apps/survivor/src/app/CharacterRepository.ts)、[SpiritRepository](../apps/survivor/src/worker/SpiritRepository.ts) |
+| 探索/旅行、家园/副本、移动/出生/遮挡 | [探索与地形通行](game/exploration-and-homestead.md) | [Exploration](../apps/survivor/src/core/Exploration.ts)、[RegionalWorld](../apps/survivor/src/core/RegionalWorld.ts)、[CombatTerrain](../apps/survivor/src/core/CombatTerrain.ts) |
+| 窗口、HUD、输入、可访问性与 UI 性能 | [界面与交互](game/interface-design.md) | [presentation](../apps/survivor/src/presentation/) |
+| 模型/动作/声音、环境、离线构建与许可 | [资产与表现](game/assets.md) | [源资产](../apps/survivor/assets/)、[构建脚本](../scripts/lib/)、[CombatLayer](../apps/survivor/src/presentation/CombatLayer.ts) |
+| 已有能力、缺口、后续顺序 | [开发重点](game/development-priorities.md) | 对照各领域实现；计划不等于完成 |
+| 写实暗黑世界与游戏 UI 的项目方案 | [视觉改造](game/visual-overhaul.md) | 阶段状态及验收目标见方案 |
 
 <a id="foundation"></a>
 
-## 地图库：设计与修改入口
+## 基础库设计与修改入口
 
-根 [src](../src/) 中 runtime 管生命周期/调度/预算，world 管生成/流送/地表/导航，rendering、objects、shaders 管绘制，persistence 管检查点。公开 API 以包入口为边界，不能仅因仓库内无调用者就删除。
+根 [src](../src/) 中 runtime 管生命周期/调度/预算，world 管生成/流送/地表/导航，rendering/objects/shaders 管绘制，persistence 管世代存储。公开 API 以[包入口](app-development.md#包与构建入口)为界，不能仅因仓库内无调用者就删除。
 
-| 要修改的领域 | 主要设计 | 代码入口 |
+| 领域 | 所属设计 | 主要代码入口 |
 |---|---|---|
-| 公开入口、依赖与构建 | [包边界](package-boundaries.md) | [index](../src/index.ts)、[persistence](../src/persistence.ts)、[pathfinding](../src/pathfinding.ts)、[package.json](../package.json) |
-| 连续世界路线、仓库整理与实施门槛 | [连续世界基座设计](decisions/continuous-world-foundation.md) | 提案；当前对照入口为世界生成、渲染流送和游戏地形适配器 |
-| 生命周期、会话、租约、预算与调度 | [基础设施](foundation-infrastructure.md) | [runtime](../src/runtime/)、[RenderWorldController](../src/rendering/RenderWorldController.ts)、[ChunkResidencyCoordinator](../src/world/ChunkResidencyCoordinator.ts) |
-| 冻结协议、世代保存与验收 | [基础合同](foundation-v1-freeze.md) | [GenerationCheckpointCoordinator](../src/persistence/GenerationCheckpointCoordinator.ts)、[WorldGeneratorVersion](../src/world/WorldGeneratorVersion.ts) |
-| 源区块、LOD、材质、总览与渲染层 | [渲染流送](render-streaming.md) | [WorldStreamer](../src/world/WorldStreamer.ts)、[rendering](../src/rendering/) |
-| 生成确定性、地表、编辑与拓扑 | [世界生成](world-style-generation-v1.md) | [WorldSurfaceResolver](../src/world/WorldSurfaceResolver.ts)、[WorldSurfaceView](../src/world/WorldSurfaceView.ts) |
-| 河流算法的选择与限制 | [河网决策](decisions/coarse-drainage-water-network.md) | [WorldWaterSampler](../src/world/WorldWaterSampler.ts) |
-| 地图稀疏覆盖与存储 | [世界增量](world-delta-persistence.md) | [WorldDeltaStore](../src/world/WorldDeltaStore.ts)、[WorldEditingFacade](../src/world/WorldEditingFacade.ts) |
-| 跨未加载区块的路径查询 | [分层寻路](hierarchical-pathfinding.md) | [HierarchicalPathfinder](../src/world/HierarchicalPathfinder.ts) |
-| 类型化通知与派发失败 | [事件合同](event-contracts.md) | [EventEmitter](../src/EventEmitter.ts)、[EventMaps](../src/EventMaps.ts) |
+| 生命周期、租约、预算、调度、存储与事件 | [基础设施](foundation-infrastructure.md) | [runtime](../src/runtime/)、[persistence](../src/persistence/)、[WorldDeltaStore](../src/world/WorldDeltaStore.ts)、[EventEmitter](../src/EventEmitter.ts) |
+| 源/渲染区块、LOD、材质、光照、总览与后端 | [渲染流送](render-streaming.md) | [WorldStreamer](../src/world/WorldStreamer.ts)、[rendering](../src/rendering/) |
+| 世界身份、拓扑、地表、编辑与河网决策 | [世界生成](world-style-generation-v1.md) | [WorldSurfaceResolver](../src/world/WorldSurfaceResolver.ts)、[WorldSurfaceView](../src/world/WorldSurfaceView.ts)、[WorldWaterSampler](../src/world/WorldWaterSampler.ts) |
+| 跨未加载区块的路线与摘要 | [分层寻路](hierarchical-pathfinding.md) | [HierarchicalPathfinder](../src/world/HierarchicalPathfinder.ts) |
+| 下一代世界技术、仓库结构与实施门槛 | [连续世界提案](decisions/continuous-world-foundation.md) | 未实施；现有世界/渲染/适配器为对照 |
 
-不要混淆：库事件通知与战斗结算事实、地图增量与角色存档、通用路径查询与游戏局部通行，各有独立所有者。基础合同仍有效，不是可以按日期删除的历史说明。
+库事件与战斗结算、地图增量与角色存档、通用路线与游戏局部通行保持独立所有者；合并文档不合并运行时状态。
 
 <a id="verification"></a>
-
-## 验证与性能决策
-
-从[测试策略的变更矩阵](testing.md#change-based-local-validation)选择检查；命令只在该页及 package.json 维护。文档改动至少运行 npm run check:docs 与 git diff --check，并人工核对代码语义。
-
-[优化门禁](optimization-gates.md)及[结构化登记](optimization-gates.json)定义何时值得增加复杂度；[渲染后端评估](render-backend-evaluation.md)保留 WebGL2/WebGPU 的决策和测量入口。历史通过记录不是当前版本的验收结果，Node CPU 耗时也不是浏览器帧率。
-
 <a id="evidence"></a>
 
-## 验证输入与本地产物
+## 验证与本地产物
 
-测试的固定样本、独立预期和预算阈值随代码维护；[优化门禁](optimization-gates.json)仍实际读取[河网触发记录](evidence/automatic-river-generation/2026-09-04.json)及其[需求观察](evidence/automatic-river-generation/user-observation.md)，对应算法取舍见[河网决策](decisions/coarse-drainage-water-network.md)。它们是当前校验输入，不能作为运行报告删除。
+[测试策略](testing.md#change-based-local-validation)集中维护检查选择、命令、测量口径和[优化门禁流程](testing.md#优化门禁)。文档改动至少运行 npm run check:docs 与 git diff --check，迁移门禁引用另跑 check:optimization-gates；链接通过不替代代码语义审查。
 
-历史性能报告、截图和视频不在当前文档树保留；已有提交可从 Git 查阅。需要验证时按[测试策略](testing.md)重新采样，结果写入被 Git 忽略的本地输出目录，完成审查后清理。设计只保留测量方法、适用边界和当前约束，不维护旧帧率表或已删除产物的路径。
+[optimization-gates.json](optimization-gates.json)仍读取[河网需求触发输入](evidence/automatic-river-generation/2026-09-04.json)，其需求依据及决策已并入[世界生成](world-style-generation-v1.md#决策与需求依据)。只保留当前校验必需的输入，不另拆观察/报告文档。
+
+历史报告、截图和视频不留在当前文档树，需要时从 Git 查阅或按策略重新采样；新输出放 Git 忽略的本地目录，审查后清理。固定样本、独立预期和预算阈值随测试维护，旧通过记录不证明当前提交通过，Node CPU 时间不代表浏览器帧率。
 
 <a id="assets"></a>
 
@@ -140,11 +117,10 @@ flowchart TB
 
 <a id="maintenance"></a>
 
-## 文档维护边界
+## 维护边界
 
-- 保留架构/依赖方向、状态与资源所有权、跨模块不变量、容量及失败语义、修改入口和验证方式；这些是代码之外需要共同遵守的约束。
-- 数值表、接口字段全集、私有函数步骤、源码目录逐项复述交给代码；独立预期交给测试，测量数值交给原始报告。正文通过链接定位，不维护第二份实现。
-- 改动先对照代码和所属设计，再同步受影响的合同；文档描述当前实现，未完成事项统一进入开发重点，不能将建议写成既有能力。
-- 一个行为只在所属设计解释，相邻领域只引用。文档可合并时直接合并，不留纯跳转文件、不增加协作指南或分目录索引。
-- 新增、移动或删除文档同步本页、关系图和引用。被替代且无证据用途的方案可删，历史查 Git；许可、有效决策和仍支撑测量的证据保留。
-- check:docs 检查本地链接、标题锚点和 docs 可达性；它不证明设计正确，仍需人工审查代码一致性、Mermaid 与资产归属。最后按 AGENTS 要求提交。
+- 一个领域一份主要设计，相邻领域链接引用；新规则优先写回所属章节，不为一次优化、一次修复或验收单独开文档。
+- 保留结构、所有权、不变量、容量/失败语义和修改/验证入口；参数表、私有步骤、接口字段和生成统计交给源码、测试或机器清单。
+- 当前能力、未来方案明确区分；开发顺序归开发重点，视觉/连续世界方案不冒充已实现能力。历史演进查 Git，不保留被替代正文或纯跳转文件。
+- 改代码同步所属设计；合并/删除同步本页、关系图及所有引用。许可与仍被校验读取的输入按各自职责保留。
+- 不新增协作指南或分目录索引作为中转。按 AGENTS 检查差异、验证并提交。

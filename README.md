@@ -79,7 +79,7 @@ automatically, `I` opens equipment and `P` pauses combat.
 limited dodging; WASD takes over movement and death stops automation. `F`
 independently toggles automatic skill casts. Architecture and implemented gameplay contracts are documented in
 [App development](docs/app-development.md) and
-[Combat and progression](docs/game/combat-and-progression.md).
+[Character progression and items](docs/game/items.md).
 
 ## Run the demo
 
@@ -149,7 +149,7 @@ await map.disposeAsync();
 `HexMap`, `Unit` and `GameEngine` expose separate typed event maps. Event names
 select their payload type automatically; an `error` event with no listener is
 thrown instead of being silently ignored. See
-[event contracts](docs/event-contracts.md).
+[event contracts](docs/foundation-infrastructure.md#类型化事件与诊断口径).
 
 `await map.load(mapData)` remains a compatibility wrapper for finite
 `StaticWorldSource` maps. `loadWorld()` is the preferred entry for every source
@@ -276,7 +276,7 @@ large-world gameplay owns its authoritative state in the application and uses
 the persistence and pathfinding services independently of camera residency.
 The survivor application's boundaries are defined in
 [App development](docs/app-development.md). Entity storage and monster decisions
-are documented in [Combat ECS and behavior trees](docs/game/simulation-and-ai.md).
+are documented in [Combat ECS and behavior trees](docs/game/combat-architecture.md#实体时钟与容量).
 
 ## Development and verification
 
@@ -319,7 +319,7 @@ Current deliberate boundaries:
   implemented broad-ocean and coarse-drainage water revision.
 - WebGPU/GPU culling remains deferred; the automatic-river gate is implemented
   with recorded evidence and a decision in the
-  [machine-checked optimization register](docs/optimization-gates.md).
+  [machine-checked optimization register](docs/testing.md#优化门禁).
 - Multiplayer reconciliation, cloud saves, server authority and a complete
   economy/combat ruleset are application-level work, not current library
   features.

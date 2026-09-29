@@ -2,7 +2,7 @@
 
 导航：[文档索引](README.md#foundation)
 
-本文约束世界数据如何进入渲染、驻留与退出。生成语义归[世界生成](world-style-generation-v1.md)，生命周期/租约/预算归[基础设施](foundation-infrastructure.md)，持久化归[世界增量](world-delta-persistence.md)。算法细节、默认距离和缓冲布局直接查实现。
+本文约束世界数据如何进入渲染、驻留与退出。生成语义归[世界生成](world-style-generation-v1.md)，生命周期/租约/预算归[基础设施](foundation-infrastructure.md)，持久化归[世界增量](foundation-infrastructure.md#世界增量)。算法细节、默认距离和缓冲布局直接查实现。
 
 ## 修改入口
 
@@ -13,7 +13,7 @@
 | 渲染装配 | [rendering 目录](../src/rendering/) | LOD、挂载队列、资源容量、图层所有权 |
 | 地表与植被 | [world 目录](../src/world/)、[着色器](../src/shaders/) | 生效地表、共享边界、Worker 结果与编辑 |
 | 总览与小地图 | [generateWorldOverview](../src/world/generateWorldOverview.ts)、[WorldMinimap](../src/WorldMinimap.ts) | 只读采样、缓存世代、绘制与交互 |
-| 导出及验证 | [包边界](package-boundaries.md)、[测试策略](testing.md) | 公开 API、构建输入、浏览器与资源回归 |
+| 导出及验证 | [包边界](app-development.md#包与构建入口)、[测试策略](testing.md) | 公开 API、构建输入、浏览器与资源回归 |
 
 ## 数据与会话
 
@@ -93,7 +93,7 @@ full/fast 路径共享宏观地貌、水体、坐标和光照空间。细节位�
 
 full/fast 地形的介质环境反射共用 Three.js Standard 的 DFG 查找表，按粗糙度和观察角积分，并计算多次散射补偿及漫反射能量余量；不能直接用掠射角 Fresnel 放大粗糙地表的天空反射。查找表由 WebGLRenderer 绑定和持有，地形注册其 uniform，不另建或释放纹理；直接光仍使用地形自己的 GGX 近似。`terrain-reflections.spec.ts` 用恒定白色环境、不同粗糙度及视角，与真实 Standard 材质做小画幅像素对照。
 
-场景目标为 RGBA16F、深度渲染缓冲，按实际绘制像素尺寸分配；`antialias` 开启时使用目标内 4× MSAA，关闭时无多重采样，默认帧缓冲不重复抗锯齿。目标随尺寸变化重建，GPU 计时覆盖投影、场景与输出。HDR 颜色附件能力缺失直接拒绝创建，不切回旧管线。天空参数和资产输入归[环境资产](game/environment-assets.md#地表数据和着色)。
+场景目标为 RGBA16F、深度渲染缓冲，按实际绘制像素尺寸分配；`antialias` 开启时使用目标内 4× MSAA，关闭时无多重采样，默认帧缓冲不重复抗锯齿。目标随尺寸变化重建，GPU 计时覆盖投影、场景与输出。HDR 颜色附件能力缺失直接拒绝创建，不切回旧管线。天空参数和资产输入归[资产设计](game/assets.md#天空雾与光照)。
 
 宿主独占 `renderer-host` 资源账户，天空、环境图、烘焙临时目标、天空几何与场景目标均登记；固定目标是必要工作集，超额通过账本报告。场景目标估算为每像素 12 字节，加每个 MSAA 样本 12 字节，含颜色、深度及 resolve 目标，不等于驱动实际显存。4× MSAA 原生 1440p 约 211 MiB，需与纹理、几何一起评估预算。尺寸变更替换同一项预留，重复尺寸不重新分配。
 
@@ -107,7 +107,7 @@ WebGL 丢失事件中释放宿主的旧 GPU 句柄并保留逻辑预算；不能
 
 地形、水、草与 Standard 材质通过 `WorldLighting` 的单一钩子链使用同一个四次硬件 PCF 比较采样核；光照平面边缘 8% 渐出。深度 bias 为 -.00005，法线偏移 .55 世界单位，滤波半径 1.5 texel。阴影只衰减太阳直接漫反射、高光和薄叶透射，天空照明与材质 AO 保留。Raw 草统一使用 GLSL 3；每片元计算一次可见性，各地表混合材质复用。
 
-陆地共享自定义深度材质，使用与颜色 pass 相同的位移顶点 shader、实时参数与区块坐标回调，双面投影；高度编辑同步 LOD 几何包围盒。环绕副本保留深度回调，独立偏移元数据，随副本材质统一释放。森林沿用实例/LOD 几何及 alpha-test 轮廓，前景透视不会在树冠阴影中挖洞。水面与草只受影；应用角色、实体道具及建筑的投影选择和动画所有权见[角色资产](game/actor-assets.md)与[环境资产](game/environment-assets.md)。没有额外的影子实体、逐角色纹理或历史缓冲。
+陆地共享自定义深度材质，使用与颜色 pass 相同的位移顶点 shader、实时参数与区块坐标回调，双面投影；高度编辑同步 LOD 几何包围盒。环绕副本保留深度回调，独立偏移元数据，随副本材质统一释放。森林沿用实例/LOD 几何及 alpha-test 轮廓，前景透视不会在树冠阴影中挖洞。水面与草只受影；应用角色、实体道具及建筑的投影选择和动画所有权见[角色资产](game/assets.md#角色离线处理)与[环境资产](game/assets.md#环境家园与副本)。没有额外的影子实体、逐角色纹理或历史缓冲。
 
 ## 渲染层与表现资源
 
@@ -133,7 +133,23 @@ WebGL 丢失事件中释放宿主的旧 GPU 句柄并保留逻辑预算；不能
 
 迷雾按稀疏逻辑状态维护，卸载显示块不丢已探索结果；未物化孔洞是传播边界，不能透过未加载区域无界扫描。远处单位可以降低动画刷新频率，不能改变模拟时间。
 
-只有一个宿主绘制循环。CPU 计时是任务耗时，GPU 时间异步到达；队列忙、线程等待和实际计算成本须区分，不能把排队直接当作 CPU 瓶颈。自适应决策需对应测量来源，具体门槛由实现和[优化门禁](optimization-gates.md)维护。
+只有一个宿主绘制循环。CPU 计时是任务耗时，GPU 时间异步到达；队列忙、线程等待和实际计算成本须区分，不能把排队直接当作 CPU 瓶颈。自适应决策需对应测量来源，具体门槛由实现和[优化门禁](testing.md#优化门禁)维护。
+
+## 渲染后端与优化门禁
+
+<!-- optimization-gate:webgpu-gpu-culling -->
+
+当前六边形生产渲染使用 WebGLRenderer/WebGL2 与渲染区块裁剪。实例数本身不是迁移理由；[连续世界提案](decisions/continuous-world-foundation.md)可从此后端做样板，但必须独立测量地形、水面与大气负载。
+
+WebGPU/GPU 裁剪仍为 deferred。代表性物理硬件浏览器记录至少满足一组条件才启动原型：提交/裁剪 p95 ≥2ms；批次整理后持续 draw call >500；区块过绘是实际 GPU 瓶颈且精确裁剪预计移除 ≥30% 提交实例；或新层确实需要 GPU compute 且现有帧/Worker 预算无法承受。完整条件和审批要求以[结构化门禁](optimization-gates.json)为准，流程归[测试策略](testing.md#优化门禁)。
+
+benchmark:render-backends 是同场景区块裁剪与逐实例 CPU 代理的交叉成本比较，预热后多轮取中位数；它不测实际 GPU 可见性压缩、上传、同步和绘制，不能代替生产硬件证据。
+
+若仅 draw call 越线，先评估相邻驻留区块、同材质/模型/LOD 的有界实例池；池不超过一个源区块，压缩/重建走现有帧预算。比较节省的提交与新增上传、帧时 p95；全局池和逐帧 CPU 压缩会破坏独立淘汰，不作为默认方案。
+
+迁移成本包括 terrain/water/grass 的 RawShaderMaterial、自定义属性、图集、水岸、迷雾、风动和原点逻辑。实施时对照 [Three.js 官方迁移指南](https://threejs.org/manual/pages/webgpurenderer)、[TSL](https://threejs.org/docs/TSL.html)与 [WebGPU 规范](https://www.w3.org/TR/webgpu/)，验证所用版本的材质、storage、间接绘制及功能限制；不把一次渲染器构造成功当功能等价。
+
+批准后的验证顺序：先完成材质移植与 WebGL2 画面/资源等价，再显式选择 WebGPU 原型采集实机 GPU 时间，最后仅为触发门禁的层加入存储缓冲、可见性计算和间接绘制。不支持环境明确失败，不静默切后端；源流送、浮动原点和租约保持独立。浏览器支持范围仍须由产品目标确认。
 
 ## 验证
 

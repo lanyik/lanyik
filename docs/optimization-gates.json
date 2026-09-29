@@ -4,7 +4,7 @@
     {
       "id": "webgpu-gpu-culling",
       "state": "deferred",
-      "ownerDocument": "docs/render-backend-evaluation.md",
+      "ownerDocument": "docs/render-streaming.md",
       "measurementScript": "benchmark:render-backends",
       "triggerMode": "any",
       "triggerGroups": [
@@ -75,7 +75,7 @@
       "evidenceReferences": [
         "docs/evidence/automatic-river-generation/2026-09-04.json"
       ],
-      "decisionRecord": "docs/decisions/coarse-drainage-water-network.md"
+      "decisionRecord": "docs/world-style-generation-v1.md"
     }
   ]
 }

@@ -19,7 +19,7 @@ choosing checks; development and cleanup criteria are in [AGENTS](../AGENTS.md).
 | Game simulation | ECS identity, action timing, settlement, status, items and progression | `apps/survivor/tests`; [game contracts](README.md#game) |
 | Benchmarks | Reproducible hot-path, simulation and query-worker budgets | [benchmark scope](#benchmark-scope) |
 | Documentation | Local links, heading anchors and documentation index reachability | `scripts/check-docs.mjs`, `tests/helpers/documentation.test.js` |
-| Optimization decisions | Trigger declarations and committed evidence integrity | [optimization gates](optimization-gates.md) |
+| Optimization decisions | Trigger declarations and committed evidence integrity | [optimization gates](testing.md#优化门禁) |
 
 Use the lowest layer that observes the contract. Similar-looking tests stay when
 they protect different commit points, protocol versions or ownership boundaries.
@@ -75,8 +75,8 @@ Multiple changed boundaries require the union of their checks.
 | Terrain classification, modifiers, vegetation, climate or surface semantics | Library checks and `npm run review:world-style`; game checks when collision or game visuals also change |
 | Simulation hot paths, AI, spatial queries or capacities | Game checks plus `npm run benchmark:app`; query scheduling/transport/kernel changes also `npm run benchmark:app:workers` |
 | Library hot paths or memory layout | Library checks plus `npm run benchmark:check` |
-| Enemy stats or combat formulas | Game checks and `npm run report:combat-balance`; review the regenerated calibration against [balance rules](game/combat-and-progression.md#数值校准) |
-| Inventory/HUD rendering performance | UI/browser checks and the full-inventory measurement described in [UI performance](game/ui-performance.md) |
+| Enemy stats or combat formulas | Game checks and `npm run report:combat-balance`; review the regenerated calibration against [balance rules](game/items.md#数值校准) |
+| Inventory/HUD rendering performance | UI/browser checks and the full-inventory measurement described in [UI performance](game/interface-design.md#更新与性能) |
 | Build, generation inputs, package outputs or optimization register | Owning checks plus `check:generated`, `check:package-boundaries` or `check:optimization-gates` as applicable |
 
 Game tests consume the built library. After a clean install or changes to library
@@ -114,7 +114,7 @@ The verify job checks and benchmarks its already-built outputs using
 `check:generated:built`, `check:package-boundaries:built` and `benchmark:check:built`.
 The unsuffixed commands build first and are self-contained for local use.
 Release or infrastructure freeze acceptance runs the complete set and the soak;
-the [freeze contract](foundation-v1-freeze.md) defines the protected invariants.
+the [foundation contract](foundation-infrastructure.md) defines the protected invariants.
 
 `check:optimization-gates` validates structured evidence and trigger states; CI
 software rendering does not substitute for physical GPU evidence. Gallery captures,
@@ -133,8 +133,9 @@ Game timing separates real travel combat, full-capacity AI/movement/attack gener
 and procedural-terrain combat. Travel health is restored between ticks to measure
 the complete route with actual hit settlement; crowded input discards hits so all
 targets remain available. Neither establishes starter-character survival or GPU
-frame rate. Exact scene construction and budgets belong to
-[simulation and AI](game/simulation-and-ai.md) and [terrain navigation](game/terrain-navigation.md).
+frame rate. Exact scene construction and budgets live in
+[the benchmark](../scripts/benchmark-survivor.mjs); ownership and capability limits belong to
+[simulation and AI](game/combat-architecture.md#实体时钟与容量) and [terrain navigation](game/exploration-and-homestead.md#通行数据).
 
 `enemyNavigation` and `enemyCrowd` additionally measure eight actors escaping a
 concave wall and approaching from one side of the player. They disable attacks,
@@ -194,7 +195,8 @@ The query benchmark includes candidate preparation, copy, transfer and join cost
 with the stationary index built before timing. It measures real Node threads, not
 browser input latency. Serial and scheduled full-capacity queries have budget gates;
 enabling production parallel queries additionally requires an improvement over
-serial execution. Configuration and thresholds belong to the simulation contract.
+serial execution. Configuration and thresholds live in the query benchmark and GameConfig;
+authority and cancellation follow the [Worker contract](game/combat-architecture.md#多-worker-职责与执行协议).
 
 `node --expose-gc scripts/benchmark-survivor-pipeline.mjs <baseline-commit>` builds
 the committed baseline through Git reads without replacing the worktree. It times
@@ -250,3 +252,15 @@ WebGL resources, GPU queries and heap bounds. The active minimap may retain its
 designed two non-critical overview requests; superseded work domains cannot accumulate.
 Final disposal releases the minimap and map, leaving no queued work or budget
 reservations. Deterministic interleaving tests remain necessary to diagnose failures.
+
+## 优化门禁
+
+[optimization-gates.json](optimization-gates.json)是高成本优化的机器登记；运行 npm run check:optimization-gates 检查所属文档 marker、测量命令、触发表达式、证据和决策路径。它验证决策完整性，不代表 CI 已测得物理 GPU 或视觉质量阈值。
+
+状态依次为 deferred → triggered → approved → implemented。deferred 不附触发证据、不开始实现；triggered 至少有一份本地 JSON 满足完整触发组；approved 还需审阅后的决策接受成本与验证计划；implemented 要求设计、实现及所属合同已一起落地。组内 AND、组间 OR，布尔指标只按精确相等判断，不能跳过触发和决策。
+
+证据 schema、字段和运算以[检查器](../scripts/check-optimization-gates.mjs)及登记为准。非 deferred 状态必须引用真实存在的输入，检查器重新计算触发条件；口头宣称或无关文件不能推进状态。批准还需仓库内决策记录，可直接写在所属设计中，无需另建一篇。只保留当前门禁实际读取的最小依据，普通历史报告和截图按[本地产物规则](README.md#evidence)清理。
+
+当前 [WebGPU/GPU 裁剪](render-streaming.md#渲染后端与优化门禁)仍待实机瓶颈证据；[自动河网](world-style-generation-v1.md#海域与排水河网)已因明确用户需求实现。河网也可由重复缺陷或玩法需求触发，具体组合归 JSON，不能用河网需求替代 GPU 证据，也不能把视觉河流描述为可导航/可编辑水系。
+
+新增优化先登记所属文档、marker、可复现测量入口及触发条件；证据通过并明确批准后再展开实现设计。

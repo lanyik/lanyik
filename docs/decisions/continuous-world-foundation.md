@@ -32,7 +32,7 @@
 | 现在新建仓库并复制现有实现 | 名称与发布身份可独立，但生成/资产/Worker/存档边界仍要改；增加双仓同步和证据追踪成本 | 当前没有减少技术工作的收益 |
 | 样板成立后再拆仓 | 在包依赖、平台与发布目标明确后迁移，可带入必要历史与来源 | 若确有独立维护、分发或引擎切换需求再执行 |
 
-已清理浏览器构建产物的 Git 副本、过时的 README 截图及不属于当前工具链的忽略模板；演示构建/启动与产物验证同步调整，合同归[包边界](../package-boundaries.md#demo-build-and-startup)。原始资产、有效测量和当前消费者所需的六边形实现继续保留。
+已清理浏览器构建产物的 Git 副本、过时的 README 截图及不属于当前工具链的忽略模板；演示构建/启动与产物验证同步调整，合同归[包边界](../app-development.md#包与构建入口)。原始资产、有效测量和当前消费者所需的六边形实现继续保留。
 
 源码重排必须跟随实际消费者和构建闭环，不先复制一份 `legacy/`，不让同一职责在两个仓库或目录长期双写。
 
@@ -73,7 +73,7 @@ docs/               唯一索引、领域合同与有效证据
 | 大气 | 现有 `SceneOutput` 是 HDR 颜色与深度 renderbuffer | 体积雾先补可采样深度、MSAA 深度解析和有界积分目标，再做深度感知合成；与水面/透明特效一起验收 |
 | WebGPU | 当前地形/水/草及光照钩子依赖 GLSL 和 `onBeforeCompile` | 不把换后端作为高度场前置条件；若新负载触发后端门槛，评估 TSL、后处理和资产路径的完整移植 |
 
-[Three.js LOD](https://threejs.org/docs/pages/LOD.html)提供对象距离切换；[GPUComputationRenderer](https://threejs.org/docs/pages/GPUComputationRenderer.html)采用片元计算与往返纹理，并非现成地形生成器；[WebGPU 迁移说明](https://threejs.org/manual/pages/webgpurenderer)要求迁移自定义材质和后处理。后端当前规则归[后端评估](../render-backend-evaluation.md)，旧裁剪基准不能证明新地形与体积雾的成本。
+[Three.js LOD](https://threejs.org/docs/pages/LOD.html)提供对象距离切换；[GPUComputationRenderer](https://threejs.org/docs/pages/GPUComputationRenderer.html)采用片元计算与往返纹理，并非现成地形生成器；[WebGPU 迁移说明](https://threejs.org/manual/pages/webgpurenderer)要求迁移自定义材质和后处理。后端当前规则归[后端评估](../render-streaming.md#渲染后端与优化门禁)，旧裁剪基准不能证明新地形与体积雾的成本。
 
 全体素及任意破坏不进入首批：当前没有支撑其存储、提取和碰撞成本的玩法需求。高度场一个水平位置只有一个地面高度；悬挑/洞穴需要独立几何及对应碰撞合同，不能只叠显示模型便宣称支持多层通行。Geometry Clipmaps 可作为后续测量候选，不同时开发两套地形 LOD。
 

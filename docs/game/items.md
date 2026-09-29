@@ -1,8 +1,8 @@
-# 物品、配装与打造
+# 角色成长、物品与装备事务
 
 导航：[文档索引](../README.md#game)
 
-本文约束物品身份、库存事务、自动处理和打造。物品目录、品质/词条数值、费用和掉落概率直接查代码；角色属性与奖励归[战斗与成长](combat-and-progression.md)，持久化归[角色存档](character-saves.md)，窗口布局归[界面设计](interface-design.md)。
+本文约束角色成长、奖励、物品身份、库存事务、自动处理和打造。物品目录、品质/词条数值、费用和掉落概率直接查代码；持久化归[角色存档](character-saves.md)，窗口布局归[界面设计](interface-design.md)。
 
 ## 修改入口
 
@@ -15,7 +15,35 @@
 | 自动配装 | [AutomaticLoadout](../../apps/survivor/src/core/AutomaticLoadout.ts) | 锁定、回收、预算与入包事务 |
 | 打造与宝珠 | [Crafting](../../apps/survivor/src/core/Crafting.ts)、[Orbs](../../apps/survivor/src/core/Orbs.ts) | 报价、revision、费用、容量与来源销毁 |
 | 命令和掉落 | [CombatSimulation](../../apps/survivor/src/core/CombatSimulation.ts)、[CombatRewards](../../apps/survivor/src/core/CombatRewards.ts) | 随机数、物品 ID、领取和存档 |
+| 地域、成长与奖励 | [RegionalWorld](../../apps/survivor/src/core/RegionalWorld.ts)、[CombatStats](../../apps/survivor/src/core/CombatStats.ts)、[CombatRewards](../../apps/survivor/src/core/CombatRewards.ts) | 原点、独立随机流、属性上限与死亡去重 |
+| 数值校准 | [参考样本](../../apps/survivor/tests/helpers/balanceReference.ts)、[CombatBalance](../../apps/survivor/tests/CombatBalance.test.ts) | 独立阈值与实际成长范围 |
 | UI | [presentation 目录](../../apps/survivor/src/presentation/) | IconFrame、IconTooltip、拖放与模态确认 |
+
+## 地域与遭遇
+
+地域难度由种子和相对原始出生原点的位置决定，不随玩家等级、装备或存活时间缩放。地域划分与用于驻留的方形区块不是同一概念，内容移动到合法出生点也保留原地域归属。
+
+地貌、营地、领主、宝箱和卷轴等使用独立随机流，不能通过渲染/加载顺序或借用战斗随机数改变结果。怪物定义和成长曲线在代码维护，不在文档抄录各类型数值表。
+
+出生必须通过地形和可达性检查，只有实体实际创建才消费出生槽；槽满、过近或尚未证明可达时等待。无合法场地可以不生成，连通布局不承诺每个困难地域都有可挑战领主。详细范围见[地形通行](exploration-and-homestead.md#通行数据)。
+
+荒野驻留不维护无限历史，也不按计时器补生怪物；卸载后返回会重建人口。副本有独立续战记录，不能套用荒野规则。视野、人口、淡出和卸载范围统一从 GameConfig/WorldView 读取。
+
+## 奖励与经济归属
+
+CombatRewards 消费死亡事实并且只结算一次；金币、灵魂和新物品 ID 统一提交 CharacterState，经验实体仍在实际拾取时计入成长。死亡时复制必要信息，不能回读已经回收的实体槽；奖励顺序与随机流必须保持确定性，表现是否显示无权改变奖励。
+
+经验、金币、灵魂和物品按各自容量/领取语义提交。掉落池有界，不能为保存每次掉落无界扩容；成功入包、开箱保证奖励及自动配装走[物品事务](items.md)。UI 只展示核心结果，不自行发放或补偿。
+
+角色经济随角色检查点恢复，灵境是独立永久档案。副本奖励必须先持久化再发布，具体失败和旧档恢复语义见[角色存档](character-saves.md)。
+
+## 属性与成长
+
+CombatStats 汇总基础成长、装备、已装配常驻被动及当前灵境，统一处理属性单位、百分比/千分比、最终上限和溢出。技能、装备预览和实际结算不得复制另一套公式。
+
+换装、被动变更和退款保持当前生命/法力比例，不当作免费治疗或冷却刷新。连续升级的回复由升级事务统一处理。属性点与技能构筑点分属不同账本，存档恢复从权威输入重算派生结果。
+
+命中、暴击、防御、吸收、吸血和反伤只有一个结算所有者；新增装备或技能通过现有入口消费这些能力，不在本领域另写伤害流程。
 
 ## 类型、身份与库存
 
@@ -84,6 +112,16 @@ quoteCraft 是共享纯预检。费用、来源/目标 ID、类型、revision、
 只有允许的提取提示可以选择跳过；覆盖、继承等破坏性确认始终保留。确认后核心仍检查 revision 和全部准入，过期预览不能提交。拖放只发命令，悬停、拖动和取消不修改库存。
 
 IconFrame 表达物品类型与值，不能用伪物品 ID 拼凑空槽。浮窗只由对应图标的 hover/focus 驱动，Alt 固定使用单一所有者；键盘、触屏、失焦和取消都走同一收尾边界。
+
+## 数值校准
+
+运行 npm run report:combat-balance 生成本地 `test-results/combat-balance.json`，目录由脚本创建，产物不提交 Git；独立阈值由 CombatBalance 测试维护。报告使用固定种子、同级完整蓝装及固定加点的理论参考样本，不挑每个部位的最优装备；排除宝珠和永久灵境，跨等级使用可比较样本。参考装覆盖全部十一部位，包含尚未接入产出的饰品，不代表当前掉落可获得的配装或实际成长节奏。
+
+普通敌人按同级基础强度比较，领主使用困难地域强度；实际地域领主还有等级差，不能把同级矩阵直接当现场结果。普通单次承伤以最大生命比例表达，基础 TTK 使用普攻期望，相关口径见报告与参考构造器。
+
+校准不包含走位、主动技能、完整吸血、岩卫姿态、祭司治疗和整场遭遇节奏；额外净 DPS 也只是加入平均防御/回复后的期望。它不能证明裸装开局、混系构筑、越级挑战、高品质专精或长时间挂机已经平衡。
+
+修改曲线应重新生成并检查报告，审查测试阈值理由；不要为通过测试随意放宽。完整成长还需固定种子的实际开局到首领样本，待办统一见[开发重点](development-priorities.md)。性能基准补满生命或丢弃命中不构成生存证据。
 
 ## 验证
 

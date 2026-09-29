@@ -53,7 +53,7 @@ Windows 可双击根目录的 [`run.bat`](run.bat)：缺少 `node_modules` 时�
 WASD 控制移动，武器自动攻击最近怪物，`I` 打开装备背包，`P` 暂停。
 `Z` 切换自动战斗：附近寻怪、优先近处宝箱、低血量用药与有限走位；WASD 随时接管，死亡停止。`F` 独立切换自动施法。
 实际架构与玩法合同见 [App 开发设计](docs/app-development.md)和
-[战斗、成长与装备](docs/game/combat-and-progression.md)。
+[角色成长与装备](docs/game/items.md)。
 
 ## 运行演示
 
@@ -112,7 +112,7 @@ await map.disposeAsync();
 
 `HexMap`、`Unit` 和 `GameEngine` 分别暴露独立的类型化事件映射，事件名会
 自动确定 payload 类型；没有监听器的 `error` 事件会直接抛出，不会静默丢失。
-详见[事件契约](docs/event-contracts.md)。
+详见[事件契约](docs/foundation-infrastructure.md#类型化事件与诊断口径)。
 
 `await map.load(mapData)` 仍是有限 `StaticWorldSource` 的兼容包装。
 `loadWorld()` 是所有数据源的推荐入口；地图被替换或销毁前，该会话拥有传入的数据源。
@@ -225,7 +225,7 @@ game.dispose();
 它提供单位控制，不包含完整的《文明》规则。新的大型世界玩法由应用持有权威状态，
 独立使用持久化与寻路服务，战斗结果不依赖镜头附近的渲染驻留。
 生存 RPG 应用的模块与运行合同见 [App 开发设计](docs/app-development.md)。
-实体数据、系统顺序与怪物行为见[战斗 ECS 与行为树](docs/game/simulation-and-ai.md)，`npm run benchmark:app` 检查模拟 CPU 预算。
+实体数据、系统顺序与怪物行为见[战斗 ECS 与行为树](docs/game/combat-architecture.md#实体时钟与容量)，`npm run benchmark:app` 检查模拟 CPU 预算。
 
 ## 开发与验证
 
@@ -259,7 +259,7 @@ game.dispose();
 
 - [世界风格生成 v1](docs/world-style-generation-v1.md) 已包含大尺度海域与粗网格汇流修订。
 - WebGPU/GPU culling 仍保持延后；自动河流门槛已依据记录证据和设计决策转为实现，
-  详见[机器校验的优化门槛](docs/optimization-gates.md)。
+  详见[机器校验的优化门槛](docs/testing.md#优化门禁)。
 - 多人冲突合并、云存档、服务器权威状态以及完整经济/战斗规则属于应用层工作，
   不是当前库能力。
 

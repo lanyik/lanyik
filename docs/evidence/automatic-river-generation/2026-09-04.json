@@ -7,7 +7,7 @@
     "explicitUserHydrologyRequirement": true
   },
   "artifactReferences": [
-    "docs/evidence/automatic-river-generation/user-observation.md",
+    "docs/world-style-generation-v1.md",
     "tests/world/worldWaterSampler.test.ts"
   ]
 }

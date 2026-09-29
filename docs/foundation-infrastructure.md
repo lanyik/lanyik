@@ -1,145 +1,111 @@
-# Runtime foundation architecture
+# 基础设施、持久化与事件合同
 
-导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
+导航：[文档索引](README.md#foundation)
 
-当前运行时基础设施把“世界渲染能跑”提升为“可替换、可恢复、资源有界、可验收”。核心原则不是让所有子系统使用同一个执行循环，而是让它们共享同一组所有权、世代、预算、取消与验收语义。冻结边界见 [foundation-v1-freeze.md](./foundation-v1-freeze.md)，测试分层与执行策略见 [testing.md](./testing.md)。
+本页拥有生命周期、租约、预算、调度、通用世界存储与类型化通知。游戏状态属于应用，[角色检查点和永久灵境](game/character-saves.md)有独立存储边界，不等于地图增量或世代存档。公开入口归[应用与包边界](app-development.md#包与构建入口)，生成版本归[世界生成](world-style-generation-v1.md#编辑刷新与版本)。
 
-## 1. 生命周期与故障恢复
+## 修改入口
 
-`LifecycleScope` 是一次可替换异步会话的所有权边界。每个 scope 有唯一 generation、单一 `AbortSignal`、在途任务集合和晚到发布闸门。
+| 领域 | 代码入口 | 联查边界 |
+|---|---|---|
+| 生命周期与会话 | [runtime](../src/runtime/)、[RenderWorldController](../src/rendering/RenderWorldController.ts) | 取消、迟到发布、挂载失败、重复关闭 |
+| 区块租约 | [ChunkResidencyCoordinator](../src/world/ChunkResidencyCoordinator.ts) | 共享消费者、最后释放、源所有权 |
+| 世代保存 | [GenerationCheckpointCoordinator](../src/persistence/GenerationCheckpointCoordinator.ts) | 状态屏障、CAS、取消、恢复与 GC |
+| 稀疏编辑 | [WorldDeltaStore](../src/world/WorldDeltaStore.ts)、[WorldEditingFacade](../src/world/WorldEditingFacade.ts) | 批量原子性、revision、恢复与刷盘 |
+| 事件 | [EventEmitter](../src/EventEmitter.ts)、[EventMaps](../src/EventMaps.ts) | 类型、同步派发、异常传播 |
 
-- `close()` 先同步广播取消，再等待已登记任务 drain。通用 scope 可选择等待上限；render-world 默认最多等待 15 秒，超时任务会被隔离并通过 `detachedTasks` / `drainTimedOut` 上报，不能让 `disposeAsync()` 永久挂起。
-- `publish()` 只允许 active generation 对外发布；旧世界结果会被拒绝并计数。
-- `RenderWorldController` 用一个 scope 同时拥有 source、residency 和 streamer。
-- `WorldStreamer.settled` 等待销毁时仍在途的请求完成取消和 lease 释放。
-- `HexMap.disposeAsync()` 提供真正可等待的销毁边界；同步 `dispose()` 仍保持兼容。
-- render-layer host 暴露当前世界的 `AbortSignal`；atlas fetch、Worker、植被准备和编辑刷新都受同一世代闸门约束。
+## 生命周期与故障恢复
 
-世界切换的顺序固定为：关闭旧 scope → 取消 streamer/Worker 请求 → 反向卸载渲染层 → 释放 source → 等待旧会话 drain。清理回调不经过发布闸门，因为旧资源即使在 closing 状态也必须被释放。
+LifecycleScope 为一次可替换会话持有唯一 generation、AbortSignal、在途任务及发布闸门。close 先同步广播取消，再等待登记任务完成；等待上限和超时隔离必须可诊断，旧任务之后也不能发布。render-world 使用有界等待，不能让 disposeAsync 永久挂起。
+
+RenderWorldController 同时拥有 source、residency、streamer 与 scope。摄像机、输入、拾取和公开 API 留在 HexMap，不能平行维护第二份会话。WorldLoadPlan 在替换前验证新输入，失败释放未发布源。世界切换先关闭旧 scope、取消请求并归还租约，再反向卸载图层、释放源并等待在途清理。清理不经过发布闸门。
+
+HexMap.disposeAsync 是可等待关闭边界；同步 dispose 发起关闭。源销毁时已接收的 Worker 工作以 AbortError 拒绝；崩溃、非法协议等运行错误不能伪装成取消。旧成功结果只释放，旧错误也不能覆盖新世界。
 
 ### 渲染会话与区块租约
 
-[RenderWorldController](../src/rendering/RenderWorldController.ts) 拥有一次会话的 source、residency、streamer 与 lifecycle；摄像机、输入、拾取和公开 API 留在 HexMap，渲染通过宿主回调接入。替换时先停止请求和释放租约，再卸载渲染层，最后释放源；调用者通过当前 controller/residency 取得会话能力，不能长期保留旧世界入口。
+图层只能通过生命周期宿主的 addObject/removeObject 发布对象，不直接取得世界根节点。对象按层和区块登记，旧世代拒绝挂载；初始化失败、注销、卸载及世界替换均撤销对象。显式记录部分挂载状态，任何清理失败都继续释放剩余资源，最终聚合报告 WorldRenderLayerLifecycleError。
 
-图层宿主记录挂载中已添加的对象，mount 失败回滚；unmount、unload 和 dispose 即使部分失败也继续清理，最后聚合为 WorldRenderLayerLifecycleError。挂载状态必须显式记录，支持部分成功后的幂等释放，不能靠场景里是否还存在对象推断。
+ChunkResidencyCoordinator 按 WorldSource 共享：同一规范区块合并加载，各消费者获得独立、幂等释放的 lease。取消一个等待者不能影响其他消费者，最后租约归还后才释放源区块。协调器计数，streamer/路径/应用各自决定需求期限；单个消费者不能销毁共享协调器，只有源所有者可连同源关闭。
 
-[ChunkResidencyCoordinator](../src/world/ChunkResidencyCoordinator.ts) 按 WorldSource 共享，同一规范区块合并一次加载，但每个消费者取得独立、可重复释放的 lease。取消一个等待者不能取消其他消费者；最后一份租约释放后才向源归还区块。渲染、路径查询和应用使用同一协调器，不各建一套引用计数。
+WebGL 丢失/恢复由 HexMapRendererHost 独占，丢失时暂停绘制、挂载与 GPU 计时；恢复重建上传及查询并发布上下文世代。资源和失败细节归[渲染流送](render-streaming.md#场景照明与颜色输出)。
 
-协调器统计租约但不决定淘汰策略：摄像机保留范围由 streamer 决定，路径和应用请求由各自所有者决定期限。dispose 使租约失效；只有拥有源的调用方可要求一并 disposeSource。单个租约消费者不能关闭共享协调器。
+## 世代检查点
 
-## 2. 统一持久化边界
+GenerationCheckpointCoordinator 的 manifest 是唯一提交点：在应用提供的 withWorldState 互斥边界内捕获所有参与者的独立快照，释放捕获锁后写不可变 staging、读回校验，最后 CAS 发布 manifest。每次使用唯一 saveId，不能混合不同保存的参与者。
 
-`GenerationCheckpointCoordinator` 是权威存档入口。每次存档先在应用提供的
-`withWorldState(operation)` 互斥边界内捕获全部参与者并复制快照，再写不可变 staging，
-读回校验 checksum，最后以单次 CAS manifest 事务公开整个世代。manifest 是唯一提交点；
-崩溃前后只能选中完整的旧世代或新世代。
+状态边界必须恰好执行并等待一次回调，排除模拟推进、地形编辑及其他权威写入直到全部 capture 完成。Promise.all 或相同 saveId 不证明共同逻辑时刻。checkpoint 在串行队列外调用；若已持锁，hook 应校验并直接执行，不能递归排队。缺失、重复、提前返回或取消后迟到调用明确拒绝。
 
-该边界必须排除模拟推进、地形编辑和其他权威状态变更，直到全部异步 capture 完成。
-仅把多个 capture 放进 `Promise.all`，或给记录分配同一 saveId，不能保证同一逻辑时刻。
-恢复在全部记录校验通过后，也通过同一互斥边界应用快照；参与者失败应中止恢复，
-不能把互斥误认为跨 store 的回滚事务。staging 写入不占用捕获锁，允许游戏继续运行。
-缺少边界、未等待回调或重复调用均显式失败，不推断应用已经同步。
+恢复先校验完整 descriptor、全部参与者版本与 checksum，再在同一边界应用快照；边界不提供跨 store 回滚。部分失败后应用必须视为不可用，直到显式重新恢复。可重建缓存不属于权威存档；游戏可实现自己的参与者，不把业务状态放进 HexMap。
 
-应用负责在初始恢复、串行操作与关闭过程中持有该边界；关闭时拒绝新操作。
-现有 `createWorldDeltaGenerationParticipant()` 提供 terrain delta 参与者；
-应用通过 `GenerationCheckpointParticipant` 接入自身状态，可重建 world cache 不进入权威存档。
-存档校验完整 world descriptor、参与者版本和快照 checksum，保留上一完整世代，
-并通过原子垃圾回收删除未引用的 staging。
+- 发布前崩溃保留旧世代；发布后读取完整新世代。已提交记录不原地修改。
+- manifest 保留当前及一个完整前代，不递归保留更早历史；竞争写入由 revision CAS 隔离。
+- 发布事务重新验证引用的 staging；GC 在同一事务屏障读取活动 manifest 并删除未引用记录，防止校验后被抢删。
+- 类型化 checksum 区分 Map、Set、Date、普通对象和数组。数组允许空洞，拒绝额外自有可枚举字段。格式常量以代码为准，旧格式/版本直接拒绝，不自动迁移。
+- 完整世界身份不匹配即拒绝；版本变更同步[生成与描述符规则](world-style-generation-v1.md#编辑刷新与版本)，不能只更新 golden 值。
 
-世代存档是唯一存档协议；旧 journal/flush 入口和自动参与者迁移已经移除。manifest 格式为 2，
-校验编码区分数组、普通对象和特殊类型，旧格式、旧校验及不匹配的参与者版本明确拒绝。
-整个保存或恢复共享一个可配置截止时间，覆盖读取、staging 与参与者调用；存储实现必须响应取消，
-在事务尚未提交时中止发布，提交成功后则返回已提交结果。
-截止时间发出取消信号；已经进入权威状态边界的参与者必须完成取消或提交后的收尾，协调器才释放边界并结算。
-地形恢复向增量存储传递取消，替换提交前取消保持原状态；提交后完成内存和 `afterRestore` 同步。
-开始下一个参与者前会再次检查取消，不回滚已经提交的参与者；最后一个参与者完成收尾则恢复成功。
-数组快照允许索引与空洞，拒绝额外的自有可枚举属性，避免出现未被 checksum 覆盖的持久化内容。
+一次保存/恢复共享一个覆盖所有阶段的截止时间。取消阻止尚未进入的回调；已经进入的权威操作必须完成取消或提交收尾后才释放锁、结算 settled。存储提交前中止事务，提交后返回已提交结果，不能因之后的取消报告“未保存”。
 
-所有 staging 删除只经过必需的原子 GC，并同时保护当前和上一世代。提交确认失败时不猜测结果、不直接删除记录。
-GC 在保存/恢复开始前或显式 `collectGarbage()` 调用中执行；提交后不再执行可能将成功变成失败的维护操作。
-未引用记录在配置的保留期之后由下一次 GC 回收。
-协调器位于独立的 `three-hex-map/persistence` 入口，不进入浏览器渲染主包。
+地形参与者通过 atomic replaceWorld 替换全部增量，期间拒绝编辑。提交前取消保持旧持久与内存状态；提交后完成对应内存状态和 afterRestore，不能再加一次可失败的 flush。进入下一参与者前检查取消，不回滚已提交参与者；最后参与者已提交并收尾则恢复成功。
 
-## 3. 真实资源预算
+所有 staging 删除只经原子 GC，同时保护当前及前代。提交确认不明时不猜测、不直接删记录或做推测性重读。GC 在操作前或显式 collectGarbage 时执行，未引用记录过保留期再收集；提交后维护不能把成功变为失败。
 
-`ResourceBudgetLedger` 以保留缓冲区和预计上传字节做 admission/accounting，区块数量仍作为独立上限。这些计数不是进程堆占用或驱动实际 VRAM：
+## 世界增量
 
-- 硬维度：`cpuBytes`、`gpuBytes`。
-- 诊断维度：`geometryBytes`、`textureBytes`、`modelBytes`。
-- BufferGeometry 分开计算 CPU backing store 与 Three.js 实际 attribute/index upload；interleaved buffer 只上传一次，不同 BufferAttribute 即使共享 ArrayBuffer 也按独立 GPU buffer 计费。
-- Object3D 估算会遍历 geometry、实例矩阵/颜色、骨骼/实例 morph 纹理、material、shader uniforms、纹理面与 mip 层。实例缓冲按分配容量计费，降低 `InstancedMesh.count` 不代表释放内存；同一次估算中，共享 CPU backing buffer 与共享 Three.js 上传对象分别去重。自定义渲染层可用 `resourceCost` 覆盖共享模型/纹理的保守估值。
+生成地形可重建，WorldDeltaStore 只持久化稀疏作者/玩法覆盖，数据库与生成缓存分离。经 source 选项注入的 store 归 source 销毁；直接使用 store 的调用者负责 flush 和关闭。
 
-内置区块和 `ModelAssetCache` 使用 `ResourceAllocation` 引用同一账本中的资源。
-CPU 按 backing buffer/纹理 source、GPU 按 attribute/interleaved buffer/纹理对象去重；
-只有最后一个引用释放后才扣除共享资源。GPU 驻留淘汰只释放 GPU 引用，CPU 引用仍保留。
-预算拒绝不会改变引用计数或已有 reservation。分配的 identity 与 cost 必须保持不变，
-重新分配应提供新 identity；尚未加载的零字节纹理不建立分配引用。
-单个账户的 stats 对账户内去重，整个地图再次跨账户去重，所以不能将各账户的
-引用字节简单相加。手工 `resourceCost` 覆盖仍由自定义层负责共享资源的所有权。
+putChunkDelta 是必需写入口，单点也是一项批次。按区块合并，一次有效变化只增加一次 revision、执行一次事务；对象替换该坐标完整覆盖，null 删除。读写校验 chunkSize、区块范围及重复坐标；返回值深拷贝嵌套数据，不能绕过 setter 修改权威状态。
 
-植被通过独立的 `vegetation-cpu` 账户补足渲染图之外的所有权：Worker 返回的三档布局、
-草地贴地高度/雾属性、森林贴地矩阵及三档预处理模型都按 backing buffer 引用计费。
-准备请求、草地和森林可以共同引用同一布局；取消或卸载一个所有者不会提前扣除仍被其他
-所有者使用的数据。当前 LOD 与有界 source 驻留所需的原始布局、共享模型属于必要输入；
-旧的派生 LOD 则必须通过预算 admission 才能继续缓存，超额时可重建缓存优先释放。
-原始布局的数量受 source 驻留限制，字节超额明确进入自适应密度控制；此处不承诺任意密度、
-任意必需工作集都能装入给定字节上限。Worker 临时堆、JS 对象本身和浏览器/驱动开销仍不计量。
+可变源必须支持原子 setTileOverrides，整个批次提交或完全不变；编辑门面在修改前拒绝缺少能力的源。相同覆盖、删除不存在项或最终状态不变是 no-op，不增长 revision。
 
-森林实例矩阵和颜色在首次激活时分配，同一渲染区块的模型部件及环绕副本共享一套缓冲。
-CPU 淘汰会将全部副本切换为空缓冲；草地也会解除全部副本对已释放几何的引用。
-GPU 淘汰保持 CPU 所有权，字段销毁则清空布局、LOD、雾状态与子对象引用。
-缓存到期回收独立于可见性重算，相机静止时仍按 grace frame 执行；新增字节压力会重新检查
-当前缓存，而不会因相机没有移动而忽略。
+expectedRevision=0 表示尚不存在；不匹配抛 WorldDeltaConflictError。IndexedDB 在同一事务检查并写入，不允许两个实例提交相同预期。删除末项仍保留空的带 revision 记录，防止 ABA；clear(worldId) 才删除该存档全部记录。
 
-`WorldChunkScheduler` 同时保留逻辑区块上限和字节上限。非可见驻留只要超过任一字节预算就立即按 LRU 淘汰，不等待 grace frame。当前帧必需的 visible working set 被标为 pinned；若它自身大于预算，不会错误销毁正在绘制的对象，而是通过 `cpuBudgetExceededBytes` / `gpuBudgetExceededBytes` 暴露不可避免的压力，交给自适应 LOD/密度降级。默认上限为 CPU 384 MiB、GPU 256 MiB，可通过 `cpuChunkCacheBytes` / `gpuChunkCacheBytes` 配置。
+IndexedDB 是读取权威。loadChunk 等本实例排队写入后开新读事务，不用独立镜像掩盖其他实例提交。冲突后经过失败写入屏障，再读新 revision 并显式重试，不自动合并。
 
-`HexMap.resourceBudget` 只暴露不可变诊断视图；后续单位、建筑和特效系统通过 `HexMap.createResourceAccount(label)` 获取隔离账户。账户返回可更新、可释放的 reservation handle，同名局部 key 不会跨账户冲突；账户或地图销毁时，其全部 reservation 会统一失效和回收。未通过 admission 的非关键资源必须降级或延后，不能调用内部 `forceReserve()` 绕开硬预算。
+source 按区块串行写入，保留最新未确认 tile epoch。保存和退出前 await flushDeltas，覆盖 session 写入和 store 屏障；失败拒绝，下次调用重试待确认项，旧成功不能确认更新的编辑。直接 store 用户等待每批结果并以 flush 收束所有排队写入。
 
-区块账户使用内部命名空间，不能覆盖同名的单位/建筑 reservation。可见 working set 的不可避免超额会直接输入自适应控制器，持续超额将降低 LOD 距离、植被密度和分辨率，而不只停留在诊断数字。
+枚举/replaceWorld 接受取消；恢复先排空既有编辑。提交前中止保持旧状态，提交后完成匹配的 live overrides，遵守上节恢复语义。存储格式与 chunkSize 不符、跨区块或重复条目在加载时拒绝。
 
-## 4. 调度与背压
+跟踪状态只保留有效覆盖、待确认编辑及恢复保护；空区块 revision 墓碑有上限，溢出归并到保守全局基线并释放集合。clearDeltas 清理会话跟踪，stats 暴露持有量，历史编辑次数不能成为无限留存机制。内存存储 dispose 同步清空 Map 并拒绝后续访问。
 
-`PriorityTaskQueue` 统一五类 lane：`critical`、`interactive`、`visible`、`prefetch`、`background`。每个任务同时有 priority、weight、AbortSignal 和入队时间。
+这是本地保存合同，没有 WAL、自动冲突合并或分布式同步协议；新增远程存储需保持批次/CAS 边界，再按实际业务确定合并规则。
 
-- 超过任务数或总 weight 时，先丢弃最低重要性的工作。
-- 单个任务若已超过整条队列的 weight 上限，会在修改队列前直接拒绝，不能先淘汰其他任务再自我失败。
-- keyed work 自动合并，只保留最新版本。
-- 等待超过 starvation window 后逐级晋升，background 最终不会饿死。
-- starvation 只影响执行选择，不影响背压淘汰；暂停很久的后台任务不会因此挤掉刚到的 critical 工作。
-- 帧挂载和 Worker pool 已使用同一实现；Worker 仍保留 terrain capacity reservation。
+## 资源预算
 
-`RuntimeWorkCoordinator` 是联邦调度面：frame、worker、streaming 保留不同执行器，同时向一个聚合统计面报告 backlog、weight、busy、最老任务、shed 和 starvation。应用可通过 `registerTelemetry()` 登记自有执行器的压力；协调器不提供经营时钟或业务结算。销毁 coordinator 会取消其管理的排队任务；世界切换时旧 worker/streaming domain 会注销，统计本身不会泄漏。
+ResourceBudgetLedger 以保留 CPU backing buffer 和预计 GPU 上传容量准入，区块数另有上限；计数不是进程堆或驱动显存。geometry/texture/model 是诊断分类，不能当独立额外预算相加。
 
-内存型 checkpoint journal、generation stage/manifest 与
-world delta 存储在 `dispose()` 时同步清空其 Map。`dispose()` 因而既是拒绝后续
-访问的状态边界，也是确定性的内存释放边界；不依赖所有外部引用同时被 GC。
+- CPU 按 backing buffer/纹理 source 去重，GPU 按实际 attribute、interleaved buffer、纹理对象去重；共享 ArrayBuffer 的独立上传仍分别计 GPU。
+- 实例按分配容量计费，减少 count 不代表释放；几何、实例属性、骨骼/morph、贴图各面和 mip、shader uniforms 都在估算范围。
+- 资源 identity 和 cost 保持不变，重新分配使用新 identity；未加载的零字节纹理不建立分配引用。
+- 引用最后释放才扣账，准入失败不改变已有 reservation。单账户与全地图各自去重，账户引用字节不能简单相加。
+- 自定义 resourceCost 由调用方负责共享关系和真实所有权；Worker 临时堆、JS 对象和驱动开销不在此计量。
 
-`WebGlGpuTimer` 使用 `EXT_disjoint_timer_query_webgl2` 异步查询真实 GPU elapsed time。查询只在后续帧 poll，不调用 `finish()`，disjoint 样本会丢弃，并限制最多四个 outstanding query。统计同时包含样本年龄、查询上限和饱和帧；扩展可用但查询长期堵满时，自适应控制器会把它视为明确的 GPU 落后信号，而不是因拿不到新样本而失明。
+植被 CPU 账户补足 Worker 布局、贴地高度/矩阵、雾属性和各 LOD 预处理模型。多个所有者共享同一布局引用；必要源输入受驻留范围限制，可重建的旧 LOD 缓存须通过准入。CPU 淘汰解除所有副本对缓冲的引用，GPU 淘汰可保留 CPU；缓存到期和新字节压力在相机静止时也处理。
 
-## 5. 模块边界
+非可见驻留超出任一字节预算立即按 LRU 淘汰。当前必需工作集 pinned，超额报告压力而不删除正在绘制的对象；自适应控制器可据此调整工作量，应用显式关闭自适应时不能声称预算一定满足。任意密度的必要资源不保证装入任意上限。
 
-- `HexMapRendererHost`：WebGLRenderer、Scene、Camera、lights、Sky、GPU timer 和 context-bound dispose；线性 HDR 输出、环境图及恢复/预算合同见[渲染流送](render-streaming.md#场景照明与颜色输出)。
-- `HexMapInteractionController`：DOM 输入监听、焦点所有权、WASD 移动和解析式 tile picking。
-- `WorldChunkMountQueue`：连接流式驻留与帧挂载，并对因背压拒绝的可见挂载做有界重试。
-- `RenderWorldController`：一次世界渲染会话的 source/residency/streamer/lifecycle。
-- `WorldLoadPlan`：在替换现有会话之前，一次性校验并解析初始坐标、驻留预算、预测参数、自适应控制器和 surface view；规划失败会释放尚未发布的数据源。
-- `WorldEditingFacade`：编辑校验、坐标 canonicalization、source mutation 和 visual dirty set。
-- `HexMapOptions`：默认值派生、运行时校验及世界加载配置契约。
-- `HexMap`：保留公开兼容 API 和跨边界编排；source、streamer 与 residency 只从 `RenderWorldController` 读取，不再维护平行会话状态。
+HexMap.resourceBudget 是冻结诊断视图，扩展经 createResourceAccount 获得隔离账户和可更新/释放的 reservation。同名局部 key 不跨账户冲突；账户/地图关闭使其全部预留失效。非必要资源准入失败需延后或拒绝，不能使用内部 forceReserve 绕过预算。
 
-自定义 render layer 仍通过 `WorldRenderLayer` 接口接入；应在 activation 中报告额外纹理/模型成本，并让所有异步工作绑定当前 render-world lifecycle。
+## 调度与背压
 
-## 6. 稳定性验收
+PriorityTaskQueue 的 lane、priority、weight、取消和等待时间由代码定义。任务数或总权重超限淘汰最低重要工作；单项已超过整个容量时先拒绝，不能先挤掉别人。keyed work 只留最新版，饥饿晋升只改变执行顺序，不改变背压淘汰等级。Worker 池继续保留地形容量预留。
 
-硬指标已进入自动化：
+RuntimeWorkCoordinator 聚合 frame/worker/streaming 的积压、占用、淘汰和饥饿诊断，各执行器保持自身时钟。应用可登记 telemetry，不从协调器取得业务结算。关闭取消其排队任务，旧世界注销对应 domain。
 
-- 同 seed/chunk 输入产生同 checksum，且不依赖请求顺序。
-- checkpoint 中途故障后重启，最终状态等于最后提交 generation。
-- checkpoint prepare 失败后，同进程重试也会回滚旧 token 并从全新 generation 捕获。
-- 固定种子的资源/队列 churn 中 admission 始终有界。
-- 超重任务、后台 starvation、资源账户销毁、GPU query 饱和和不响应取消的生命周期均有独立回归测试。
-- E2E 连续快速替换世界时，会话 drain、Worker backlog、WebGL geometry/texture 和 GPU query 数保持有界。
-- 定时 CI 运行可配置的长时间浏览器 soak（默认 500 个世界世代），混合稳态替换和取消突发，并持续采样生命周期、调度域、WebGL 资源和强制 GC 后的 JS heap 上界。
-- benchmark gate 对生成、植被、GPU range 合并和导航摘要设置宽松但强制的回归上限；每项先预热再采集五个样本，以中位数判定，并输出 Node/V8、CPU、样本范围与离散度。
+WebGlGpuTimer 异步轮询后续帧结果，不调用 finish；丢弃 disjoint 样本，限制在途查询并记录年龄及饱和。扩展可用但长期饱和是 GPU 落后信号，不能当作零耗时。帧任务只能在任务间让出，不能抢占长同步任务。
 
-完整命令和各层适用范围统一维护在 [testing.md](./testing.md)，不在架构文档中重复容易漂移的测试数量或命令清单。
+## 类型化事件与诊断口径
+
+EventEmitter 将事件名绑定唯一 payload，HexMap、Unit、GameEngine 各有自己的事件表；公开事件及 payload 类型从主入口导出，void 事件省略载荷。完整名称和字段查 EventMaps，不维护第二份目录。
+
+派发同步且使用监听器快照；派发期间增删只影响下次。监听器异常传回调用方并中止后续监听器。无人监听的 error 同步抛其 Error；有监听者按普通派发。图层清理是明确例外：先完整释放并聚合，再通知 error 监听者；无人监听或监听者又抛错时在清理后记录 console.error。
+
+frame 的 t/dtS 表示帧时间戳/间隔，启动及恢复首帧 dtS 为零；cpuFrameMs 是上一帧工作，gpuFrameMs 是异步 GPU 样本，两者不是显示帧率。演示按时间窗统计实际 FPS，理论上限取 CPU/GPU 平均工作量较大者，不相加；缺 GPU 时标明单处理器上限，零工作不估 FPS，样本不跨窗复用。隐藏和恢复重置采样。
+
+库通知不承担游戏[战斗结算事实](game/combat-architecture.md#结算与事件合同)的同步提交职责，业务不能依赖外部监听器执行伤害或奖励。
+
+## 验证与维护
+
+合同覆盖取消/超时、部分挂载、共享租约、竞争写入、崩溃提交点、部分恢复、容量拒绝、队列公平性和确定性释放；执行组合由[测试策略](testing.md)维护。历史冻结通过不代表当前提交已验收。
+
+基础设施变更应有明确合同缺陷或实际新消费者；不预造资产注册、经营时钟或同步框架。生成内容继续通过版本化接口演进，新增 WebGPU、云保存等能力须明确范围与验证成本。
