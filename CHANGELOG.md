@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 六边形世界基线冻结 — 2026-09-29
+
+- 保留分支：`release/2026-09-29-hex-world-baseline`；运行代码基线为
+  `8ce5429`，冻结说明提交仅修改文档。该分支用于复现和对照，后续连续世界设计另开分支，
+  不在保留分支上继续功能开发；这不是 npm 版本发布，也不是完整产品验收。
+- 已包含探索/战斗/装备/存档闭环、主角动作分层与过渡、统一 HDR/天空照明、近景阴影、
+  树木风动、副本连续岸坡和营火，以及地形粗糙反射修正。
+- 荒野仍是六边形地表与粗排水河网；没有连续高程瓦片地形、真正的体积雾或完整山系塑形。
+  写实暗黑世界样板、游戏 UI 重设计和完整游戏原生 1440p / 60 FPS 尚未验收。
+- 最近代码提交通过类型检查、光照/雾相关单元测试、地形反射与 full/fast 阴影浏览器回归、
+  库/游戏构建及文档检查；冻结时只复核文档和差异，不将这些定向结果表述为全量验收。
+  运行与验证入口仍以 [文档索引](docs/README.md) 为准。
+
 ### Changed
 
 - Survivor actors use independent relaxed breathing loops instead of frozen
