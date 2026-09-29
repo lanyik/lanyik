@@ -4,6 +4,8 @@
 
 2026-09-29 六边形世界基线保留在 `release/2026-09-29-hex-world-baseline`，运行代码为 `8ce5429`。冻结范围与未完成事项见 [版本说明](../CHANGELOG.md#六边形世界基线冻结--2026-09-29)；它是开发对照基线，不代表写实世界或完整性能目标已验收。
 
+当前新增设计从 [连续世界基座与仓库演进](decisions/continuous-world-foundation.md) 开始；该方案尚未实施，下表中的源码布局和运行合同仍描述现有六边形版本。
+
 <a id="entrypoints"></a>
 
 项目介绍、运行方法与公开 API 见 [README.zh-CN.md](../README.zh-CN.md) / [README.md](../README.md)；开发基准见 [AGENTS.md](../AGENTS.md)。[游戏想法](../游戏想法.md)描述玩家体验，[CHANGELOG](../CHANGELOG.md)保留发布历史，均不作为内部实现手册。
@@ -25,6 +27,9 @@ flowchart TB
     app --> explore[探索与家园]
     app --> view[界面与资产]
     view --> visual[写实暗黑视觉改造：项目设计]
+    visual --> nextworld[连续世界基座：仓库与技术设计提案]
+    index --> nextworld
+    nextworld -.实施时更新.-> world
     index --> pkg[地图库包边界]
     pkg --> infra[基础设施：生命周期 / 租约 / 预算]
     infra --> stream[渲染流送]
@@ -69,6 +74,7 @@ flowchart TB
 | 要修改的领域 | 主要设计 | 代码入口 |
 |---|---|---|
 | 公开入口、依赖与构建 | [包边界](package-boundaries.md) | [index](../src/index.ts)、[persistence](../src/persistence.ts)、[pathfinding](../src/pathfinding.ts)、[package.json](../package.json) |
+| 连续世界路线、仓库整理与实施门槛 | [连续世界基座设计](decisions/continuous-world-foundation.md) | 提案；当前对照入口为世界生成、渲染流送和游戏地形适配器 |
 | 生命周期、会话、租约、预算与调度 | [基础设施](foundation-infrastructure.md) | [runtime](../src/runtime/)、[RenderWorldController](../src/rendering/RenderWorldController.ts)、[ChunkResidencyCoordinator](../src/world/ChunkResidencyCoordinator.ts) |
 | 冻结协议、世代保存与验收 | [基础合同](foundation-v1-freeze.md) | [GenerationCheckpointCoordinator](../src/persistence/GenerationCheckpointCoordinator.ts)、[WorldGeneratorVersion](../src/world/WorldGeneratorVersion.ts) |
 | 源区块、LOD、材质、总览与渲染层 | [渲染流送](render-streaming.md) | [WorldStreamer](../src/world/WorldStreamer.ts)、[rendering](../src/rendering/) |

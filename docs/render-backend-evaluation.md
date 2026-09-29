@@ -4,6 +4,11 @@
 
 ## Decision
 
+Scope: this decision and its measurements describe the existing hex-world
+renderer. The [continuous-world design](decisions/continuous-world-foundation.md)
+starts its technical sample on this backend, but must measure its own terrain,
+water and atmosphere workload before claiming suitability for the full game.
+
 Keep `WebGLRenderer` and the existing 12×12 render-chunk culling path as the
 production default. A WebGPU backend is technically viable, but it is not the
 next bottleneck to remove: at 100,000 candidate instances the current chunk
@@ -57,7 +62,7 @@ but the renderer remains experimental and can perform worse than
 `WebGLRenderer` for some scenes. Its migration guide also says that
 `ShaderMaterial` and `RawShaderMaterial` are unsupported and must be ported to
 node materials/TSL. See the official
-[WebGPURenderer guide](https://threejs.org/manual/en/webgpurenderer).
+[WebGPURenderer guide](https://threejs.org/manual/pages/webgpurenderer).
 
 That is a material change here: terrain, water and grass are three custom
 `RawShaderMaterial` pipelines with instanced attributes, atlas/coast rules,

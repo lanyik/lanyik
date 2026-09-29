@@ -2,6 +2,11 @@
 
 导航：[总导航 · 地图基础库](README.md#foundation) · [按任务阅读](README.md#routes)
 
+This page describes the current hex-world package and its working exports.
+The proposed workspace reorganization belongs to the
+[continuous-world design](decisions/continuous-world-foundation.md); no package
+move, rename or export change has been implemented by that design-only work.
+
 The runtime foundation types (`LifecycleScope`, `ResourceBudgetLedger`,
 `PriorityTaskQueue`, and `RuntimeWorkCoordinator`) are exported from the main
 entry. Recoverable checkpoint infrastructure is also available from the
