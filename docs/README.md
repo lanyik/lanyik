@@ -4,11 +4,28 @@
 
 2026-09-29 六边形世界基线保留在 `release/2026-09-29-hex-world-baseline`，运行代码为 `8ce5429`。冻结范围与未完成事项见 [版本说明](../CHANGELOG.md#六边形世界基线冻结--2026-09-29)；它是开发对照基线，不代表写实世界或完整性能目标已验收。
 
-当前新增设计从 [连续世界基座与仓库演进](decisions/continuous-world-foundation.md) 开始；该方案尚未实施，下表中的源码布局和运行合同仍描述现有六边形版本。
+当前开发主线为 `main`，已收拢游戏开发、[连续世界基座设计](decisions/continuous-world-foundation.md)及仓库清理。新世界方案尚未实施，下表中的源码布局和运行合同仍描述现有六边形版本。
 
 <a id="entrypoints"></a>
 
 项目介绍、运行方法与公开 API 见 [README.zh-CN.md](../README.zh-CN.md) / [README.md](../README.md)；开发基准见 [AGENTS.md](../AGENTS.md)。[游戏想法](../游戏想法.md)描述玩家体验，[CHANGELOG](../CHANGELOG.md)保留发布历史，均不作为内部实现手册。
+
+<a id="branches"></a>
+
+## 分支与归档
+
+`main` 是唯一长期开发主线；`release/2026-09-29-hex-world-baseline` 固定在 `88e8a5a`，只用于旧世界复现和对照。新任务从 main 创建短期分支，完成并合入后删除；不把冻结分支作为开发入口。
+
+2026-09-30 已将 `feat/rpg-survivor-combat` 和 `design/continuous-world-foundation` 的全部提交收拢到 main，移除这两个已完成分支。其他旧分支改为以下附注标签；其中三个实验仍有独有代码，仅留存历史，没有合入当前产品。
+
+| 原分支 | 归档标签 | 提交与内容 |
+|---|---|---|
+| `feat/industrial-app` | `archive/industrial-app-2026-09-06` | `6f3a86e`；旧工业探索应用 |
+| `surface-v2` | `archive/surface-v2-2026-08-31` | `08c5d67`；旧地表替换实验 |
+| `backup/surface-v2-before-rollback-20260830` | `archive/surface-v2-before-rollback-2026-08-30` | `f3f6930`；回滚前地表编译、水文与导航实验 |
+| `release/2026-09-05-vegetation-surface` | `archive/vegetation-surface-2026-09-05` | `7ca0a53`；已包含在 main 中的早期植被/地表基线 |
+
+`archive/*` 标签保留原提交及其完整历史，不代表发布或验收；需要继续实验时，从对应标签新建分支。分支整理不重写历史、不复制旧实现目录。
 
 <a id="overview"></a>
 <a id="routes"></a>

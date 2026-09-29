@@ -15,7 +15,9 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 [Changelog](CHANGELOG.md) · [Documentation index](docs/README.md)
 
 The hex-world baseline is preserved on `release/2026-09-29-hex-world-baseline`.
-Current work starts with the [continuous-world foundation design](docs/decisions/continuous-world-foundation.md);
+`main` contains current development, including the [continuous-world foundation design](docs/decisions/continuous-world-foundation.md)
+and repository cleanup; completed branches and old experiments are recorded in the [branch archive](docs/README.md#branches).
+The new world foundation is still a proposal;
 the runtime and library usage below still describe the existing hex implementation.
 
 ## Project status

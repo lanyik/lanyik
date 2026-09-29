@@ -13,7 +13,7 @@
 
 [更新日志](CHANGELOG.md) · [文档索引](docs/README.md)
 
-六边形基线已保留在 `release/2026-09-29-hex-world-baseline`。当前工作从[连续世界基座设计](docs/decisions/continuous-world-foundation.md)开始；下述运行和库使用说明仍对应现有六边形实现。
+六边形基线已保留在 `release/2026-09-29-hex-world-baseline`。`main` 已收拢当前开发、[连续世界基座设计](docs/decisions/continuous-world-foundation.md)及仓库清理；已完成分支与旧实验的去向见[分支与归档](docs/README.md#branches)。新世界方案尚未实施，下述运行和库使用说明仍对应现有六边形实现。
 
 ## 项目现况
 
