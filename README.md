@@ -14,7 +14,9 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 
 [Changelog](CHANGELOG.md) · [Documentation index](docs/README.md)
 
-![Procedural hex world](public/main.png)
+The hex-world baseline is preserved on `release/2026-09-29-hex-world-baseline`.
+Current work starts with the [continuous-world foundation design](docs/decisions/continuous-world-foundation.md);
+the runtime and library usage below still describe the existing hex implementation.
 
 ## Project status
 
@@ -29,8 +31,8 @@ fork of [gunyakov/three-hex-map](https://github.com/gunyakov/three-hex-map).
 | World style | Generation v1 now uses broad connected oceans and deterministic coarse-drainage river networks alongside continuous relief, climate snow and regional forests |
 | Game application | A survivor RPG with bounded ECS, monster behavior trees, animated Quaternius actors, radial hex regions, four residency rings, character/bag windows, mana skills, eleven equipment slots and six level-unlocked treasure-orb sockets |
 
-Runtime requirements are Node.js 20 or newer for development and `three`
-`^0.185.0` as a peer dependency for library consumers.
+Repository development requires Node.js `^20.19.0 || >=22.12.0` and npm.
+Library consumers provide `three` `^0.185.0` as a peer dependency.
 
 ## What works today
 
@@ -80,13 +82,14 @@ independently toggles automatic skill casts. Architecture and implemented gamepl
 ## Run the demo
 
 On Windows, double-click [`run-demo.bat`](run-demo.bat) to install locked
-dependencies when `node_modules` is missing, serve the existing files in
-`public/` and open <http://127.0.0.1:3000> without building.
+dependencies when `node_modules` is missing, build the demo assets, and open
+<http://127.0.0.1:3000>. Every launch builds the current source.
 It requires Node.js `^20.19.0 || >=22.12.0` and npm. Keep the terminal open while
 using the demo; press Ctrl+C to stop. Startup errors remain visible. If port 3000
 is already occupied, stop the existing server first.
-After changing the library or generated assets, run `npm run build` manually
-to update the demo outputs.
+`public/js/` is generated locally from source and locked dependencies, and is
+not committed. Use `npm run server` to serve an existing build; rebuild after
+source changes.
 
 Alternatively, use the command line:
 
@@ -94,7 +97,7 @@ Alternatively, use the command line:
 git clone https://github.com/lanyik/lanyik.git three-hex-map
 cd three-hex-map
 npm ci
-npm run server
+npm start
 ```
 
 Open <http://127.0.0.1:3000>. The control panel exposes two modes:
@@ -292,7 +295,7 @@ are documented in [Combat ECS and behavior trees](docs/game/simulation-and-ai.md
 | `npm run test:e2e` | Build and run Chromium integration tests; normal runs skip the opt-in soak |
 | `npm run test:soak` | Run the replacement/resource soak with `FOUNDATION_SOAK_ITERATIONS` configured |
 | `npm run benchmark:check` | Build and enforce hot-path regression thresholds |
-| `npm run check:generated` | Rebuild and verify committed files under `public/js` |
+| `npm run check:generated` | Rebuild, verify generated browser files against their inputs, and check tracked forest LOD outputs |
 | `npm run check:docs` | Check local documentation links, heading anchors and index reachability |
 
 Choose local checks by the changed contract using the

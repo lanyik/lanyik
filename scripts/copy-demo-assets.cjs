@@ -7,6 +7,11 @@ const fs = require("fs");
 const path = require("path");
 
 const root = path.resolve(__dirname, "..");
+const args = process.argv.slice(2);
+if (args.length > 1 || args.length === 1 && args[0] !== "--check") {
+    throw new Error("Usage: node scripts/copy-demo-assets.cjs [--check]");
+}
+const check = args[0] === "--check";
 const copies = [
     ["dist/hex-map.global.js", "public/js/hex-map.global.js"],
     ["dist/hex-map.global.js.map", "public/js/hex-map.global.js.map"],
@@ -26,9 +31,18 @@ const copies = [
     ["node_modules/stats.js/src/Stats.js", "public/js/vendor/stats.module.js"]
 ];
 
-fs.mkdirSync(path.join(root, "public/js/vendor"), { recursive: true });
+if (!check) fs.mkdirSync(path.join(root, "public/js/vendor"), { recursive: true });
 
 for (const [from, to] of copies) {
-    fs.copyFileSync(path.join(root, from), path.join(root, to));
-    console.log(`copied ${from} -> ${to}`);
+    const source = path.join(root, from), destination = path.join(root, to);
+    if (check) {
+        if (!fs.existsSync(destination) || !fs.readFileSync(source).equals(fs.readFileSync(destination))) {
+            console.error(`Missing or stale demo output: ${to}`);
+            process.exitCode = 1;
+        }
+    } else {
+        fs.copyFileSync(source, destination);
+        console.log(`copied ${from} -> ${to}`);
+    }
 }
+if (check && !process.exitCode) console.log(`Verified ${copies.length} generated demo files against build outputs and dependencies.`);

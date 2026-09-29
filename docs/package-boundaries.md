@@ -75,13 +75,20 @@ Worker, then copies the browser bundles and dependencies into `public/`.
 `npm start` builds before serving that directory on port 3000; `npm run server`
 serves existing outputs without rebuilding.
 
+`public/js/` contains only reproducible library bundles, source maps and copied
+browser dependencies; it is ignored by Git. `copy-demo-assets.cjs --check`
+compares every declared output with its build/dependency input and fails on a
+missing or stale file without writing it. `check:generated:built` combines this
+check with a Git diff of tracked forest models. Original models, texture inputs,
+demo HTML/JS/CSS and asset metadata under the rest of `public/` remain tracked;
+the directory cannot be removed wholesale as a build cache. The old v0.3 README
+screenshot has been removed; the frozen branch retains its historical context.
+
 The Windows entry point [`run-demo.bat`](../run-demo.bat) fixes its working
 directory to the repository root and checks Node.js `^20.19.0 || >=22.12.0` and
-npm. When `node_modules` is missing it runs `npm ci`, then executes
-`npm run server -- -a 127.0.0.1 -o` to serve the existing files in `public/`.
-The launcher does not build the library or generate assets, so it does not
-replace the shared `dist/` or generated demo assets. Updating those outputs
-after source changes requires an explicit `npm run build`.
+npm. When `node_modules` is missing it runs `npm ci`, then runs `npm run build`
+before `npm run server -- -a 127.0.0.1 -o`. Every launch regenerates the library
+and demo assets, so a fresh checkout does not require committed browser bundles.
 The server binds to loopback port 3000 and opens the browser after listening.
 It stays in the same terminal until Ctrl+C; dependency or port-binding
 failure stops startup and keeps the error visible without stopping other processes.

@@ -13,7 +13,7 @@
 
 [更新日志](CHANGELOG.md) · [文档索引](docs/README.md)
 
-![程序化六边形世界](public/main.png)
+六边形基线已保留在 `release/2026-09-29-hex-world-baseline`。当前工作从[连续世界基座设计](docs/decisions/continuous-world-foundation.md)开始；下述运行和库使用说明仍对应现有六边形实现。
 
 ## 项目现况
 
@@ -28,7 +28,7 @@
 | 世界风格 | 生成 v1 现包含大尺度连通海域、确定性粗网格汇流河网、气候雪线、连续地貌和区域森林 |
 | 游戏应用 | 已实现地域生存 RPG：有界 ECS、怪物行为树与近战/施法、四圈区块生态、三档地域与 Boss、五档宝箱、十一部位装备、星级品质与超凡属性 |
 
-开发环境要求 Node.js 20 或更高版本；作为库使用时，应用需要提供
+仓库开发要求 Node.js `^20.19.0 || >=22.12.0` 和 npm；作为库使用时，应用需要提供
 `^0.185.0` 的 `three` peer dependency。
 
 ## 当前已经具备的能力
@@ -57,9 +57,9 @@ WASD 控制移动，武器自动攻击最近怪物，`I` 打开装备背包，`P
 
 ## 运行演示
 
-Windows 可双击根目录的 [`run-demo.bat`](run-demo.bat)：缺少 `node_modules` 时自动安装锁定依赖，然后直接提供 `public/` 下的现有演示文件，并打开 <http://127.0.0.1:3000>，不执行构建。
+Windows 可双击根目录的 [`run-demo.bat`](run-demo.bat)：缺少 `node_modules` 时自动安装锁定依赖，每次先构建演示资源，再打开 <http://127.0.0.1:3000>。
 需要 Node.js `^20.19.0 || >=22.12.0` 和 npm；使用时保留命令窗口，按 Ctrl+C 停止。启动失败时保留错误信息；3000 已被占用时先停止原服务。
-修改基础库或生成资源后，需要手动执行 `npm run build` 更新演示产物。
+`public/js/` 是由源码和锁定依赖生成的本地产物，不提交到 Git。已有构建可用 `npm run server` 直接启动；源码修改后重新构建。
 
 也可通过命令行运行：
 
@@ -67,7 +67,7 @@ Windows 可双击根目录的 [`run-demo.bat`](run-demo.bat)：缺少 `node_modu
 git clone https://github.com/lanyik/lanyik.git three-hex-map
 cd three-hex-map
 npm ci
-npm run server
+npm start
 ```
 
 打开 <http://127.0.0.1:3000>。控制面板提供两种世界模式：
@@ -245,7 +245,7 @@ game.dispose();
 | `npm run test:e2e` | 构建并运行 Chromium 集成测试；普通运行跳过可选 soak |
 | `npm run test:soak` | 按 `FOUNDATION_SOAK_ITERATIONS` 运行替换/资源 soak |
 | `npm run benchmark:check` | 构建并执行热路径回归阈值检查 |
-| `npm run check:generated` | 重建并验证 `public/js` 中提交的生成物 |
+| `npm run check:generated` | 重建并对照输入检查浏览器产物，同时验证受跟踪的森林 LOD 产物 |
 | `npm run check:docs` | 检查本地文档链接、标题锚点与索引可达性 |
 
 本地按[变更验证矩阵](docs/testing.md#change-based-local-validation)选择检查，区分文档、基础库、玩法、浏览器、生命周期和性能改动；CI 仍运行完整回归门槛。
